@@ -104,17 +104,25 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-cov pytest-asyncio
 
-      - name: Set up test environment variables
-        run: |
-          echo "SECRET_KEY=test-secret-key-min-32-characters-long-for-ci-cd-pipeline" >> $GITHUB_ENV
-          echo "ENVIRONMENT=test" >> $GITHUB_ENV
-          echo "DEBUG=true" >> $GITHUB_ENV
-          echo "REDIS_URL=redis://localhost:6379/0" >> $GITHUB_ENV
-          echo "FIREBASE_PROJECT_ID=test-project" >> $GITHUB_ENV
-          echo "FIREBASE_CLIENT_EMAIL=test@test.iam.gserviceaccount.com" >> $GITHUB_ENV
-          echo "FIREBASE_PRIVATE_KEY=test-key" >> $GITHUB_ENV
-
       - name: Run tests with coverage
+        env:
+          # Required environment variables from secrets
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          ENVIRONMENT: test
+          DEBUG: "true"
+          REDIS_URL: redis://localhost:6379/0
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}
+          FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+          # Optional variables (can be empty for tests)
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          ELEVEN_API_KEY: ${{ secrets.ELEVEN_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_FROM_EMAIL: ${{ secrets.SENDGRID_FROM_EMAIL }}
         run: |
           pytest --cov=app --cov-report=xml --cov-report=html --cov-report=term
 
