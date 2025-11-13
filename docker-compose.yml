@@ -1,0 +1,160 @@
+services:
+  backend:
+    # Use image from Docker Hub for production
+    # Comment out 'build: .' line when deploying on VPS
+    image: umairmalick/appointment-setter-backend:latest
+    # build: .  # Uncomment this for local development
+    container_name: appointment-setter-backend
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      # App runtime
+      ENVIRONMENT: production
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+
+      # Core services
+      REDIS_URL: redis://redis:6379/0
+
+      # Firebase
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL}
+
+      # LiveKit (Voice Agents)
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_URL: ${LIVEKIT_URL}
+
+      # Twilio
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_WEBHOOK_BASE_URL: ${TWILIO_WEBHOOK_BASE_URL}
+
+      # AI Services
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY}
+      ELEVEN_API_KEY: ${ELEVEN_API_KEY}
+      AGENT_VOICE: ${AGENT_VOICE}
+
+      # Email
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL}
+
+      # Security / JWT
+      SECRET_KEY: ${SECRET_KEY}
+      JWT_ALGORITHM: ${JWT_ALGORITHM}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES}
+      JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS}
+
+      # GCP Service Account (if used)
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
+    env_file:
+      - .env
+    volumes:
+      # Mount .env file for local development
+      - ./.env:/app/.env:ro
+      # Optional: Mount static files if needed
+      - ./app/static:/app/app/static:ro
+    networks:
+      - app-network
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    container_name: appointment-setter-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  voice-worker:
+    # Use image from Docker Hub
+    image: umairmalick/appointment-setter-backend:latest
+    # build: .  # Uncomment for local development
+    container_name: appointment-setter-voice-worker
+    restart: unless-stopped
+    environment:
+      # App runtime
+      ENVIRONMENT: production
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+
+      # Core services
+      REDIS_URL: redis://redis:6379/0
+
+      # Firebase
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL}
+
+      # LiveKit (Voice Agents)
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_URL: ${LIVEKIT_URL}
+
+      # Twilio
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_WEBHOOK_BASE_URL: ${TWILIO_WEBHOOK_BASE_URL}
+
+      # AI Services
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY}
+      ELEVEN_API_KEY: ${ELEVEN_API_KEY}
+      AGENT_VOICE: ${AGENT_VOICE}
+
+      # Email
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL}
+
+      # Security / JWT
+      SECRET_KEY: ${SECRET_KEY}
+      JWT_ALGORITHM: ${JWT_ALGORITHM}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES}
+      JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS}
+
+      # GCP Service Account (if used)
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
+    volumes:
+      - ./.env:/app/.env:ro
+    networks:
+      - app-network
+    depends_on:
+      - redis
+    entrypoint: []
+    command: ["python", "run_voice_worker.py", "start"]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f voice_worker || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+
