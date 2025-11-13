@@ -24,9 +24,16 @@ def test_get_environment_info():
     assert "secret_key_configured" in info
 
     # Check that boolean values are returned
-    for key in ["firebase_configured", "redis_configured", "livekit_configured", 
-                "google_ai_configured", "deepgram_configured", "elevenlabs_configured",
-                "sendgrid_configured", "secret_key_configured"]:
+    for key in [
+        "firebase_configured",
+        "redis_configured",
+        "livekit_configured",
+        "google_ai_configured",
+        "deepgram_configured",
+        "elevenlabs_configured",
+        "sendgrid_configured",
+        "secret_key_configured",
+    ]:
         assert isinstance(info[key], bool)
 
 
