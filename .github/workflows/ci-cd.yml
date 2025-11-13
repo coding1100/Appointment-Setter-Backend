@@ -191,10 +191,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up SSH key
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
           mkdir -p ${{ github.workspace }}/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ${{ github.workspace }}/.ssh/deploy_key
+          # Write the SSH key using printf to preserve newlines
+          printf '%s\n' "$SSH_KEY" > ${{ github.workspace }}/.ssh/deploy_key
           chmod 600 ${{ github.workspace }}/.ssh/deploy_key
+          # Verify the key file was created and has content
+          echo "Key file size: $(wc -c < ${{ github.workspace }}/.ssh/deploy_key) bytes"
+          echo "First line of key: $(head -1 ${{ github.workspace }}/.ssh/deploy_key)"
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts 2>/dev/null || true
 
       - name: Deploy to VPS
