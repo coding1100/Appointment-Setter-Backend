@@ -3,13 +3,14 @@ Appointment management API routes using Firebase.
 """
 
 import uuid
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.v1.services.appointment import appointment_service
-from app.api.v1.services.scheduling import scheduling_service
 from app.api.v1.services.auth import auth_service
+from app.api.v1.services.scheduling import scheduling_service
 from app.core.security import SecurityService
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])

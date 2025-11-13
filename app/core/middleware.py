@@ -3,8 +3,9 @@ Middleware for request processing and normalization.
 Production-grade trailing slash handling for FastAPI.
 """
 
-from starlette.types import ASGIApp, Receive, Scope, Send
 import logging
+
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
 

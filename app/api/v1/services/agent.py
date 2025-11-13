@@ -4,7 +4,7 @@ Agent service layer for business logic.
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 from app.api.v1.schemas.agent import AgentCreate, AgentUpdate, VoiceOption
 from app.services.firebase import firebase_service

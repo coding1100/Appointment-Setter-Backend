@@ -3,28 +3,28 @@ Authentication API routes using Firebase.
 """
 
 import uuid
-from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from jose import JWTError, jwt
 
 from app.api.v1.schemas.auth import (
-    UserCreate,
-    UserUpdate,
-    UserLogin,
-    TokenResponse,
-    UserResponse,
-    PasswordChange,
     ForgotPasswordRequest,
-    ResetPasswordRequest,
-    PermissionCreate,
-    RoleCreate,
     LogoutRequest,
+    PasswordChange,
+    PermissionCreate,
+    ResetPasswordRequest,
+    RoleCreate,
+    TokenResponse,
+    UserCreate,
+    UserLogin,
+    UserResponse,
+    UserUpdate,
 )
 from app.api.v1.services.auth import auth_service
-from app.core.security import SecurityService
 from app.core.config import SECRET_KEY
-from jose import JWTError, jwt
-from fastapi import Depends
+from app.core.security import SecurityService
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 

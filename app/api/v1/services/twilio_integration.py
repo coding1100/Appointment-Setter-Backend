@@ -5,15 +5,16 @@ Twilio Integration Service for managing user's Twilio credentials and phone numb
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
-from twilio.rest import Client
-from twilio.base.exceptions import TwilioException
-import httpx
+from typing import Any, Dict, List, Optional
 
-from app.api.v1.schemas.voice_agent import TwilioIntegrationConfig, TwilioCredentialTest, TwilioCredentialTestResponse
-from app.services.firebase import firebase_service
-from app.core.encryption import encryption_service
+import httpx
+from twilio.base.exceptions import TwilioException
+from twilio.rest import Client
+
+from app.api.v1.schemas.voice_agent import TwilioCredentialTest, TwilioCredentialTestResponse, TwilioIntegrationConfig
 from app.core import config as app_config
+from app.core.encryption import encryption_service
+from app.services.firebase import firebase_service
 
 # Configure logging
 logger = logging.getLogger(__name__)

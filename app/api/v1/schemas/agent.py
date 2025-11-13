@@ -4,8 +4,9 @@ Agent schemas for API requests and responses.
 
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field, validator
 from uuid import UUID
+
+from pydantic import BaseModel, Field, validator
 
 
 class AgentCreate(BaseModel):

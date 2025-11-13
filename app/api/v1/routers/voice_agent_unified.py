@@ -4,15 +4,16 @@ Handles both browser testing and phone call sessions using a single service.
 """
 
 import logging
-from fastapi import APIRouter, HTTPException, status, Request, Response
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from twilio.request_validator import RequestValidator
 
-from app.services.unified_voice_agent import unified_voice_agent_service
-from app.services.firebase import firebase_service
-from app.core.encryption import encryption_service
 from app.core import config
+from app.core.encryption import encryption_service
+from app.services.firebase import firebase_service
+from app.services.unified_voice_agent import unified_voice_agent_service
 
 # Configure logging
 logger = logging.getLogger(__name__)

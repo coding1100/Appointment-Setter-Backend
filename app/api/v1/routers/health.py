@@ -4,13 +4,14 @@ Health check endpoints for monitoring and diagnostics.
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any
-from fastapi import APIRouter, status
-import redis
-import firebase_admin
+from typing import Any, Dict
 
-from app.core.config import REDIS_URL, LIVEKIT_URL, ENVIRONMENT
+import firebase_admin
+import redis
+from fastapi import APIRouter, status
 from livekit import api as livekit_api
+
+from app.core.config import ENVIRONMENT, LIVEKIT_URL, REDIS_URL
 
 # Configure logging
 logger = logging.getLogger(__name__)

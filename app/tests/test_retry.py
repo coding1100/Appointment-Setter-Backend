@@ -2,9 +2,11 @@
 Tests for retry logic utilities.
 """
 
-import pytest
 import asyncio
-from app.core.retry import retry_sync, retry_async, RetryConfig
+
+import pytest
+
+from app.core.retry import RetryConfig, retry_async, retry_sync
 
 
 def test_retry_sync_success_on_first_attempt():

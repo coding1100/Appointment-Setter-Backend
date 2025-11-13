@@ -3,15 +3,16 @@ API v1 router configuration.
 """
 
 from fastapi import APIRouter
+
 from app.api.v1.routers import (
-    auth,
-    tenants,
-    appointments,
-    voice_agent_unified,
-    twilio_integration,
-    health,
     agents,
+    appointments,
+    auth,
+    health,
     phone_numbers,
+    tenants,
+    twilio_integration,
+    voice_agent_unified,
 )
 
 api_router = APIRouter(prefix="/api/v1")

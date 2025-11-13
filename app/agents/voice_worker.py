@@ -4,23 +4,23 @@ This worker connects to LiveKit and handles voice agent sessions.
 Based on the LiveKit agents framework pattern.
 """
 
-import os
 import asyncio
-import logging
 import json
-from typing import Optional, Dict, Any
+import logging
+import os
+from typing import Any, Dict, Optional
 
 from livekit import agents
 from livekit.agents import (
-    AgentSession,
     Agent,
+    AgentSession,
     RoomInputOptions,
     function_tool,
 )
-from livekit.plugins import deepgram, silero, google, elevenlabs
+from livekit.plugins import deepgram, elevenlabs, google, silero
 
-from app.core.config import LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL, GOOGLE_API_KEY, DEEPGRAM_API_KEY, ELEVEN_API_KEY
 from app.core.async_redis import async_redis_client
+from app.core.config import DEEPGRAM_API_KEY, ELEVEN_API_KEY, GOOGLE_API_KEY, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
 from app.core.prompts import get_template
 
 logging.basicConfig(level=logging.INFO)

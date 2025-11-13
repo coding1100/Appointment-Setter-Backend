@@ -4,8 +4,9 @@ Phone number schemas for linking agents with Twilio integrations.
 
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field, validator
 from uuid import UUID
+
+from pydantic import BaseModel, Field, validator
 
 
 class PhoneNumberCreate(BaseModel):

@@ -3,9 +3,10 @@ Agent management API routes.
 """
 
 from typing import List
-from fastapi import APIRouter, HTTPException, status, Query
 
-from app.api.v1.schemas.agent import AgentCreate, AgentUpdate, AgentResponse, VoiceListResponse, VoicePreviewRequest
+from fastapi import APIRouter, HTTPException, Query, status
+
+from app.api.v1.schemas.agent import AgentCreate, AgentResponse, AgentUpdate, VoiceListResponse, VoicePreviewRequest
 from app.api.v1.services.agent import agent_service
 
 router = APIRouter(prefix="/agents", tags=["agents"])

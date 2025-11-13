@@ -6,33 +6,33 @@ Single service for all voice agent interactions.
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
-import logging
+from typing import Any, Dict, List, Optional
 
+from livekit import api
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm, stt, tts
 from livekit.agents.voice.agent import Agent
-from livekit.plugins import google, deepgram, elevenlabs, silero
+from livekit.plugins import deepgram, elevenlabs, google, silero
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
-from livekit import api
 from twilio.rest import Client
-from twilio.twiml.voice_response import VoiceResponse, Dial
+from twilio.twiml.voice_response import Dial, VoiceResponse
 
+from app.core.async_redis import async_redis_client
 from app.core.config import (
-    LIVEKIT_API_KEY,
-    LIVEKIT_API_SECRET,
-    LIVEKIT_URL,
-    LIVEKIT_SIP_DOMAIN,
-    GOOGLE_API_KEY,
     DEEPGRAM_API_KEY,
     ELEVEN_API_KEY,
+    GOOGLE_API_KEY,
+    LIVEKIT_API_KEY,
+    LIVEKIT_API_SECRET,
+    LIVEKIT_SIP_DOMAIN,
+    LIVEKIT_URL,
     TWILIO_WEBHOOK_BASE_URL,
 )
+from app.core.encryption import encryption_service
 from app.services.dialog_manager import dialog_manager
 from app.services.firebase import firebase_service
-from app.core.encryption import encryption_service
-from app.core.async_redis import async_redis_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

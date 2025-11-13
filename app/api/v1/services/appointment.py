@@ -4,8 +4,8 @@ Appointment service for managing appointments and email notifications using Supa
 
 import logging
 import uuid
-from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Dict, Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 from app.api.v1.services.scheduling import SchedulingService
 from app.services.email import EmailService

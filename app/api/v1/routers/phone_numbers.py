@@ -3,9 +3,10 @@ Phone number management API routes.
 """
 
 from typing import List
+
 from fastapi import APIRouter, HTTPException, status
 
-from app.api.v1.schemas.phone_number import PhoneNumberCreate, PhoneNumberUpdate, PhoneNumberResponse, AgentPhoneAssignment
+from app.api.v1.schemas.phone_number import AgentPhoneAssignment, PhoneNumberCreate, PhoneNumberResponse, PhoneNumberUpdate
 from app.api.v1.services.phone_number import phone_number_service
 
 router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"])

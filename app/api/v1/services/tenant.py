@@ -4,16 +4,16 @@ Tenant service layer for business logic using Supabase.
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 from app.api.v1.schemas.tenant import (
+    AgentPolicyCreate,
+    AgentSettingsCreate,
+    BusinessInfoCreate,
+    ServiceTypeCreate,
     TenantCreate,
     TenantUpdate,
-    BusinessInfoCreate,
-    AgentSettingsCreate,
     TwilioIntegrationCreate,
-    ServiceTypeCreate,
-    AgentPolicyCreate,
 )
 from app.core.prompts import prompt_map
 from app.services.firebase import firebase_service

@@ -2,16 +2,17 @@
 Authentication service for user management and JWT token handling using Supabase.
 """
 
-import uuid
 import secrets
-from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Dict, Any
-from passlib.context import CryptContext
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
 from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
+from passlib.context import CryptContext
 
-from app.api.v1.schemas.auth import UserCreate, UserUpdate, LoginRequest, PasswordChangeRequest
-from app.core.config import SECRET_KEY, JWT_ALGORITHM, JWT_ACCESS_TOKEN_EXPIRE_MINUTES, JWT_REFRESH_TOKEN_EXPIRE_DAYS
+from app.api.v1.schemas.auth import LoginRequest, PasswordChangeRequest, UserCreate, UserUpdate
+from app.core.config import JWT_ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
 from app.services.firebase import firebase_service
 
 # Password hashing
