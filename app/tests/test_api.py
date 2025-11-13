@@ -18,7 +18,7 @@ def test_root_endpoint(client):
 
 def test_health_check_endpoint(client):
     """Test the health check endpoint."""
-    response = client.get("/health")
+    response = client.get("/api/v1/health")
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert data["status"] == "healthy"
