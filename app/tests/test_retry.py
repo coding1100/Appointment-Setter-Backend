@@ -1,6 +1,7 @@
 """
 Tests for retry logic utilities.
 """
+
 import pytest
 import asyncio
 from app.core.retry import retry_sync, retry_async, RetryConfig
@@ -9,12 +10,12 @@ from app.core.retry import retry_sync, retry_async, RetryConfig
 def test_retry_sync_success_on_first_attempt():
     """Test that retry_sync works when function succeeds on first attempt."""
     call_count = {"count": 0}
-    
+
     @retry_sync(max_attempts=3)
     def test_func():
         call_count["count"] += 1
         return "success"
-    
+
     result = test_func()
     assert result == "success"
     assert call_count["count"] == 1
@@ -23,14 +24,14 @@ def test_retry_sync_success_on_first_attempt():
 def test_retry_sync_success_on_retry():
     """Test that retry_sync retries and eventually succeeds."""
     call_count = {"count": 0}
-    
+
     @retry_sync(max_attempts=3, delay=0.1)
     def test_func():
         call_count["count"] += 1
         if call_count["count"] < 3:
             raise ValueError("Temporary error")
         return "success"
-    
+
     result = test_func()
     assert result == "success"
     assert call_count["count"] == 3
@@ -39,15 +40,15 @@ def test_retry_sync_success_on_retry():
 def test_retry_sync_max_attempts_exceeded():
     """Test that retry_sync raises exception after max attempts."""
     call_count = {"count": 0}
-    
+
     @retry_sync(max_attempts=3, delay=0.1)
     def test_func():
         call_count["count"] += 1
         raise ValueError("Permanent error")
-    
+
     with pytest.raises(ValueError):
         test_func()
-    
+
     assert call_count["count"] == 3
 
 
@@ -55,12 +56,12 @@ def test_retry_sync_max_attempts_exceeded():
 async def test_retry_async_success_on_first_attempt():
     """Test that retry_async works when function succeeds on first attempt."""
     call_count = {"count": 0}
-    
+
     @retry_async(max_attempts=3)
     async def test_func():
         call_count["count"] += 1
         return "success"
-    
+
     result = await test_func()
     assert result == "success"
     assert call_count["count"] == 1
@@ -70,14 +71,14 @@ async def test_retry_async_success_on_first_attempt():
 async def test_retry_async_success_on_retry():
     """Test that retry_async retries and eventually succeeds."""
     call_count = {"count": 0}
-    
+
     @retry_async(max_attempts=3, delay=0.1)
     async def test_func():
         call_count["count"] += 1
         if call_count["count"] < 3:
             raise ValueError("Temporary error")
         return "success"
-    
+
     result = await test_func()
     assert result == "success"
     assert call_count["count"] == 3
@@ -87,15 +88,15 @@ async def test_retry_async_success_on_retry():
 async def test_retry_async_max_attempts_exceeded():
     """Test that retry_async raises exception after max attempts."""
     call_count = {"count": 0}
-    
+
     @retry_async(max_attempts=3, delay=0.1)
     async def test_func():
         call_count["count"] += 1
         raise ValueError("Permanent error")
-    
+
     with pytest.raises(ValueError):
         await test_func()
-    
+
     assert call_count["count"] == 3
 
 
@@ -105,4 +106,3 @@ def test_retry_config_values():
     assert RetryConfig.LIVEKIT_MAX_ATTEMPTS > 0
     assert RetryConfig.FIREBASE_MAX_ATTEMPTS > 0
     assert RetryConfig.SENDGRID_MAX_ATTEMPTS > 0
-

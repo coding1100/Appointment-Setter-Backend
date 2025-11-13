@@ -1,6 +1,7 @@
 """
 Core configuration settings for the AI Phone Scheduler SaaS platform.
 """
+
 import os
 from typing import Dict, Any
 from dotenv import load_dotenv
@@ -49,7 +50,7 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 # Application settings
 DEBUG = os.environ.get("DEBUG", "false").lower() in ("true", "1", "t")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
-API_HOST = os.environ.get("API_HOST", "0.0.0.0")
+API_HOST = os.environ.get("API_HOST", "0.0.0.0")  # nosec B104 - Intentional: Server needs to bind to all interfaces
 API_PORT = int(os.environ.get("API_PORT", "8000"))
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 
@@ -66,19 +67,19 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 # Home Services voice mapping
 VOICE_MAP: Dict[str, str] = {
     "Home Services": "en_us_006",
-    "Plumbing": "en_us_006", 
+    "Plumbing": "en_us_006",
     "Electrician": "en_us_006",
     "Painter": "en_us_006",
     "Carpenter": "en_us_006",
-    "Maids": "en_us_006"
+    "Maids": "en_us_006",
 }
 
 # Home Services prompt mapping
 PROMPT_MAP: Dict[str, str] = {
     "Home Services": "custom_prompt_home_services",
     "Plumbing": "custom_prompt_plumbing",
-    "Electrician": "custom_prompt_electrician", 
+    "Electrician": "custom_prompt_electrician",
     "Painter": "custom_prompt_painter",
     "Carpenter": "custom_prompt_carpenter",
-    "Maids": "custom_prompt_maids"
+    "Maids": "custom_prompt_maids",
 }

@@ -1,6 +1,7 @@
 """
 Health check endpoints for monitoring and diagnostics.
 """
+
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any
@@ -31,7 +32,7 @@ async def health_check() -> Dict[str, Any]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "service": "AI Phone Scheduler API",
         "version": "1.0.0",
-        "environment": ENVIRONMENT
+        "environment": ENVIRONMENT,
     }
 
 
@@ -48,70 +49,46 @@ async def detailed_health_check() -> Dict[str, Any]:
         "service": "AI Phone Scheduler API",
         "version": "1.0.0",
         "environment": ENVIRONMENT,
-        "components": {}
+        "components": {},
     }
-    
+
     overall_healthy = True
-    
+
     # Check Redis
     try:
         redis_client = redis.from_url(REDIS_URL, decode_responses=True)
         redis_client.ping()
-        health_status["components"]["redis"] = {
-            "status": "healthy",
-            "message": "Connected"
-        }
+        health_status["components"]["redis"] = {"status": "healthy", "message": "Connected"}
     except Exception as e:
         logger.error(f"Redis health check failed: {e}")
-        health_status["components"]["redis"] = {
-            "status": "unhealthy",
-            "message": str(e)
-        }
+        health_status["components"]["redis"] = {"status": "unhealthy", "message": str(e)}
         overall_healthy = False
-    
+
     # Check Firebase
     try:
         if firebase_admin._apps:
-            health_status["components"]["firebase"] = {
-                "status": "healthy",
-                "message": "Initialized"
-            }
+            health_status["components"]["firebase"] = {"status": "healthy", "message": "Initialized"}
         else:
-            health_status["components"]["firebase"] = {
-                "status": "unhealthy",
-                "message": "Not initialized"
-            }
+            health_status["components"]["firebase"] = {"status": "unhealthy", "message": "Not initialized"}
             overall_healthy = False
     except Exception as e:
         logger.error(f"Firebase health check failed: {e}")
-        health_status["components"]["firebase"] = {
-            "status": "unhealthy",
-            "message": str(e)
-        }
+        health_status["components"]["firebase"] = {"status": "unhealthy", "message": str(e)}
         overall_healthy = False
-    
+
     # Check LiveKit (basic URL validation)
     try:
         if LIVEKIT_URL:
-            health_status["components"]["livekit"] = {
-                "status": "configured",
-                "message": "URL configured"
-            }
+            health_status["components"]["livekit"] = {"status": "configured", "message": "URL configured"}
         else:
-            health_status["components"]["livekit"] = {
-                "status": "not_configured",
-                "message": "URL not set"
-            }
+            health_status["components"]["livekit"] = {"status": "not_configured", "message": "URL not set"}
     except Exception as e:
         logger.error(f"LiveKit health check failed: {e}")
-        health_status["components"]["livekit"] = {
-            "status": "error",
-            "message": str(e)
-        }
-    
+        health_status["components"]["livekit"] = {"status": "error", "message": str(e)}
+
     # Set overall status
     health_status["status"] = "healthy" if overall_healthy else "degraded"
-    
+
     return health_status
 
 
@@ -125,7 +102,7 @@ async def readiness_check() -> Dict[str, Any]:
     # Check critical dependencies
     ready = True
     checks = {}
-    
+
     # Check Redis
     try:
         redis_client = redis.from_url(REDIS_URL, decode_responses=True)
@@ -134,7 +111,7 @@ async def readiness_check() -> Dict[str, Any]:
     except Exception:
         checks["redis"] = False
         ready = False
-    
+
     # Check Firebase
     try:
         checks["firebase"] = bool(firebase_admin._apps)
@@ -143,17 +120,11 @@ async def readiness_check() -> Dict[str, Any]:
     except Exception:
         checks["firebase"] = False
         ready = False
-    
+
     if ready:
-        return {
-            "status": "ready",
-            "checks": checks
-        }
+        return {"status": "ready", "checks": checks}
     else:
-        return {
-            "status": "not_ready",
-            "checks": checks
-        }
+        return {"status": "not_ready", "checks": checks}
 
 
 @router.get("/live", status_code=status.HTTP_200_OK)
@@ -164,4 +135,3 @@ async def liveness_check() -> Dict[str, str]:
     Returns 200 if the service is alive (even if dependencies are down).
     """
     return {"status": "alive"}
-

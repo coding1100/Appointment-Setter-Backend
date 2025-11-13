@@ -1,6 +1,7 @@
 """
 Email service for SendGrid integration and email templates.
 """
+
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
@@ -12,39 +13,40 @@ from app.core.config import SENDGRID_API_KEY, SENDGRID_FROM_EMAIL
 # Configure logging
 logger = logging.getLogger(__name__)
 
+
 class EmailService:
     """Service class for email operations using SendGrid."""
-    
+
     def __init__(self):
         self.sg = sendgrid.SendGridAPIClient(api_key=SENDGRID_API_KEY)
         self.from_email = SENDGRID_FROM_EMAIL
-    
+
     def send_email(self, email_data: Dict[str, Any]) -> bool:
         """Send email using SendGrid."""
         try:
             to_email = email_data["to_email"]
             template_name = email_data["template_name"]
             template_data = email_data.get("template_data", {})
-            
+
             # Get email template
             subject, html_content = self._get_email_template(template_name, template_data)
-            
+
             # Create email
             from_email = Email(self.from_email)
             to_email = To(to_email)
             content = HtmlContent(html_content)
-            
+
             mail = Mail(from_email, to_email, subject, content)
-            
+
             # Send email
             response = self.sg.send(mail)
-            
+
             return response.status_code in [200, 201, 202]
-            
+
         except Exception as e:
             logger.error(f"Error sending email: {e}", exc_info=True)
             return False
-    
+
     def _get_email_template(self, template_name: str, template_data: Dict[str, Any]) -> tuple[str, str]:
         """Get email template content."""
         templates = {
@@ -54,19 +56,19 @@ class EmailService:
             "tenant_appointment_notification": self._tenant_appointment_notification_template,
             "password_reset": self._password_reset_template,
             "email_verification": self._email_verification_template,
-            "welcome": self._welcome_template
+            "welcome": self._welcome_template,
         }
-        
+
         template_func = templates.get(template_name)
         if not template_func:
             raise ValueError(f"Unknown email template: {template_name}")
-        
+
         return template_func(template_data)
-    
+
     def _appointment_confirmation_template(self, data: Dict[str, Any]) -> tuple[str, str]:
         """Appointment confirmation email template."""
         subject = f"Appointment Confirmed - {data.get('service_type', 'Service')}"
-        
+
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -110,13 +112,13 @@ class EmailService:
         </body>
         </html>
         """
-        
+
         return subject, html_content
-    
+
     def _appointment_status_update_template(self, data: Dict[str, Any]) -> tuple[str, str]:
         """Appointment status update email template."""
         subject = f"Appointment Status Update - {data.get('service_type', 'Service')}"
-        
+
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -160,13 +162,13 @@ class EmailService:
         </body>
         </html>
         """
-        
+
         return subject, html_content
-    
+
     def _appointment_reschedule_template(self, data: Dict[str, Any]) -> tuple[str, str]:
         """Appointment reschedule email template."""
         subject = f"Appointment Rescheduled - {data.get('service_type', 'Service')}"
-        
+
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -210,13 +212,13 @@ class EmailService:
         </body>
         </html>
         """
-        
+
         return subject, html_content
-    
+
     def _tenant_appointment_notification_template(self, data: Dict[str, Any]) -> tuple[str, str]:
         """Tenant appointment notification email template."""
         subject = f"New Appointment Booking - {data.get('service_type', 'Service')}"
-        
+
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -266,13 +268,13 @@ class EmailService:
         </body>
         </html>
         """
-        
+
         return subject, html_content
-    
+
     def _password_reset_template(self, data: Dict[str, Any]) -> tuple[str, str]:
         """Password reset email template."""
         subject = "Password Reset Request"
-        
+
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -311,13 +313,13 @@ class EmailService:
         </body>
         </html>
         """
-        
+
         return subject, html_content
-    
+
     def _email_verification_template(self, data: Dict[str, Any]) -> tuple[str, str]:
         """Email verification template."""
         subject = "Verify Your Email Address"
-        
+
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -355,13 +357,13 @@ class EmailService:
         </body>
         </html>
         """
-        
+
         return subject, html_content
-    
+
     def _welcome_template(self, data: Dict[str, Any]) -> tuple[str, str]:
         """Welcome email template."""
         subject = "Welcome to AI Phone Scheduler!"
-        
+
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -394,11 +396,11 @@ class EmailService:
         </body>
         </html>
         """
-        
+
         return subject, html_content
-    
+
     # Public async methods for appointment emails
-    
+
     async def send_appointment_confirmation(
         self,
         customer_email: str,
@@ -408,7 +410,7 @@ class EmailService:
         service_address: str,
         appointment_id: Optional[str] = None,
         service_details: Optional[str] = None,
-        business_name: Optional[str] = None
+        business_name: Optional[str] = None,
     ) -> bool:
         """Send appointment confirmation email to customer."""
         try:
@@ -422,14 +424,14 @@ class EmailService:
                     "service_address": service_address,
                     "appointment_id": appointment_id or "N/A",
                     "service_details": service_details,
-                    "business_name": business_name or "AI Phone Scheduler"
-                }
+                    "business_name": business_name or "AI Phone Scheduler",
+                },
             }
             return self.send_email(email_data)
         except Exception as e:
             logger.error(f"Error sending appointment confirmation email: {e}", exc_info=True)
             return False
-    
+
     async def send_appointment_cancellation(
         self,
         customer_email: str,
@@ -437,7 +439,7 @@ class EmailService:
         appointment_datetime: datetime,
         reason: Optional[str] = None,
         service_type: Optional[str] = None,
-        business_name: Optional[str] = None
+        business_name: Optional[str] = None,
     ) -> bool:
         """Send appointment cancellation email to customer."""
         try:
@@ -452,14 +454,14 @@ class EmailService:
                     "new_status": "cancelled",
                     "appointment_id": "N/A",
                     "business_name": business_name or "AI Phone Scheduler",
-                    "cancellation_reason": reason
-                }
+                    "cancellation_reason": reason,
+                },
             }
             return self.send_email(email_data)
         except Exception as e:
             logger.error(f"Error sending appointment cancellation email: {e}", exc_info=True)
             return False
-    
+
     async def send_appointment_reschedule(
         self,
         customer_email: str,
@@ -470,7 +472,7 @@ class EmailService:
         service_type: Optional[str] = None,
         service_address: Optional[str] = None,
         appointment_id: Optional[str] = None,
-        business_name: Optional[str] = None
+        business_name: Optional[str] = None,
     ) -> bool:
         """Send appointment reschedule email to customer."""
         try:
@@ -485,8 +487,8 @@ class EmailService:
                     "service_address": service_address or "N/A",
                     "appointment_id": appointment_id or "N/A",
                     "business_name": business_name or "AI Phone Scheduler",
-                    "reschedule_reason": reason
-                }
+                    "reschedule_reason": reason,
+                },
             }
             return self.send_email(email_data)
         except Exception as e:

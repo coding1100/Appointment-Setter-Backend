@@ -3,6 +3,7 @@ Prompt templates for the appointment setter application.
 This module contains the base template and domain-specific templates for different appointment types.
 Production-hardened: injection-resistant, validation-forward, and conversationally engaging.
 """
+
 import os
 from typing import Dict, Any
 
@@ -107,6 +108,7 @@ You are {agent_name} from {organization}. Introduce yourself as {agent_name} fro
 Your only goal is to assist with {domain} queries or appointments related to {organization}. Maintain scope, safety, validation, and engagement.
 """
 
+
 def create_home_services_template(agent_name: str) -> str:
     """Create a general home services appointment template with the specified agent name."""
     return BASE_TEMPLATE.format(
@@ -136,8 +138,9 @@ If the user describes a home service need:
   "service_details": ""
 }
         """,
-        additional_instructions=""
+        additional_instructions="",
     )
+
 
 def create_plumbing_template(agent_name: str) -> str:
     """Create a plumbing-specific appointment template with the specified agent name."""
@@ -168,8 +171,9 @@ If the user describes a plumbing problem (e.g., leak repair, installation, maint
   "service_details": ""
 }
         """,
-        additional_instructions=""
+        additional_instructions="",
     )
+
 
 def create_electrician_template(agent_name: str) -> str:
     """Create an electrician-specific appointment template with the specified agent name."""
@@ -200,8 +204,9 @@ If the user describes an electrical problem (repair, installation, maintenance):
   "service_details": ""
 }
         """,
-        additional_instructions=""
+        additional_instructions="",
     )
+
 
 def create_painter_template(agent_name: str) -> str:
     """Create a painter-specific appointment template with the specified agent name."""
@@ -232,8 +237,9 @@ If the user describes a painting project (interior, exterior, touch-ups):
   "service_details": ""
 }
         """,
-        additional_instructions=""
+        additional_instructions="",
     )
+
 
 def create_carpenter_template(agent_name: str) -> str:
     """Create a carpenter-specific appointment template with the specified agent name."""
@@ -264,8 +270,9 @@ If the user describes a carpentry project (repair, custom work, installation):
   "service_details": ""
 }
         """,
-        additional_instructions=""
+        additional_instructions="",
     )
+
 
 def create_maids_template(agent_name: str) -> str:
     """Create a maids/cleaning-specific appointment template with the specified agent name."""
@@ -296,8 +303,9 @@ If the user describes cleaning needs (regular, deep clean, move-in/out):
   "service_details": ""
 }
         """,
-        additional_instructions=""
+        additional_instructions="",
     )
+
 
 # Template mapping for easy access
 TEMPLATE_MAP = {
@@ -311,6 +319,7 @@ TEMPLATE_MAP = {
 
 # Alias for backward compatibility
 prompt_map = TEMPLATE_MAP
+
 
 def get_template(service_type: str, agent_name: str = "Assistant") -> str:
     """Get the appropriate template for the service type."""

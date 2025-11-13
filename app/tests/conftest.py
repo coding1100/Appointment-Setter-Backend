@@ -1,6 +1,7 @@
 """
 Pytest configuration and fixtures for testing.
 """
+
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
@@ -29,16 +30,11 @@ def mock_appointment_data():
         "service_type": "Plumbing",
         "service_address": "123 Main St",
         "appointment_datetime": "2024-12-01T10:00:00Z",
-        "service_details": "Fix leaky faucet"
+        "service_details": "Fix leaky faucet",
     }
 
 
 @pytest.fixture
 def mock_twilio_integration():
     """Return mock Twilio integration data for testing."""
-    return {
-        "account_sid": "AC" + "x" * 32,
-        "auth_token": "test_auth_token_123",
-        "phone_number": "+1234567890"
-    }
-
+    return {"account_sid": "AC" + "x" * 32, "auth_token": "test_auth_token_123", "phone_number": "+1234567890"}
