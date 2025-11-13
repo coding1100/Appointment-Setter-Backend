@@ -190,15 +190,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
-          key: ${{ secrets.VPS_SSH_KEY }}
+          key_path: ~/.ssh/deploy_key
           port: ${{ secrets.VPS_PORT || 22 }}
+          timeout: 30s
+          command_timeout: 10m
           script: |
-            cd ${{ secrets.VPS_DEPLOY_PATH || '/opt/appointment-setter' }}
+            cd ${{ secrets.VPS_DEPLOY_PATH || '/root/appointment-setter' }}
             
             # Pull latest code
             git pull origin main
