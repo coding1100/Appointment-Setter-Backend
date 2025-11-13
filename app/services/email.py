@@ -4,9 +4,10 @@ Email service for SendGrid integration and email templates.
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
+
 import sendgrid
-from sendgrid.helpers.mail import Mail, Email, To, Content, HtmlContent
+from sendgrid.helpers.mail import Content, Email, HtmlContent, Mail, To
 
 from app.core.config import SENDGRID_API_KEY, SENDGRID_FROM_EMAIL
 

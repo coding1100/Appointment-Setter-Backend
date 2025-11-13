@@ -3,22 +3,23 @@ Core security utilities and dependencies.
 PERFORMANCE OPTIMIZATION: Ready for async Redis (currently using sync for backward compatibility).
 """
 
-import json
-import logging
-import uuid
-import time
 import hashlib
 import hmac
+import json
+import logging
 import secrets
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, Optional, List, Tuple
+import time
+import uuid
 from dataclasses import dataclass
-import redis
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
 import boto3
+import redis
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, status
 
-from app.core.config import REDIS_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, SECRET_KEY
+from app.core.config import AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY, REDIS_URL, SECRET_KEY
 
 # NOTE: To use async Redis, uncomment the line below and update all self.redis_client calls to use await
 # from app.core.async_redis import async_redis_client

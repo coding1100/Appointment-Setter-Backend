@@ -2,23 +2,24 @@
 Observability service for structured logging, metrics, and tracing.
 """
 
-import uuid
-import time
 import logging
-import redis
-from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+import time
+import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import redis
 import structlog
-from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry, generate_latest
 from opentelemetry import trace
 from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.redis import RedisInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from opentelemetry.instrumentation.redis import RedisInstrumentor
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 
 from app.core.config import DEBUG, LOG_LEVEL, REDIS_URL
 

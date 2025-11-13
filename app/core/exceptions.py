@@ -2,7 +2,7 @@
 Custom exception classes for standardized error handling.
 """
 
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 
 class AppException(Exception):

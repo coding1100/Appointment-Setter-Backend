@@ -3,9 +3,10 @@ Authentication schemas for API requests and responses.
 """
 
 from datetime import datetime
-from typing import Optional, List
-from pydantic import BaseModel, Field, EmailStr, validator
+from typing import List, Optional
 from uuid import UUID
+
+from pydantic import BaseModel, EmailStr, Field, validator
 
 from app.models.auth import UserRole, UserStatus
 

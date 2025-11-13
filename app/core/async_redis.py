@@ -4,9 +4,10 @@ Provides 5-10x performance improvement over sync redis client.
 """
 
 import json
-import redis.asyncio as aioredis
-from typing import Optional, Any, List
 import logging
+from typing import Any, List, Optional
+
+import redis.asyncio as aioredis
 
 from app.core.config import REDIS_URL
 

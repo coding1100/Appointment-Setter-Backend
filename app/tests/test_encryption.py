@@ -3,6 +3,7 @@ Tests for encryption service.
 """
 
 import pytest
+
 from app.core.encryption import encryption_service
 
 

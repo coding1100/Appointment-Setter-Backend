@@ -3,14 +3,15 @@ Twilio Integration API routes for managing user's Twilio credentials and phone n
 """
 
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
+from app.api.v1.schemas.voice_agent import TwilioCredentialTest, TwilioCredentialTestResponse, TwilioIntegrationConfig
 from app.api.v1.services.twilio_integration import twilio_integration_service
-from app.api.v1.schemas.voice_agent import TwilioIntegrationConfig, TwilioCredentialTest, TwilioCredentialTestResponse
-from app.core.security import SecurityService
 from app.core import config
+from app.core.security import SecurityService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/twilio-integration", tags=["twilio-integration"])

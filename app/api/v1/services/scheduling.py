@@ -3,15 +3,15 @@ Scheduling service for appointment slot management with Redis holds using Supaba
 PERFORMANCE OPTIMIZED: Using async Redis for 5-10x improvement.
 """
 
-import uuid
 import json
-from datetime import datetime, timezone, timedelta, date
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass, asdict
+import uuid
+from dataclasses import asdict, dataclass
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
-from app.core.config import REDIS_URL
-from app.core.async_redis import async_redis_client
 from app.api.v1.services.tenant import tenant_service
+from app.core.async_redis import async_redis_client
+from app.core.config import REDIS_URL
 from app.services.firebase import firebase_service
 
 

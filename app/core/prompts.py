@@ -5,7 +5,7 @@ Production-hardened: injection-resistant, validation-forward, and conversational
 """
 
 import os
-from typing import Dict, Any
+from typing import Any, Dict
 
 # Get agent voice from environment with fallback
 AGENT_VOICE = os.environ.get("AGENT_VOICE", "Assistant")

@@ -2,31 +2,31 @@
 Main FastAPI application.
 """
 
-import os
 import logging
+import os
 from contextlib import asynccontextmanager
-from typing import Dict, Any
+from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException, status, Request
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import HTTPException as FastAPIHTTPException
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-import uvicorn
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.config import DEBUG, LOG_LEVEL, API_HOST, API_PORT, ENVIRONMENT
 from app.api.v1.api import api_router
-from app.core.env_validator import validate_environment_variables, print_environment_summary
-from app.core.middleware import TrailingSlashMiddleware
+from app.core.config import API_HOST, API_PORT, DEBUG, ENVIRONMENT, LOG_LEVEL
+from app.core.env_validator import print_environment_summary, validate_environment_variables
 from app.core.exceptions import (
     AppException,
-    ValidationError,
-    NotFoundError,
     AuthenticationError,
     AuthorizationError,
     ExternalServiceError,
+    NotFoundError,
+    ValidationError,
 )
+from app.core.middleware import TrailingSlashMiddleware
 
 # Configure logging
 logging.basicConfig(level=getattr(logging, LOG_LEVEL.upper()), format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")

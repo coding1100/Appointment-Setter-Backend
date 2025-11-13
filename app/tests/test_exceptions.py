@@ -3,7 +3,8 @@ Tests for custom exceptions.
 """
 
 import pytest
-from app.core.exceptions import AppException, ValidationError, NotFoundError, TwilioError, LiveKitError, AuthenticationError
+
+from app.core.exceptions import AppException, AuthenticationError, LiveKitError, NotFoundError, TwilioError, ValidationError
 
 
 def test_app_exception_basic():

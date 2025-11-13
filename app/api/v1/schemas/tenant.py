@@ -3,9 +3,10 @@ Pydantic schemas for API request/response models.
 """
 
 from datetime import datetime
-from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, Field, validator
+from typing import Any, Dict, List, Optional
 from uuid import UUID
+
+from pydantic import BaseModel, Field, validator
 
 
 # Base schemas

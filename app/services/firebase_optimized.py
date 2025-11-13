@@ -4,15 +4,16 @@ This is a drop-in replacement for firebase.py with 10-50x better performance.
 """
 
 import asyncio
-import os
 import json
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timezone
+import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-from app.core.config import FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL
+from app.core.config import FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY, FIREBASE_PROJECT_ID
 
 # Create dedicated thread pool for Firebase operations
 # This prevents blocking the main event loop

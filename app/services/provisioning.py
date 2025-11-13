@@ -3,16 +3,17 @@ Provisioning service for tenant activation pipeline using Supabase.
 Handles LiveKit SIP Ingress creation and Twilio integration.
 """
 
-import uuid
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 from livekit import api
-from twilio.rest import Client
 from twilio.base.exceptions import TwilioException
+from twilio.rest import Client
 
+from app.api.v1.services.tenant import tenant_service
 from app.core.config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
@@ -21,9 +22,8 @@ from app.core.config import (
     TWILIO_AUTH_TOKEN,
     TWILIO_WEBHOOK_BASE_URL,
 )
-from app.api.v1.services.tenant import tenant_service
-from app.services.firebase import firebase_service
 from app.core.encryption import encryption_service
+from app.services.firebase import firebase_service
 
 # Configure logging
 logger = logging.getLogger(__name__)
