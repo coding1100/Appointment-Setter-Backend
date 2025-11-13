@@ -1,6 +1,7 @@
 """
 Agent schemas for API requests and responses.
 """
+
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field, validator
@@ -9,13 +10,14 @@ from uuid import UUID
 
 class AgentCreate(BaseModel):
     """Schema for creating a new agent."""
+
     name: str = Field(..., min_length=1, max_length=100, description="Agent name (e.g., 'Receptionist Sarah')")
     voice_id: str = Field(..., description="ElevenLabs voice ID")
     language: str = Field(default="en-US", description="Language code (e.g., en-US, es-ES)")
     greeting_message: str = Field(..., min_length=10, max_length=1000, description="Agent greeting message")
     service_type: str = Field(..., description="Service type")
-    
-    @validator('service_type')
+
+    @validator("service_type")
     def validate_service_type(cls, v):
         """Validate service type."""
         valid_types = ["Home Services", "Plumbing", "Electrician", "Painter", "Carpenter", "Maids"]
@@ -26,14 +28,15 @@ class AgentCreate(BaseModel):
 
 class AgentUpdate(BaseModel):
     """Schema for updating an agent."""
+
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     voice_id: Optional[str] = None
     language: Optional[str] = None
     greeting_message: Optional[str] = Field(None, min_length=10, max_length=1000)
     service_type: Optional[str] = None
     status: Optional[str] = None
-    
-    @validator('service_type')
+
+    @validator("service_type")
     def validate_service_type(cls, v):
         """Validate service type."""
         if v is None:
@@ -46,6 +49,7 @@ class AgentUpdate(BaseModel):
 
 class AgentResponse(BaseModel):
     """Schema for agent response."""
+
     id: str
     tenant_id: str
     name: str
@@ -63,6 +67,7 @@ class AgentResponse(BaseModel):
 
 class VoiceOption(BaseModel):
     """Schema for ElevenLabs voice option."""
+
     voice_id: str
     name: str
     description: str
@@ -73,12 +78,16 @@ class VoiceOption(BaseModel):
 
 class VoiceListResponse(BaseModel):
     """Schema for list of available voices."""
+
     voices: list[VoiceOption]
     total: int
 
 
 class VoicePreviewRequest(BaseModel):
     """Schema for voice preview request."""
-    voice_id: str
-    text: Optional[str] = Field(default="Hello! This is a preview of my voice. I'm here to help you schedule appointments and answer your questions.", max_length=500)
 
+    voice_id: str
+    text: Optional[str] = Field(
+        default="Hello! This is a preview of my voice. I'm here to help you schedule appointments and answer your questions.",
+        max_length=500,
+    )

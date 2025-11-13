@@ -1,6 +1,7 @@
 """
 Tests for API endpoints.
 """
+
 import pytest
 from fastapi import status
 
@@ -27,4 +28,3 @@ def test_api_docs_available(client):
     """Test that API documentation is available."""
     response = client.get("/docs")
     assert response.status_code == status.HTTP_200_OK
-

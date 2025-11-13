@@ -1,102 +1,81 @@
 """
 Twilio Integration API routes for managing user's Twilio credentials and phone numbers.
 """
+
 import logging
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
 from app.api.v1.services.twilio_integration import twilio_integration_service
-from app.api.v1.schemas.voice_agent import (
-    TwilioIntegrationConfig, TwilioCredentialTest, TwilioCredentialTestResponse
-)
+from app.api.v1.schemas.voice_agent import TwilioIntegrationConfig, TwilioCredentialTest, TwilioCredentialTestResponse
 from app.core.security import SecurityService
 from app.core import config
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/twilio-integration", tags=["twilio-integration"])
 
+
 def get_security_service() -> SecurityService:
     """Get security service instance."""
     return SecurityService()
+
 
 @router.post("/test-credentials")
 async def test_twilio_credentials(credentials: TwilioCredentialTest):
     """Test Twilio credentials and return account information."""
     try:
         result = await twilio_integration_service.test_credentials(credentials)
-        
+
         if not result.success:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result.message
-            )
-        
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.message)
+
         return result
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to test credentials: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to test credentials: {str(e)}")
+
 
 @router.post("/tenant/{tenant_id}/create")
-async def create_twilio_integration(
-    tenant_id: str,
-    config: TwilioIntegrationConfig
-):
+async def create_twilio_integration(tenant_id: str, config: TwilioIntegrationConfig):
     """Create Twilio integration for a tenant."""
     try:
         result = await twilio_integration_service.create_integration(tenant_id, config)
-        
-        return {
-            "message": "Twilio integration created successfully",
-            "integration": result
-        }
-        
+
+        return {"message": "Twilio integration created successfully", "integration": result}
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error creating Twilio integration: {e}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create integration: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create integration: {str(e)}"
         )
 
+
 @router.put("/tenant/{tenant_id}/update")
-async def update_twilio_integration(
-    tenant_id: str,
-    config: TwilioIntegrationConfig
-):
+async def update_twilio_integration(tenant_id: str, config: TwilioIntegrationConfig):
     """Update Twilio integration for a tenant."""
     try:
         result = await twilio_integration_service.update_integration(tenant_id, config)
-        
-        return {
-            "message": "Twilio integration updated successfully",
-            "integration": result
-        }
-        
+
+        return {"message": "Twilio integration updated successfully", "integration": result}
+
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
 
 @router.get("/tenant/{tenant_id}")
 async def get_twilio_integration(tenant_id: str):
     """Get Twilio integration for a tenant."""
     try:
         integration = await twilio_integration_service.get_integration(tenant_id)
-        
+
         if not integration:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Twilio integration not found"
-            )
-        
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Twilio integration not found")
+
         # Don't return sensitive data like auth_token
         safe_integration = {
             "id": integration.get("id"),
@@ -108,134 +87,108 @@ async def get_twilio_integration(tenant_id: str):
             "account_info": integration.get("account_info"),
             "status": integration.get("status"),
             "created_at": integration.get("created_at"),
-            "updated_at": integration.get("updated_at")
+            "updated_at": integration.get("updated_at"),
         }
-        
+
         return safe_integration
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get integration: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get integration: {str(e)}")
+
 
 @router.delete("/tenant/{tenant_id}")
 async def delete_twilio_integration(tenant_id: str):
     """Delete Twilio integration for a tenant."""
     try:
         success = await twilio_integration_service.delete_integration(tenant_id)
-        
+
         if not success:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Twilio integration not found"
-            )
-        
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Twilio integration not found")
+
         return {"message": "Twilio integration deleted successfully"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete integration: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete integration: {str(e)}"
         )
 
+
 @router.post("/account/{account_sid}/phone-numbers")
-async def get_available_phone_numbers(
-    account_sid: str,
-    credentials: TwilioCredentialTest
-):
+async def get_available_phone_numbers(account_sid: str, credentials: TwilioCredentialTest):
     """Get available phone numbers from Twilio account."""
     try:
         # Verify credentials first
         test_result = await twilio_integration_service.test_credentials(credentials)
-        
+
         if not test_result.success:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=test_result.message
-            )
-        
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=test_result.message)
+
         # Get phone numbers
         phone_numbers = await twilio_integration_service.get_available_phone_numbers(
-            credentials.account_sid,
-            credentials.auth_token
+            credentials.account_sid, credentials.auth_token
         )
-        
-        return {
-            "phone_numbers": phone_numbers,
-            "total": len(phone_numbers)
-        }
-        
+
+        return {"phone_numbers": phone_numbers, "total": len(phone_numbers)}
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get phone numbers: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get phone numbers: {str(e)}")
+
 
 @router.post("/validate-webhook")
 async def validate_webhook_url(webhook_data: Dict[str, str]):
     """Validate webhook URL format and accessibility."""
     try:
         webhook_url = webhook_data.get("webhook_url")
-        
+
         if not webhook_url:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Webhook URL is required"
-            )
-        
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Webhook URL is required")
+
         is_valid = await twilio_integration_service.validate_webhook_url(webhook_url)
-        
+
         return {
             "webhook_url": webhook_url,
             "is_valid": is_valid,
-            "message": "Webhook URL is valid" if is_valid else "Webhook URL is invalid or not accessible"
+            "message": "Webhook URL is valid" if is_valid else "Webhook URL is invalid or not accessible",
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to validate webhook: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to validate webhook: {str(e)}")
+
 
 @router.get("/tenant/{tenant_id}/status")
 async def get_integration_status(tenant_id: str):
     """Get the status of Twilio integration for a tenant."""
     try:
         integration = await twilio_integration_service.get_integration(tenant_id)
-        
+
         if not integration:
-            return {
-                "has_integration": False,
-                "status": "not_configured",
-                "message": "No Twilio integration found"
-            }
-        
+            return {"has_integration": False, "status": "not_configured", "message": "No Twilio integration found"}
+
         # Check if integration is active
         is_active = integration.get("status") == "active"
-        
+
         return {
             "has_integration": True,
             "status": integration.get("status"),
             "is_active": is_active,
             "phone_number": integration.get("phone_number"),
             "account_sid": integration.get("account_sid"),
-            "message": "Integration is active" if is_active else "Integration is inactive"
+            "message": "Integration is active" if is_active else "Integration is inactive",
         }
-        
+
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get integration status: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get integration status: {str(e)}"
         )
+
 
 @router.get("/tenant/{tenant_id}/unassigned")
 async def list_unassigned_numbers_for_tenant(tenant_id: str):
@@ -244,8 +197,7 @@ async def list_unassigned_numbers_for_tenant(tenant_id: str):
         integration = await twilio_integration_service.get_integration(tenant_id)
         if not integration:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Twilio integration not configured for this tenant"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Twilio integration not configured for this tenant"
             )
 
         numbers = await twilio_integration_service.get_unassigned_numbers_for_tenant(
@@ -258,9 +210,9 @@ async def list_unassigned_numbers_for_tenant(tenant_id: str):
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list unassigned numbers: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list unassigned numbers: {str(e)}"
         )
+
 
 @router.get("/system/unassigned")
 async def list_unassigned_numbers_from_system(tenant_id: str):
@@ -287,13 +239,15 @@ async def list_unassigned_numbers_from_system(tenant_id: str):
     except Exception as e:
         # If Twilio auth fails, surface a 401-style error to user
         if "Authenticate" in str(e) or "401" in str(e):
-            raise HTTPException(status_code=401, detail="Twilio authentication failed. Check TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN.")
+            raise HTTPException(
+                status_code=401, detail="Twilio authentication failed. Check TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN."
+            )
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list system numbers: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list system numbers: {str(e)}"
         )
+
 
 @router.post("/search-available")
 async def search_available_numbers(payload: Dict[str, Any]):
@@ -329,11 +283,7 @@ async def search_available_numbers(payload: Dict[str, Any]):
             auth_token = config.TWILIO_AUTH_TOKEN
 
         results = await twilio_integration_service.search_available_numbers(
-            account_sid=account_sid,
-            auth_token=auth_token,
-            country=country,
-            number_type=number_type,
-            area_code=area_code
+            account_sid=account_sid, auth_token=auth_token, country=country, number_type=number_type, area_code=area_code
         )
         return {"available_numbers": results, "total": len(results)}
     except Exception as e:
@@ -342,6 +292,7 @@ async def search_available_numbers(payload: Dict[str, Any]):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to search numbers: {str(e)}")
+
 
 @router.post("/tenant/{tenant_id}/purchase")
 async def purchase_number_for_tenant(tenant_id: str, payload: Dict[str, Any]):
@@ -364,7 +315,7 @@ async def purchase_number_for_tenant(tenant_id: str, payload: Dict[str, Any]):
             tenant_id=tenant_id,
             phone_number=phone_number,
             webhook_url=payload.get("webhook_url"),
-            status_callback_url=payload.get("status_callback_url")
+            status_callback_url=payload.get("status_callback_url"),
         )
 
         if not created:
@@ -374,6 +325,7 @@ async def purchase_number_for_tenant(tenant_id: str, payload: Dict[str, Any]):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to purchase number: {str(e)}")
+
 
 @router.post("/system/purchase")
 async def purchase_number_from_system(payload: Dict[str, Any]):
@@ -397,7 +349,7 @@ async def purchase_number_from_system(payload: Dict[str, Any]):
             phone_number=phone_number,
             webhook_url=payload.get("webhook_url"),
             status_callback_url=payload.get("status_callback_url"),
-            is_system_purchase=True  # System purchases don't require tenant integration
+            is_system_purchase=True,  # System purchases don't require tenant integration
         )
 
         if not created:

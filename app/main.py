@@ -1,6 +1,7 @@
 """
 Main FastAPI application.
 """
+
 import os
 import logging
 from contextlib import asynccontextmanager
@@ -19,15 +20,16 @@ from app.api.v1.api import api_router
 from app.core.env_validator import validate_environment_variables, print_environment_summary
 from app.core.middleware import TrailingSlashMiddleware
 from app.core.exceptions import (
-    AppException, ValidationError, NotFoundError, AuthenticationError,
-    AuthorizationError, ExternalServiceError
+    AppException,
+    ValidationError,
+    NotFoundError,
+    AuthenticationError,
+    AuthorizationError,
+    ExternalServiceError,
 )
 
 # Configure logging
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL.upper()),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=getattr(logging, LOG_LEVEL.upper()), format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Validate environment variables at import time
@@ -35,13 +37,16 @@ validate_environment_variables(strict=True)
 
 # Suppress bcrypt version warning
 import warnings
+
 warnings.filterwarnings("ignore", category=UserWarning, module="passlib.handlers.bcrypt")
 warnings.filterwarnings("ignore", message=".*bcrypt.*")
 
 # Suppress passlib bcrypt logging warnings
 import logging
+
 logging.getLogger("passlib.handlers.bcrypt").setLevel(logging.ERROR)
 logging.getLogger("passlib").setLevel(logging.ERROR)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,24 +54,26 @@ async def lifespan(app: FastAPI):
     logger.info("Starting AI Phone Scheduler API server...")
     logger.info(f"Environment: {ENVIRONMENT}")
     logger.info(f"Debug mode: {DEBUG}")
-    
+
     # Print environment configuration summary
     print_environment_summary()
-    
+
     # Startup
     # Warm up Firebase connection to prevent slow first queries
     try:
         from app.services.firebase_health import firebase_health
+
         logger.info("Warming up Firebase connection...")
         await firebase_health.warm_up_connection()
         logger.info("✅ Firebase connection ready")
     except Exception as e:
         logger.warning(f"Firebase warmup skipped: {e}")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down AI Phone Scheduler API server...")
+
 
 # Create FastAPI app
 # CRITICAL: redirect_slashes=False prevents FastAPI from automatically redirecting
@@ -114,11 +121,13 @@ if os.path.exists(static_dir):
 # Include API router
 app.include_router(api_router)
 
+
 # Root endpoint
 @app.get("/")
 async def root():
     """Root endpoint."""
     return {"message": "AI Phone Scheduler API", "version": "1.0.0"}
+
 
 # Handle Starlette HTTPException (including 404 Not Found)
 # FastAPI's 404 errors are raised as StarletteHTTPException
@@ -130,8 +139,8 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         content={
             "error": "NOT_FOUND" if exc.status_code == 404 else "HTTP_EXCEPTION",
             "message": exc.detail if isinstance(exc.detail, str) else f"HTTP {exc.status_code} error",
-            "details": {}
-        }
+            "details": {},
+        },
     )
     # CORS middleware should add headers automatically, but ensure they're present
     response.headers["Access-Control-Allow-Origin"] = "*"
@@ -139,44 +148,39 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
+
 # Custom exception handlers
 # NOTE: CORS middleware should handle headers, but we ensure they're set here too
 @app.exception_handler(ValidationError)
 async def validation_error_handler(request: Request, exc: ValidationError):
     """Handle validation errors."""
     logger.warning(f"Validation error: {exc.message}", extra={"details": exc.details})
-    response = JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content=exc.to_dict()
-    )
+    response = JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content=exc.to_dict())
     # CORS headers should be added by middleware, but ensure they're present
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
+
 @app.exception_handler(NotFoundError)
 async def not_found_error_handler(request: Request, exc: NotFoundError):
     """Handle not found errors."""
     logger.warning(f"Resource not found: {exc.message}", extra={"details": exc.details})
-    response = JSONResponse(
-        status_code=status.HTTP_404_NOT_FOUND,
-        content=exc.to_dict()
-    )
+    response = JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content=exc.to_dict())
     # Ensure CORS headers are present for 404 responses
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
+
 @app.exception_handler(AuthenticationError)
 async def authentication_error_handler(request: Request, exc: AuthenticationError):
     """Handle authentication errors."""
     logger.warning(f"Authentication failed: {exc.message}")
     response = JSONResponse(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        content=exc.to_dict(),
-        headers={"WWW-Authenticate": "Bearer"}
+        status_code=status.HTTP_401_UNAUTHORIZED, content=exc.to_dict(), headers={"WWW-Authenticate": "Bearer"}
     )
     # Ensure CORS headers are present
     response.headers["Access-Control-Allow-Origin"] = "*"
@@ -184,44 +188,39 @@ async def authentication_error_handler(request: Request, exc: AuthenticationErro
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
+
 @app.exception_handler(AuthorizationError)
 async def authorization_error_handler(request: Request, exc: AuthorizationError):
     """Handle authorization errors."""
     logger.warning(f"Authorization failed: {exc.message}")
-    response = JSONResponse(
-        status_code=status.HTTP_403_FORBIDDEN,
-        content=exc.to_dict()
-    )
+    response = JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content=exc.to_dict())
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
+
 
 @app.exception_handler(ExternalServiceError)
 async def external_service_error_handler(request: Request, exc: ExternalServiceError):
     """Handle external service errors."""
     logger.error(f"External service error: {exc.message}", extra={"details": exc.details})
-    response = JSONResponse(
-        status_code=status.HTTP_502_BAD_GATEWAY,
-        content=exc.to_dict()
-    )
+    response = JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content=exc.to_dict())
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
+
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):
     """Handle generic application exceptions."""
     logger.error(f"Application error: {exc.message}", extra={"details": exc.details})
-    response = JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content=exc.to_dict()
-    )
+    response = JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=exc.to_dict())
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
+
 
 # Global exception handler for uncaught exceptions
 @app.exception_handler(Exception)
@@ -233,8 +232,8 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={
             "error": "INTERNAL_SERVER_ERROR",
             "message": "An unexpected error occurred" if not DEBUG else str(exc),
-            "details": {}
-        }
+            "details": {},
+        },
     )
     # CRITICAL: Ensure CORS headers are always present, even for unexpected errors
     response.headers["Access-Control-Allow-Origin"] = "*"
@@ -242,12 +241,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
+
 if __name__ == "__main__":
-    uvicorn.run(
-        "app.main:app",
-        host=API_HOST,
-        port=API_PORT,
-        reload=DEBUG,
-        log_level=LOG_LEVEL.lower(),
-        proxy_headers=True
-    )
+    uvicorn.run("app.main:app", host=API_HOST, port=API_PORT, reload=DEBUG, log_level=LOG_LEVEL.lower(), proxy_headers=True)

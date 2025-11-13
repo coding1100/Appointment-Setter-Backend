@@ -1,6 +1,7 @@
 """
 Tests for encryption service.
 """
+
 import pytest
 from app.core.encryption import encryption_service
 
@@ -8,12 +9,12 @@ from app.core.encryption import encryption_service
 def test_encrypt_decrypt_string():
     """Test encrypting and decrypting a string."""
     plaintext = "sensitive_data_123"
-    
+
     # Encrypt
     ciphertext = encryption_service.encrypt(plaintext)
     assert ciphertext != plaintext
     assert len(ciphertext) > 0
-    
+
     # Decrypt
     decrypted = encryption_service.decrypt(ciphertext)
     assert decrypted == plaintext
@@ -39,20 +40,13 @@ def test_decrypt_invalid_data():
 
 def test_encrypt_dict_fields():
     """Test encrypting specific fields in a dictionary."""
-    data = {
-        "public_field": "public_data",
-        "secret_field": "secret_data",
-        "another_secret": "more_secrets"
-    }
-    
-    encrypted = encryption_service.encrypt_dict_fields(
-        data,
-        ["secret_field", "another_secret"]
-    )
-    
+    data = {"public_field": "public_data", "secret_field": "secret_data", "another_secret": "more_secrets"}
+
+    encrypted = encryption_service.encrypt_dict_fields(data, ["secret_field", "another_secret"])
+
     # Public field should remain unchanged
     assert encrypted["public_field"] == "public_data"
-    
+
     # Secret fields should be encrypted
     assert encrypted["secret_field"] != "secret_data"
     assert encrypted["another_secret"] != "more_secrets"
@@ -61,16 +55,12 @@ def test_encrypt_dict_fields():
 def test_decrypt_dict_fields():
     """Test decrypting specific fields in a dictionary."""
     # First encrypt
-    data = {
-        "public_field": "public_data",
-        "secret_field": "secret_data"
-    }
-    
+    data = {"public_field": "public_data", "secret_field": "secret_data"}
+
     encrypted = encryption_service.encrypt_dict_fields(data, ["secret_field"])
-    
+
     # Then decrypt
     decrypted = encryption_service.decrypt_dict_fields(encrypted, ["secret_field"])
-    
+
     assert decrypted["secret_field"] == "secret_data"
     assert decrypted["public_field"] == "public_data"
-
