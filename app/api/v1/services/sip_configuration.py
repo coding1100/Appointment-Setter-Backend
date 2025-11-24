@@ -181,7 +181,9 @@ class SIPConfigurationService:
                         # Try to list trunks and find the one for this phone number
                         if hasattr(sip_service, "list_sip_inbound_trunk"):
                             # LiveKit API requires a request object
-                            existing_trunks_response = await sip_service.list_sip_inbound_trunk(api.ListSIPInboundTrunkRequest())
+                            existing_trunks_response = await sip_service.list_sip_inbound_trunk(
+                                api.ListSIPInboundTrunkRequest()
+                            )
                             # Response may have 'items' attribute or be a list directly
                             if hasattr(existing_trunks_response, "items"):
                                 existing_trunks = existing_trunks_response.items
