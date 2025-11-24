@@ -50,12 +50,16 @@ if __name__ == "__main__":
         print("Worker will function normally despite IPC warnings.\n")
     
     try:
-        # According to LiveKit documentation, pass only entrypoint
-        # CLI framework will automatically:
-        # - Parse command-line arguments (start, dev, connect, etc.)
-        # - Read configuration from environment variables (LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-        # - Handle worker lifecycle
-        agents.cli.run_app(entrypoint)
+        # Use WorkerOptions with explicit configuration
+        # This approach works without CLI commands (no "start" needed)
+        agents.cli.run_app(
+            agents.WorkerOptions(
+                entrypoint_fnc=entrypoint,
+                api_key=LIVEKIT_API_KEY,
+                api_secret=LIVEKIT_API_SECRET,
+                ws_url=LIVEKIT_URL,
+            )
+        )
     except KeyboardInterrupt:
         print("\n\n✓ Worker stopped by user")
         sys.exit(0)
