@@ -63,11 +63,11 @@ class SIPConfigurationService:
         """
         try:
             livekit_api = self._get_livekit_api()
-            
+
             # Normalize phone number for consistent trunk naming and matching
             normalized_phone = normalize_phone_number(phone_number)
             logger.info(f"Normalized phone number for SIP trunk: {phone_number} -> {normalized_phone}")
-            
+
             # Use phone-number-specific trunk name to avoid conflicts
             phone_clean = normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
             trunk_name = f"trunk-{phone_clean}"
@@ -375,8 +375,7 @@ class SIPConfigurationService:
 
             phone_number_resource = incoming_numbers[0]
             logger.info(
-                f"Found Twilio phone number: SID={phone_number_resource.sid}, "
-                f"Number={phone_number_resource.phone_number}"
+                f"Found Twilio phone number: SID={phone_number_resource.sid}, " f"Number={phone_number_resource.phone_number}"
             )
 
             # Build webhook URLs
@@ -449,7 +448,9 @@ class SIPConfigurationService:
                 # Trunk might already exist
                 # Use phone-number-based trunk name as fallback
                 normalized_phone = normalize_phone_number_safe(phone_number) or phone_number
-                phone_clean = normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+                phone_clean = (
+                    normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+                )
                 trunk_id = f"trunk-{phone_clean}"
                 logger.warning(
                     f"Could not verify/create SIP trunk (may already exist): {trunk_error}. "
@@ -474,9 +475,11 @@ class SIPConfigurationService:
             # Use phone-number-based trunk ID as fallback if trunk_id not set
             if not trunk_id:
                 normalized_phone = normalize_phone_number_safe(phone_number) or phone_number
-                phone_clean = normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+                phone_clean = (
+                    normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+                )
                 trunk_id = f"trunk-{phone_clean}"
-            
+
             return {
                 "trunk_id": trunk_id,
                 "dispatch_rule_id": dispatch_rule_id,

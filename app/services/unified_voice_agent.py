@@ -491,8 +491,7 @@ class UnifiedVoiceAgentService:
                 agent_id = phone_record.get("agent_id")
                 if not agent_id:
                     logger.error(
-                        f"Phone number {normalized_to_number} has no agent_id assigned. "
-                        f"Phone record: {phone_record}"
+                        f"Phone number {normalized_to_number} has no agent_id assigned. " f"Phone record: {phone_record}"
                     )
                     response = VoiceResponse()
                     response.say("This number is not assigned to an agent. Please contact support.")
@@ -501,10 +500,7 @@ class UnifiedVoiceAgentService:
 
                 tenant_id = phone_record.get("tenant_id")
                 if not tenant_id:
-                    logger.error(
-                        f"Phone number {normalized_to_number} has no tenant_id. "
-                        f"Phone record: {phone_record}"
-                    )
+                    logger.error(f"Phone number {normalized_to_number} has no tenant_id. " f"Phone record: {phone_record}")
                     response = VoiceResponse()
                     response.say("Configuration error. Please contact support.")
                     response.hangup()
