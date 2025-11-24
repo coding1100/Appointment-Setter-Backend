@@ -118,6 +118,10 @@ jobs:
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           # Optional variables (can be empty for tests)
+          LIVEKIT_SIP_DOMAIN: ${{ secrets.LIVEKIT_SIP_DOMAIN }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_WEBHOOK_BASE_URL: ${{ secrets.TWILIO_WEBHOOK_BASE_URL }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
           ELEVEN_API_KEY: ${{ secrets.ELEVEN_API_KEY }}
