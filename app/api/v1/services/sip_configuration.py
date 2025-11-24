@@ -96,7 +96,15 @@ class SIPConfigurationService:
             # Check if trunk already exists by listing
             try:
                 if hasattr(sip_service, "list_sip_inbound_trunk"):
-                    existing_trunks = await sip_service.list_sip_inbound_trunk()
+                    # LiveKit API requires a request object
+                    existing_trunks_response = await sip_service.list_sip_inbound_trunk(api.ListSIPInboundTrunkRequest())
+                    # Response may have 'items' attribute or be a list directly
+                    if hasattr(existing_trunks_response, "items"):
+                        existing_trunks = existing_trunks_response.items
+                    elif isinstance(existing_trunks_response, list):
+                        existing_trunks = existing_trunks_response
+                    else:
+                        existing_trunks = []
                     for trunk in existing_trunks:
                         trunk_id_attr = (
                             getattr(trunk, "inbound_trunk_id", None)
@@ -172,7 +180,15 @@ class SIPConfigurationService:
                     try:
                         # Try to list trunks and find the one for this phone number
                         if hasattr(sip_service, "list_sip_inbound_trunk"):
-                            existing_trunks = await sip_service.list_sip_inbound_trunk()
+                            # LiveKit API requires a request object
+                            existing_trunks_response = await sip_service.list_sip_inbound_trunk(api.ListSIPInboundTrunkRequest())
+                            # Response may have 'items' attribute or be a list directly
+                            if hasattr(existing_trunks_response, "items"):
+                                existing_trunks = existing_trunks_response.items
+                            elif isinstance(existing_trunks_response, list):
+                                existing_trunks = existing_trunks_response
+                            else:
+                                existing_trunks = []
                             for trunk in existing_trunks:
                                 trunk_id_attr = (
                                     getattr(trunk, "inbound_trunk_id", None)
@@ -308,10 +324,18 @@ class SIPConfigurationService:
                 logger.info(f"Created dispatch rule for phone {phone_number}: {rule_id_result}")
                 return rule_id_result
             except Exception as create_error:
-                # If rule already exists, that's fine - use the rule_id
+                # If rule already exists or conflicts, that's fine - use the rule_id
                 error_str = str(create_error).lower()
-                if "already exists" in error_str or "duplicate" in error_str or "409" in error_str:
-                    logger.info(f"Dispatch rule already exists for phone {phone_number}, using existing: {rule_id}")
+                if (
+                    "already exists" in error_str
+                    or "duplicate" in error_str
+                    or "conflicting" in error_str
+                    or "409" in error_str
+                ):
+                    logger.info(
+                        f"Dispatch rule already exists or conflicts for phone {phone_number}: {rule_id}. "
+                        f"This is expected if the rule was created previously. Using existing rule."
+                    )
                     return rule_id
                 else:
                     # For other errors, log and skip (non-critical)
@@ -512,7 +536,10 @@ class SIPConfigurationService:
 
                     # Delete dispatch rule (if API method exists)
                     if hasattr(livekit_api.sip, "delete_sip_dispatch_rule"):
-                        await livekit_api.sip.delete_sip_dispatch_rule(trunk_id=trunk_id, rule_id=dispatch_rule_id)
+                        # LiveKit API requires a request object with rule_id only (not trunk_id)
+                        await livekit_api.sip.delete_sip_dispatch_rule(
+                            api.DeleteSIPDispatchRuleRequest(dispatch_rule_id=dispatch_rule_id)
+                        )
                         logger.info(f"Deleted dispatch rule {dispatch_rule_id} for phone {phone_number}")
                     else:
                         logger.warning(f"delete_sip_dispatch_rule method not available in LiveKit SDK")
