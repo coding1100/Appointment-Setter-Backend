@@ -16,7 +16,6 @@ from app.core.config import (
     LIVEKIT_API_SECRET,
     LIVEKIT_SIP_DOMAIN,
     LIVEKIT_URL,
-    TWILIO_WEBHOOK_BASE_URL,
 )
 from app.core.encryption import encryption_service
 from app.services.firebase import firebase_service
@@ -365,13 +364,6 @@ class SIPConfigurationService:
         Returns phone number resource info.
         """
         try:
-            # Validate TWILIO_WEBHOOK_BASE_URL is set
-            if not TWILIO_WEBHOOK_BASE_URL or not TWILIO_WEBHOOK_BASE_URL.strip():
-                raise ValueError(
-                    "TWILIO_WEBHOOK_BASE_URL is not configured. "
-                    "Please set this environment variable to your backend base URL (e.g., https://app-setter.digitalmarketingservicesnewyork.com)"
-                )
-
             # Get Twilio integration with decrypted auth_token
             twilio_integration = await self._get_decrypted_twilio_integration(tenant_id)
             if not twilio_integration:
@@ -404,8 +396,8 @@ class SIPConfigurationService:
                 f"Found Twilio phone number: SID={phone_number_resource.sid}, " f"Number={phone_number_resource.phone_number}"
             )
 
-            # Build webhook URLs
-            base_url = TWILIO_WEBHOOK_BASE_URL.strip().rstrip("/")
+            # Build webhook URLs - hardcoded base URL
+            base_url = "https://app-setter.digitalmarketingservicesnewyork.com"
             webhook_url = f"{base_url}/api/v1/voice-agent/twilio/webhook"
             status_callback_url = f"{base_url}/api/v1/voice-agent/twilio/status"
 
