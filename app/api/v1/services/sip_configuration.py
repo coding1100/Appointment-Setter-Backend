@@ -35,7 +35,9 @@ class SIPConfigurationService:
     def _get_livekit_api(self) -> api.LiveKitAPI:
         """Get LiveKit API client instance."""
         if not LIVEKIT_URL or not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
-            raise ValueError("LiveKit configuration is missing. Please set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET.")
+            raise ValueError(
+                "LiveKit configuration is missing. Please set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET."
+            )
         return api.LiveKitAPI(url=LIVEKIT_URL, api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
 
     async def _get_decrypted_twilio_integration(self, tenant_id: str) -> Optional[Dict[str, Any]]:
@@ -52,10 +54,10 @@ class SIPConfigurationService:
     async def _get_or_create_sip_trunk(self, tenant_id: str, phone_number: str) -> str:
         """
         Get existing SIP trunk or create new one for phone number.
-        
+
         Per documentation: https://docs.livekit.io/sip/trunk-inbound/
         We use phone-number-specific trunks (numbers=[phone_number]) to avoid conflicts.
-        
+
         Returns trunk_id.
         """
         try:
@@ -70,10 +72,12 @@ class SIPConfigurationService:
 
             # Try to create SIP trunk - check what methods are actually available
             sip_service = livekit_api.sip
-            available_methods = [m for m in dir(sip_service) if not m.startswith("_") and callable(getattr(sip_service, m, None))]
-            
+            available_methods = [
+                m for m in dir(sip_service) if not m.startswith("_") and callable(getattr(sip_service, m, None))
+            ]
+
             logger.debug(f"Available SIP service methods: {available_methods}")
-            
+
             # Use the correct method name: create_sip_inbound_trunk (as shown in available methods)
             # Official Documentation: https://docs.livekit.io/sip/api/#createsipinboundtrunk
             if not hasattr(sip_service, "create_sip_inbound_trunk"):
@@ -88,16 +92,20 @@ class SIPConfigurationService:
                 if hasattr(sip_service, "list_sip_inbound_trunk"):
                     existing_trunks = await sip_service.list_sip_inbound_trunk()
                     for trunk in existing_trunks:
-                        trunk_id_attr = getattr(trunk, "inbound_trunk_id", None) or getattr(trunk, "trunk_id", None) or getattr(trunk, "id", None)
+                        trunk_id_attr = (
+                            getattr(trunk, "inbound_trunk_id", None)
+                            or getattr(trunk, "trunk_id", None)
+                            or getattr(trunk, "id", None)
+                        )
                         trunk_numbers = getattr(trunk, "numbers", [])
-                        
+
                         # Check if this trunk is for the same phone number
                         if phone_number in trunk_numbers:
                             logger.info(f"Found existing SIP inbound trunk for phone {phone_number}: {trunk_id_attr}")
                             return trunk_id_attr or trunk_name
             except Exception as list_error:
                 logger.debug(f"Could not list existing trunks (may not be supported): {list_error}")
-            
+
             # Create SIP inbound trunk using correct API
             # Official Documentation: https://docs.livekit.io/sip/trunk-inbound/
             # Python example: https://docs.livekit.io/sip/trunk-inbound/#inbound-trunk-example
@@ -123,7 +131,7 @@ class SIPConfigurationService:
                         )
                     )
                 )
-                
+
                 # Extract trunk ID from response
                 if hasattr(inbound_trunk_info, "inbound_trunk_id"):
                     sip_trunk_id = inbound_trunk_info.inbound_trunk_id
@@ -136,18 +144,18 @@ class SIPConfigurationService:
                 else:
                     # If we can't extract ID, use a generated one based on tenant
                     sip_trunk_id = trunk_name
-                
+
                 logger.info(f"Created SIP inbound trunk for tenant {tenant_id}: {sip_trunk_id}")
                 return sip_trunk_id
             except Exception as create_error:
                 error_str = str(create_error)
                 error_str_lower = error_str.lower()
-                
+
                 # Handle "already exists" or "duplicate" errors
                 if "already exists" in error_str_lower or "duplicate" in error_str_lower or "409" in error_str_lower:
                     logger.info(f"SIP trunk already exists for tenant {tenant_id}, using existing: {trunk_name}")
                     return trunk_name
-                
+
                 # Handle trunk conflict - should not happen with phone-number-specific trunks
                 # But if it does, try to find existing trunk for this phone number
                 if "conflicting" in error_str_lower and "trunk" in error_str_lower:
@@ -160,17 +168,20 @@ class SIPConfigurationService:
                         if hasattr(sip_service, "list_sip_inbound_trunk"):
                             existing_trunks = await sip_service.list_sip_inbound_trunk()
                             for trunk in existing_trunks:
-                                trunk_id_attr = getattr(trunk, "inbound_trunk_id", None) or getattr(trunk, "trunk_id", None) or getattr(trunk, "id", None)
+                                trunk_id_attr = (
+                                    getattr(trunk, "inbound_trunk_id", None)
+                                    or getattr(trunk, "trunk_id", None)
+                                    or getattr(trunk, "id", None)
+                                )
                                 trunk_numbers = getattr(trunk, "numbers", [])
-                                
+
                                 # If this trunk is for the same phone number, use it
                                 if phone_number in trunk_numbers:
                                     logger.info(
-                                        f"Found existing trunk for phone {phone_number}: {trunk_id_attr}. "
-                                        f"Reusing it."
+                                        f"Found existing trunk for phone {phone_number}: {trunk_id_attr}. " f"Reusing it."
                                     )
                                     return trunk_id_attr or trunk_name
-                        
+
                         # If we can't find it, log and use the trunk_name as fallback
                         logger.warning(
                             f"Could not find existing trunk for phone {phone_number}. "
@@ -183,7 +194,7 @@ class SIPConfigurationService:
                             f"Using trunk name as fallback: {trunk_name}"
                         )
                         return trunk_name
-                
+
                 # For other errors, raise them
                 logger.error(f"Failed to create SIP inbound trunk: {create_error}")
                 raise
@@ -202,14 +213,12 @@ class SIPConfigurationService:
                 logger.error(f"Failed to get or create SIP trunk for tenant {tenant_id}: {e}")
                 raise Exception(f"Failed to setup SIP trunk: {str(e)}")
 
-    async def _create_or_update_dispatch_rule(
-        self, tenant_id: str, phone_number: str, trunk_id: str
-    ) -> str:
+    async def _create_or_update_dispatch_rule(self, tenant_id: str, phone_number: str, trunk_id: str) -> str:
         """
         Create or update LiveKit dispatch rule for phone number.
-        
+
         Official Documentation: https://docs.livekit.io/sip/api/#createsipdispatchrule
-        
+
         Returns dispatch_rule_id.
         """
         try:
@@ -239,7 +248,7 @@ class SIPConfigurationService:
                     f"Skipping dispatch rule - TwiML direct routing will be used instead."
                 )
                 return rule_id  # Return the rule_id we would have used
-            
+
             # Check if rule already exists (optional check)
             try:
                 if hasattr(livekit_api.sip, "list_sip_dispatch_rule"):
@@ -248,7 +257,7 @@ class SIPConfigurationService:
                     pass
             except Exception:
                 pass
-            
+
             # Create dispatch rule with correct request structure
             # Official Documentation: https://docs.livekit.io/sip/dispatch-rule/
             # Python example: https://docs.livekit.io/sip/dispatch-rule/#caller-dispatch-rule-individual
@@ -279,7 +288,7 @@ class SIPConfigurationService:
                         ),
                     )
                 )
-                
+
                 # Handle different response structures
                 if hasattr(dispatch_rule, "dispatch_rule_id"):
                     rule_id_result = dispatch_rule.dispatch_rule_id
@@ -289,7 +298,7 @@ class SIPConfigurationService:
                     rule_id_result = dispatch_rule
                 else:
                     rule_id_result = rule_id  # Fallback
-                
+
                 logger.info(f"Created dispatch rule for phone {phone_number}: {rule_id_result}")
                 return rule_id_result
             except Exception as create_error:
@@ -312,14 +321,12 @@ class SIPConfigurationService:
             # Return rule_id as fallback (non-critical - TwiML routing works without dispatch rules)
             return rule_id
 
-    async def _configure_twilio_phone_webhook(
-        self, tenant_id: str, phone_number: str
-    ) -> Dict[str, Any]:
+    async def _configure_twilio_phone_webhook(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
         """
         Configure Twilio phone number webhook URLs.
-        
+
         Official Documentation: https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource#update-an-incomingphonenumber-resource
-        
+
         Returns phone number resource info.
         """
         try:
@@ -375,21 +382,19 @@ class SIPConfigurationService:
             logger.error(f"Failed to configure phone number webhook: {e}")
             raise Exception(f"Phone number webhook configuration failed: {str(e)}")
 
-    async def setup_phone_number_sip(
-        self, tenant_id: str, phone_number: str, agent_id: str
-    ) -> Dict[str, Any]:
+    async def setup_phone_number_sip(self, tenant_id: str, phone_number: str, agent_id: str) -> Dict[str, Any]:
         """
         Setup complete SIP infrastructure for phone number assignment.
-        
+
         This method:
         1. Verifies/creates LiveKit SIP trunk
         2. Creates/updates dispatch rule for phone number
         3. Configures Twilio phone number webhook
-        
+
         Official Documentation:
         - LiveKit: https://docs.livekit.io/sip/api/
         - Twilio: https://www.twilio.com/docs/voice/sip/api
-        
+
         Returns configuration details.
         """
         try:
@@ -445,7 +450,7 @@ class SIPConfigurationService:
     ) -> bool:
         """
         Cleanup SIP configuration when phone number is unassigned.
-        
+
         Optionally removes dispatch rule. Trunk is phone-number-specific so can be kept or deleted.
         """
         try:
@@ -453,9 +458,11 @@ class SIPConfigurationService:
                 try:
                     livekit_api = self._get_livekit_api()
                     # Use phone-number-based trunk ID
-                    phone_clean = phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+                    phone_clean = (
+                        phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+                    )
                     trunk_id = f"trunk-{phone_clean}"
-                    
+
                     # Delete dispatch rule (if API method exists)
                     if hasattr(livekit_api.sip, "delete_sip_dispatch_rule"):
                         await livekit_api.sip.delete_sip_dispatch_rule(trunk_id=trunk_id, rule_id=dispatch_rule_id)
@@ -475,4 +482,3 @@ class SIPConfigurationService:
 
 # Global SIP configuration service instance
 sip_configuration_service = SIPConfigurationService()
-
