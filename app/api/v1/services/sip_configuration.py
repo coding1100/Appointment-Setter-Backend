@@ -20,6 +20,7 @@ from app.core.config import (
 )
 from app.core.encryption import encryption_service
 from app.services.firebase import firebase_service
+from app.utils.phone_number import normalize_phone_number, normalize_phone_number_safe
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -62,8 +63,13 @@ class SIPConfigurationService:
         """
         try:
             livekit_api = self._get_livekit_api()
+            
+            # Normalize phone number for consistent trunk naming and matching
+            normalized_phone = normalize_phone_number(phone_number)
+            logger.info(f"Normalized phone number for SIP trunk: {phone_number} -> {normalized_phone}")
+            
             # Use phone-number-specific trunk name to avoid conflicts
-            phone_clean = phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+            phone_clean = normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
             trunk_name = f"trunk-{phone_clean}"
 
             # Get tenant info for naming
@@ -99,9 +105,9 @@ class SIPConfigurationService:
                         )
                         trunk_numbers = getattr(trunk, "numbers", [])
 
-                        # Check if this trunk is for the same phone number
-                        if phone_number in trunk_numbers:
-                            logger.info(f"Found existing SIP inbound trunk for phone {phone_number}: {trunk_id_attr}")
+                        # Check if this trunk is for the same phone number (try both normalized and original)
+                        if normalized_phone in trunk_numbers or phone_number in trunk_numbers:
+                            logger.info(f"Found existing SIP inbound trunk for phone {normalized_phone}: {trunk_id_attr}")
                             return trunk_id_attr or trunk_name
             except Exception as list_error:
                 logger.debug(f"Could not list existing trunks (may not be supported): {list_error}")
@@ -120,14 +126,14 @@ class SIPConfigurationService:
                     api.CreateSIPInboundTrunkRequest(
                         trunk=api.SIPInboundTrunkInfo(
                             # Trunk name
-                            name=f"Trunk for {phone_number}",
+                            name=f"Trunk for {normalized_phone}",
                             # Phone-number-specific: accept calls to this specific phone number
                             # This avoids conflicts with other trunks
-                            numbers=[phone_number],  # Field is "numbers", NOT "inbound_numbers"
+                            numbers=[normalized_phone],  # Use normalized format
                             # Accept from any IP (can be restricted to Twilio IPs)
                             allowed_addresses=["0.0.0.0/0"],
                             # Optional metadata
-                            metadata=f"tenant_id={tenant_id},phone_number={phone_number}",
+                            metadata=f"tenant_id={tenant_id},phone_number={normalized_phone}",
                         )
                     )
                 )
@@ -175,16 +181,16 @@ class SIPConfigurationService:
                                 )
                                 trunk_numbers = getattr(trunk, "numbers", [])
 
-                                # If this trunk is for the same phone number, use it
-                                if phone_number in trunk_numbers:
+                                # If this trunk is for the same phone number, use it (try both formats)
+                                if normalized_phone in trunk_numbers or phone_number in trunk_numbers:
                                     logger.info(
-                                        f"Found existing trunk for phone {phone_number}: {trunk_id_attr}. " f"Reusing it."
+                                        f"Found existing trunk for phone {normalized_phone}: {trunk_id_attr}. Reusing it."
                                     )
                                     return trunk_id_attr or trunk_name
 
                         # If we can't find it, log and use the trunk_name as fallback
                         logger.warning(
-                            f"Could not find existing trunk for phone {phone_number}. "
+                            f"Could not find existing trunk for phone {normalized_phone}. "
                             f"Using trunk name as fallback: {trunk_name}"
                         )
                         return trunk_name
@@ -327,9 +333,19 @@ class SIPConfigurationService:
 
         Official Documentation: https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource#update-an-incomingphonenumber-resource
 
+        This method ALWAYS updates the webhook configuration to ensure it's correct.
+        Per Twilio docs, the update() method updates the phone number resource.
+
         Returns phone number resource info.
         """
         try:
+            # Validate TWILIO_WEBHOOK_BASE_URL is set
+            if not TWILIO_WEBHOOK_BASE_URL or not TWILIO_WEBHOOK_BASE_URL.strip():
+                raise ValueError(
+                    "TWILIO_WEBHOOK_BASE_URL is not configured. "
+                    "Please set this environment variable to your backend base URL (e.g., https://app-setter.digitalmarketingservicesnewyork.com)"
+                )
+
             # Get Twilio integration with decrypted auth_token
             twilio_integration = await self._get_decrypted_twilio_integration(tenant_id)
             if not twilio_integration:
@@ -338,48 +354,71 @@ class SIPConfigurationService:
             # Create Twilio client
             twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
 
-            # Find the phone number resource
-            incoming_numbers = twilio_client.incoming_phone_numbers.list(phone_number=phone_number)
+            # Normalize phone number for Twilio API lookup (Twilio expects E.164 format)
+            normalized_phone = normalize_phone_number(phone_number)
+            logger.info(f"Normalized phone number for Twilio lookup: {phone_number} -> {normalized_phone}")
+
+            # Find the phone number resource in Twilio
+            # Twilio API expects phone number in E.164 format
+            incoming_numbers = twilio_client.incoming_phone_numbers.list(phone_number=normalized_phone)
 
             if not incoming_numbers:
-                raise ValueError(f"Phone number {phone_number} not found in Twilio account")
+                # Try without normalization in case Twilio has it in different format
+                logger.warning(f"Phone number {normalized_phone} not found, trying original format: {phone_number}")
+                incoming_numbers = twilio_client.incoming_phone_numbers.list(phone_number=phone_number)
+
+            if not incoming_numbers:
+                raise ValueError(
+                    f"Phone number {normalized_phone} not found in Twilio account. "
+                    f"Please ensure the phone number exists in your Twilio account."
+                )
 
             phone_number_resource = incoming_numbers[0]
+            logger.info(
+                f"Found Twilio phone number: SID={phone_number_resource.sid}, "
+                f"Number={phone_number_resource.phone_number}"
+            )
 
-            # Check if webhook is already configured correctly
-            webhook_url = f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/webhook"
-            status_callback_url = f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/status"
+            # Build webhook URLs
+            base_url = TWILIO_WEBHOOK_BASE_URL.strip().rstrip("/")
+            webhook_url = f"{base_url}/api/v1/voice-agent/twilio/webhook"
+            status_callback_url = f"{base_url}/api/v1/voice-agent/twilio/status"
 
-            needs_update = False
-            if phone_number_resource.voice_url != webhook_url:
-                needs_update = True
-            if phone_number_resource.status_callback != status_callback_url:
-                needs_update = True
+            logger.info(f"Configuring webhooks - Voice: {webhook_url}, Status: {status_callback_url}")
 
-            if needs_update:
-                # Configure the phone number to use our webhook
-                phone_number_resource.update(
-                    voice_url=webhook_url,
-                    voice_method="POST",
-                    status_callback=status_callback_url,
-                    status_callback_method="POST",
-                )
-                logger.info(f"Configured webhook for phone number {phone_number}")
-            else:
-                logger.info(f"Phone number {phone_number} webhook already configured correctly")
+            # ALWAYS update webhook configuration to ensure it's correct
+            # Per Twilio documentation: https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource#update-an-incomingphonenumber-resource
+            phone_number_resource.update(
+                voice_url=webhook_url,
+                voice_method="POST",
+                status_callback=status_callback_url,
+                status_callback_method="POST",
+            )
+
+            logger.info(f"✓ Successfully updated webhook configuration for phone number {normalized_phone}")
+
+            # Note: Twilio's update() method is synchronous and should take effect immediately
+            # We log the returned values to verify they were set correctly
+            logger.info(
+                f"Webhook configuration result: voice_url={phone_number_resource.voice_url}, "
+                f"status_callback={phone_number_resource.status_callback}"
+            )
 
             return {
                 "phone_sid": phone_number_resource.sid,
                 "phone_number": phone_number_resource.phone_number,
-                "voice_url": phone_number_resource.voice_url,
-                "status_callback": phone_number_resource.status_callback,
+                "voice_url": webhook_url,
+                "status_callback": status_callback_url,
             }
 
         except TwilioException as e:
-            logger.error(f"Twilio error configuring phone number {phone_number}: {e}")
+            logger.error(f"Twilio API error configuring phone number {phone_number}: {e}", exc_info=True)
             raise Exception(f"Twilio API error: {str(e)}")
+        except ValueError as e:
+            logger.error(f"Validation error configuring phone number webhook: {e}")
+            raise
         except Exception as e:
-            logger.error(f"Failed to configure phone number webhook: {e}")
+            logger.error(f"Failed to configure phone number webhook: {e}", exc_info=True)
             raise Exception(f"Phone number webhook configuration failed: {str(e)}")
 
     async def setup_phone_number_sip(self, tenant_id: str, phone_number: str, agent_id: str) -> Dict[str, Any]:
@@ -409,7 +448,8 @@ class SIPConfigurationService:
             except Exception as trunk_error:
                 # Trunk might already exist
                 # Use phone-number-based trunk name as fallback
-                phone_clean = phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+                normalized_phone = normalize_phone_number_safe(phone_number) or phone_number
+                phone_clean = normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
                 trunk_id = f"trunk-{phone_clean}"
                 logger.warning(
                     f"Could not verify/create SIP trunk (may already exist): {trunk_error}. "
@@ -431,10 +471,14 @@ class SIPConfigurationService:
             logger.info(f"✓ Twilio webhook configured: {phone_config['phone_sid']}")
 
             # Return configuration summary
-            # Use phone-number-based trunk ID as fallback
-            phone_clean = phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+            # Use phone-number-based trunk ID as fallback if trunk_id not set
+            if not trunk_id:
+                normalized_phone = normalize_phone_number_safe(phone_number) or phone_number
+                phone_clean = normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+                trunk_id = f"trunk-{phone_clean}"
+            
             return {
-                "trunk_id": trunk_id or f"trunk-{phone_clean}",  # Use phone-number-based fallback
+                "trunk_id": trunk_id,
                 "dispatch_rule_id": dispatch_rule_id,
                 "phone_config": phone_config,
                 "sip_domain": LIVEKIT_SIP_DOMAIN,

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from app.api.v1.schemas.phone_number import PhoneNumberCreate, PhoneNumberUpdate
 from app.services.firebase import firebase_service
+from app.utils.phone_number import normalize_phone_number, normalize_phone_number_safe
 
 
 class PhoneNumberService:
@@ -19,10 +20,16 @@ class PhoneNumberService:
 
     async def create_phone_number(self, tenant_id: str, phone_data: PhoneNumberCreate) -> Dict[str, Any]:
         """Create a new phone number assignment."""
-        # Check if phone number is already used
-        existing_phone = await self.get_phone_by_number(phone_data.phone_number)
+        # Normalize phone number to E.164 format for consistent storage
+        normalized_phone = normalize_phone_number(phone_data.phone_number)
+
+        # Check if phone number is already used (try normalized first, then original)
+        existing_phone = await self.get_phone_by_number(normalized_phone)
+        if not existing_phone:
+            existing_phone = await self.get_phone_by_number(phone_data.phone_number)
+
         if existing_phone:
-            raise ValueError(f"Phone number {phone_data.phone_number} is already assigned")
+            raise ValueError(f"Phone number {normalized_phone} is already assigned")
 
         # Verify agent exists and belongs to tenant
         agent = await firebase_service.get_agent(phone_data.agent_id)
@@ -31,15 +38,23 @@ class PhoneNumberService:
         if agent.get("tenant_id") != tenant_id:
             raise ValueError(f"Agent {phone_data.agent_id} does not belong to this tenant")
 
+        # Verify agent has service_type set (required field)
+        if not agent.get("service_type"):
+            raise ValueError(
+                f"Agent {phone_data.agent_id} (name: {agent.get('name')}) has no service_type set. "
+                f"Please configure the agent's service_type before assigning a phone number."
+            )
+
         # Verify twilio integration exists and belongs to tenant
         twilio_integration = await firebase_service.get_twilio_integration(tenant_id)
         if not twilio_integration:
             raise ValueError(f"Twilio integration not found for this tenant")
 
+        # Store normalized phone number
         phone_dict = {
             "id": str(uuid.uuid4()),
             "tenant_id": tenant_id,
-            "phone_number": phone_data.phone_number,
+            "phone_number": normalized_phone,  # Store normalized format
             "agent_id": phone_data.agent_id,
             "twilio_integration_id": phone_data.twilio_integration_id,
             "status": "active",
@@ -54,7 +69,18 @@ class PhoneNumberService:
         return await firebase_service.get_phone_number(phone_id)
 
     async def get_phone_by_number(self, phone_number: str) -> Optional[Dict[str, Any]]:
-        """Get phone number by actual number string."""
+        """
+        Get phone number by actual number string.
+        Tries normalized format first, then original format.
+        """
+        # Try normalized format first (most common)
+        normalized = normalize_phone_number_safe(phone_number)
+        if normalized:
+            phone_record = await firebase_service.get_phone_by_number(normalized)
+            if phone_record:
+                return phone_record
+
+        # Fallback to original format (for backwards compatibility)
         return await firebase_service.get_phone_by_number(phone_number)
 
     async def get_phone_by_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
@@ -83,11 +109,13 @@ class PhoneNumberService:
         update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
 
         if phone_data.phone_number is not None:
+            # Normalize phone number before checking/updating
+            normalized_phone = normalize_phone_number(phone_data.phone_number)
             # Check if new phone number is already used
-            existing_phone = await self.get_phone_by_number(phone_data.phone_number)
+            existing_phone = await self.get_phone_by_number(normalized_phone)
             if existing_phone and existing_phone["id"] != phone_id:
-                raise ValueError(f"Phone number {phone_data.phone_number} is already assigned")
-            update_data["phone_number"] = phone_data.phone_number
+                raise ValueError(f"Phone number {normalized_phone} is already assigned")
+            update_data["phone_number"] = normalized_phone  # Store normalized format
 
         if phone_data.agent_id is not None:
             # Verify agent exists and belongs to same tenant
@@ -96,6 +124,12 @@ class PhoneNumberService:
                 raise ValueError(f"Agent {phone_data.agent_id} not found")
             if agent.get("tenant_id") != phone.get("tenant_id"):
                 raise ValueError(f"Agent {phone_data.agent_id} does not belong to this tenant")
+            # Verify agent has service_type set
+            if not agent.get("service_type"):
+                raise ValueError(
+                    f"Agent {phone_data.agent_id} (name: {agent.get('name')}) has no service_type set. "
+                    f"Please configure the agent's service_type before assigning a phone number."
+                )
             update_data["agent_id"] = phone_data.agent_id
 
         if phone_data.status is not None:
@@ -110,7 +144,14 @@ class PhoneNumberService:
     async def assign_phone_to_agent(
         self, tenant_id: str, agent_id: str, phone_number: str, twilio_integration_id: str
     ) -> Dict[str, Any]:
-        """Assign a phone number to an agent."""
+        """
+        Assign a phone number to an agent.
+        
+        Normalizes phone number to E.164 format before storing.
+        """
+        # Normalize phone number first
+        normalized_phone = normalize_phone_number(phone_number)
+
         # Verify agent exists and belongs to tenant first
         agent = await firebase_service.get_agent(agent_id)
         if not agent:
@@ -118,19 +159,26 @@ class PhoneNumberService:
         if agent.get("tenant_id") != tenant_id:
             raise ValueError(f"Agent {agent_id} does not belong to tenant {tenant_id}")
 
-        # Check if phone number already assigned
-        existing_phone = await self.get_phone_by_number(phone_number)
+        # Verify agent has service_type (required field)
+        if not agent.get("service_type"):
+            raise ValueError(
+                f"Agent {agent_id} (name: {agent.get('name')}) has no service_type set. "
+                f"Please configure the agent's service_type before assigning a phone number."
+            )
+
+        # Check if phone number already assigned (using normalized format)
+        existing_phone = await self.get_phone_by_number(normalized_phone)
         if existing_phone:
             # Verify existing phone belongs to the same tenant
             if existing_phone.get("tenant_id") != tenant_id:
-                raise ValueError(f"Phone number {phone_number} is already assigned to a different tenant")
-            # Update existing assignment
-            phone_data = PhoneNumberUpdate(agent_id=agent_id, phone_number=phone_number)
+                raise ValueError(f"Phone number {normalized_phone} is already assigned to a different tenant")
+            # Update existing assignment with normalized phone number
+            phone_data = PhoneNumberUpdate(agent_id=agent_id, phone_number=normalized_phone)
             return await self.update_phone_number(existing_phone["id"], phone_data)
         else:
-            # Create new assignment
+            # Create new assignment with normalized phone number
             phone_data = PhoneNumberCreate(
-                phone_number=phone_number, agent_id=agent_id, twilio_integration_id=twilio_integration_id
+                phone_number=normalized_phone, agent_id=agent_id, twilio_integration_id=twilio_integration_id
             )
             return await self.create_phone_number(tenant_id, phone_data)
 
