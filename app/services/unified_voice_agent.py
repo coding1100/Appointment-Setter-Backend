@@ -33,6 +33,7 @@ from app.core.config import (
 from app.core.encryption import encryption_service
 from app.services.dialog_manager import dialog_manager
 from app.services.firebase import firebase_service
+from app.utils.phone_number import normalize_phone_number_safe
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -459,32 +460,83 @@ class UnifiedVoiceAgentService:
                 # INBOUND CALL: Lookup agent by phone number
                 logger.info(f"No existing session, treating as INBOUND call to {to_number}")
 
-                # Lookup phone number assignment in database
-                phone_record = await firebase_service.get_phone_by_number(to_number)
+                # Normalize phone number for database lookup
+                # Twilio sends phone numbers in E.164 format, but we need to ensure consistency
+                normalized_to_number = normalize_phone_number_safe(to_number)
+                if not normalized_to_number:
+                    logger.error(f"Invalid phone number format received from Twilio: {to_number}")
+                    response = VoiceResponse()
+                    response.say("Invalid phone number format. Please contact support.")
+                    response.hangup()
+                    return response
+
+                logger.info(f"Normalized phone number for lookup: {to_number} -> {normalized_to_number}")
+
+                # Lookup phone number assignment in database (try both normalized and original)
+                phone_record = await firebase_service.get_phone_by_number(normalized_to_number)
+                if not phone_record:
+                    # Try with original format in case database has it differently
+                    logger.warning(f"Phone number {normalized_to_number} not found, trying original format: {to_number}")
+                    phone_record = await firebase_service.get_phone_by_number(to_number)
 
                 if not phone_record:
-                    logger.error(f"Phone number {to_number} not found in database")
+                    logger.error(f"Phone number {normalized_to_number} (original: {to_number}) not found in database")
                     response = VoiceResponse()
                     response.say("This number is not configured. Please contact support.")
                     response.hangup()
                     return response
 
-                if not phone_record.get("agent_id"):
-                    logger.error(f"Phone number {to_number} has no agent assigned")
+                logger.info(f"✓ Found phone record: ID={phone_record.get('id')}, AgentID={phone_record.get('agent_id')}")
+
+                agent_id = phone_record.get("agent_id")
+                if not agent_id:
+                    logger.error(
+                        f"Phone number {normalized_to_number} has no agent_id assigned. "
+                        f"Phone record: {phone_record}"
+                    )
                     response = VoiceResponse()
                     response.say("This number is not assigned to an agent. Please contact support.")
                     response.hangup()
                     return response
 
-                agent_id = phone_record["agent_id"]
-                tenant_id = phone_record["tenant_id"]
+                tenant_id = phone_record.get("tenant_id")
+                if not tenant_id:
+                    logger.error(
+                        f"Phone number {normalized_to_number} has no tenant_id. "
+                        f"Phone record: {phone_record}"
+                    )
+                    response = VoiceResponse()
+                    response.say("Configuration error. Please contact support.")
+                    response.hangup()
+                    return response
 
                 # Get agent configuration
+                logger.info(f"Looking up agent: agent_id={agent_id}, tenant_id={tenant_id}")
                 agent = await firebase_service.get_agent(agent_id)
                 if not agent:
-                    logger.error(f"Agent {agent_id} not found in database")
+                    logger.error(
+                        f"Agent {agent_id} not found in database. "
+                        f"This is a critical error - agent was assigned but doesn't exist."
+                    )
                     response = VoiceResponse()
                     response.say("Agent configuration not found. Please contact support.")
+                    response.hangup()
+                    return response
+
+                logger.info(
+                    f"✓ Found agent: ID={agent.get('id')}, Name={agent.get('name')}, "
+                    f"ServiceType={agent.get('service_type')}"
+                )
+
+                # Validate agent has required fields - NO FALLBACK
+                service_type = agent.get("service_type")
+                if not service_type:
+                    logger.error(
+                        f"Agent {agent_id} (name: {agent.get('name')}) has no service_type set. "
+                        f"This is a configuration error. Agent data: {agent}"
+                    )
+                    response = VoiceResponse()
+                    response.say("Agent configuration is incomplete. Please contact support.")
                     response.hangup()
                     return response
 
@@ -503,11 +555,16 @@ class UnifiedVoiceAgentService:
                     "tenant_id": tenant_id,
                     "agent_data": agent,
                     "voice_id": agent.get("voice_id"),
-                    "service_type": agent.get("service_type", "Home Services"),
+                    "service_type": service_type,  # Use validated service_type, NO FALLBACK
                     "call_type": "inbound",
                     "caller_number": from_number,
-                    "called_number": to_number,
+                    "called_number": normalized_to_number,
                 }
+
+                logger.info(
+                    f"Agent configuration prepared: "
+                    f"Agent={agent.get('name')}, ServiceType={service_type}, VoiceID={agent.get('voice_id')}"
+                )
 
                 # Create room and store config in Redis
                 # Note: Room must exist and be ready before Twilio can connect via SIP
