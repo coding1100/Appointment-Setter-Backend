@@ -86,7 +86,7 @@ class SIPConfigurationService:
                     f"Available methods: {available_methods}. "
                     f"Please check your LiveKit SDK version."
                 )
-            
+
             # Check if trunk already exists by listing
             try:
                 if hasattr(sip_service, "list_sip_inbound_trunk"):
