@@ -146,7 +146,7 @@ class PhoneNumberService:
     ) -> Dict[str, Any]:
         """
         Assign a phone number to an agent.
-        
+
         Normalizes phone number to E.164 format before storing.
         """
         # Normalize phone number first
