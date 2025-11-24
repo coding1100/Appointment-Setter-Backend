@@ -181,7 +181,9 @@ async def assign_phone_to_agent(tenant_id: str, assignment: AgentPhoneAssignment
             }
             await firebase_service.update_phone_number(phone["id"], update_data)
 
-            logger.info(f"Successfully assigned phone {assignment.phone_number} to agent {assignment.agent_id} with SIP configuration")
+            logger.info(
+                f"Successfully assigned phone {assignment.phone_number} to agent {assignment.agent_id} with SIP configuration"
+            )
 
         except Exception as sip_error:
             # Rollback: Remove phone assignment if SIP setup fails
