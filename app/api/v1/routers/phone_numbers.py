@@ -145,8 +145,8 @@ async def assign_phone_to_agent(tenant_id: str, assignment: AgentPhoneAssignment
     """
     try:
         # Get twilio integration for this tenant
-        from app.services.firebase import firebase_service
         from app.api.v1.services.sip_configuration import sip_configuration_service
+        from app.services.firebase import firebase_service
 
         twilio_integration = await firebase_service.get_twilio_integration(tenant_id)
 
