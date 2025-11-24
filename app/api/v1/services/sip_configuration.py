@@ -538,9 +538,10 @@ class SIPConfigurationService:
 
                     # Delete dispatch rule (if API method exists)
                     if hasattr(livekit_api.sip, "delete_sip_dispatch_rule"):
-                        # LiveKit API requires a request object with rule_id only (not trunk_id)
+                        # LiveKit API requires a request object with rule_id field
+                        # Official Documentation: https://docs.livekit.io/sip/api/#deletesipdispatchrule
                         await livekit_api.sip.delete_sip_dispatch_rule(
-                            api.DeleteSIPDispatchRuleRequest(dispatch_rule_id=dispatch_rule_id)
+                            api.DeleteSIPDispatchRuleRequest(rule_id=dispatch_rule_id)
                         )
                         logger.info(f"Deleted dispatch rule {dispatch_rule_id} for phone {phone_number}")
                     else:
