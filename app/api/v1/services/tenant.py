@@ -196,6 +196,8 @@ class TenantService:
 
         # Invalidate cache on update
         if result:
+            from app.core.cache import invalidate_tenant_cache
+
             await invalidate_tenant_cache(tenant_id)
 
         return result

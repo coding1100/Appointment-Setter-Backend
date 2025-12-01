@@ -2,6 +2,7 @@
 Authentication API routes using Firebase.
 """
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -26,6 +27,7 @@ from app.api.v1.services.auth import auth_service
 from app.core.config import SECRET_KEY
 from app.core.security import SecurityService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
@@ -257,6 +259,8 @@ async def refresh_token(refresh_token: str, request: Request):
 
         # Create new session with new refresh token
         await auth_service.create_user_session(user_id, new_refresh_token)
+
+        from app.core.response_mappers import to_user_response
 
         return TokenResponse(
             access_token=access_token,

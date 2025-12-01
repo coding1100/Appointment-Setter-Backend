@@ -151,6 +151,8 @@ class ServiceTypeCreate(BaseModel):
     @validator("service_type")
     def validate_service_type(cls, v):
         """Validate service type."""
+        from app.core.validators import validate_service_type
+
         return validate_service_type(v)
 
 

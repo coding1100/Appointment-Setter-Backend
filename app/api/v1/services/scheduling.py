@@ -139,6 +139,8 @@ class SchedulingService:
 
         for appointment in existing_appointments:
             if appointment.get("status") in ["scheduled", "confirmed"]:
+                from app.core.response_mappers import parse_iso_timestamp
+
                 appointment_start = parse_iso_timestamp(appointment["appointment_datetime"])
                 if not appointment_start:
                     continue
