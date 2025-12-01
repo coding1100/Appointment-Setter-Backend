@@ -1,12 +1,12 @@
 """
-Dialog Manager with FSM (Finite State Machine) and LLM policy for Home Services using Supabase.
+Dialog Manager with FSM (Finite State Machine) and LLM policy for Home Services using Firebase/Firestore.
 Handles conversation flow, slot filling, and confirmation.
 """
 
 import json
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from app.core.utils import get_current_timestamp
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -96,7 +96,7 @@ class DialogManager:
         """Process user input and return response."""
         # Add user input to conversation history
         context.conversation_history.append(
-            {"role": "user", "message": user_input, "timestamp": datetime.now(timezone.utc).isoformat()}
+            {"role": "user", "message": user_input, "timestamp": get_current_timestamp()}
         )
 
         # Process based on current state
@@ -122,7 +122,7 @@ class DialogManager:
 
         # Add assistant response to history
         context.conversation_history.append(
-            {"role": "assistant", "message": greeting_message, "timestamp": datetime.now(timezone.utc).isoformat()}
+            {"role": "assistant", "message": greeting_message, "timestamp": get_current_timestamp()}
         )
 
         return {"response": greeting_message, "state": context.current_state.value, "next_action": "collect_info"}
@@ -144,7 +144,7 @@ class DialogManager:
             confirmation_message = await self._generate_confirmation_message(context)
 
             context.conversation_history.append(
-                {"role": "assistant", "message": confirmation_message, "timestamp": datetime.now(timezone.utc).isoformat()}
+                {"role": "assistant", "message": confirmation_message, "timestamp": get_current_timestamp()}
             )
 
             return {
@@ -158,7 +158,7 @@ class DialogManager:
             question = await self._generate_question_for_slot(missing_slot)
 
             context.conversation_history.append(
-                {"role": "assistant", "message": question, "timestamp": datetime.now(timezone.utc).isoformat()}
+                {"role": "assistant", "message": question, "timestamp": get_current_timestamp()}
             )
 
             return {"response": question, "state": context.current_state.value, "next_action": "collect_info"}
@@ -172,7 +172,7 @@ class DialogManager:
             booking_message = "Perfect! I'm booking your appointment now. Please hold on..."
 
             context.conversation_history.append(
-                {"role": "assistant", "message": booking_message, "timestamp": datetime.now(timezone.utc).isoformat()}
+                {"role": "assistant", "message": booking_message, "timestamp": get_current_timestamp()}
             )
 
             return {"response": booking_message, "state": context.current_state.value, "next_action": "book_appointment"}
@@ -184,7 +184,7 @@ class DialogManager:
                 escalation_message = "I'm having trouble understanding. Let me transfer you to a human representative."
 
                 context.conversation_history.append(
-                    {"role": "assistant", "message": escalation_message, "timestamp": datetime.now(timezone.utc).isoformat()}
+                    {"role": "assistant", "message": escalation_message, "timestamp": get_current_timestamp()}
                 )
 
                 return {"response": escalation_message, "state": context.current_state.value, "next_action": "escalate"}
@@ -194,7 +194,7 @@ class DialogManager:
                 context.current_state = DialogState.COLLECTING_INFO
 
                 context.conversation_history.append(
-                    {"role": "assistant", "message": change_message, "timestamp": datetime.now(timezone.utc).isoformat()}
+                    {"role": "assistant", "message": change_message, "timestamp": get_current_timestamp()}
                 )
 
                 return {"response": change_message, "state": context.current_state.value, "next_action": "collect_info"}
@@ -203,7 +203,7 @@ class DialogManager:
             clarification_message = "I didn't quite understand. Please say 'yes' to confirm or 'no' to make changes."
 
             context.conversation_history.append(
-                {"role": "assistant", "message": clarification_message, "timestamp": datetime.now(timezone.utc).isoformat()}
+                {"role": "assistant", "message": clarification_message, "timestamp": get_current_timestamp()}
             )
 
             return {
@@ -237,7 +237,7 @@ class DialogManager:
                 context.current_state = DialogState.ENDING
 
                 context.conversation_history.append(
-                    {"role": "assistant", "message": success_message, "timestamp": datetime.now(timezone.utc).isoformat()}
+                    {"role": "assistant", "message": success_message, "timestamp": get_current_timestamp()}
                 )
 
                 return {
@@ -256,7 +256,7 @@ class DialogManager:
             context.current_state = DialogState.ESCALATING
 
             context.conversation_history.append(
-                {"role": "assistant", "message": error_message, "timestamp": datetime.now(timezone.utc).isoformat()}
+                {"role": "assistant", "message": error_message, "timestamp": get_current_timestamp()}
             )
 
             return {"response": error_message, "state": context.current_state.value, "next_action": "escalate"}
@@ -267,7 +267,7 @@ class DialogManager:
         escalation_message = "You're now being transferred to a human representative. Please hold on."
 
         context.conversation_history.append(
-            {"role": "assistant", "message": escalation_message, "timestamp": datetime.now(timezone.utc).isoformat()}
+            {"role": "assistant", "message": escalation_message, "timestamp": get_current_timestamp()}
         )
 
         return {"response": escalation_message, "state": context.current_state.value, "next_action": "escalate"}
@@ -277,7 +277,7 @@ class DialogManager:
         ending_message = "Thank you for calling! Have a great day!"
 
         context.conversation_history.append(
-            {"role": "assistant", "message": ending_message, "timestamp": datetime.now(timezone.utc).isoformat()}
+            {"role": "assistant", "message": ending_message, "timestamp": get_current_timestamp()}
         )
 
         return {"response": ending_message, "state": context.current_state.value, "next_action": "end_call"}

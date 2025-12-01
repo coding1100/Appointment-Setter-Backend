@@ -151,10 +151,7 @@ class ServiceTypeCreate(BaseModel):
     @validator("service_type")
     def validate_service_type(cls, v):
         """Validate service type."""
-        valid_types = ["Home Services", "Plumbing", "Electrician", "Painter", "Carpenter", "Maids"]
-        if v not in valid_types:
-            raise ValueError(f"Service type must be one of: {valid_types}")
-        return v
+        return validate_service_type(v)
 
 
 # Agent Policy schemas

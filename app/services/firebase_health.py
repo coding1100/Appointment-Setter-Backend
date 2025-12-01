@@ -5,7 +5,7 @@ This helps prevent slow queries by pre-warming connections.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from app.core.utils import get_current_timestamp
 from typing import Optional
 
 # Configure logging
@@ -24,14 +24,14 @@ class FirebaseHealth:
         try:
             from app.services.firebase import firebase_service
 
-            # Perform a simple query to warm up the connection
-            # This will trigger credential refresh if needed
-            test_query = firebase_service.db.collection("_health").limit(1)
-            await asyncio.to_thread(lambda: list(test_query.stream()))
-
-            self.connection_pool_warm = True
-            self.last_health_check = datetime.now(timezone.utc)
-            logger.info("✅ Firebase connection warmed up successfully")
+            # Use canonical service's health check method
+            is_healthy = await firebase_service.health_check()
+            if is_healthy:
+                self.connection_pool_warm = True
+                self.last_health_check = get_current_timestamp()
+                logger.info("✅ Firebase connection warmed up successfully")
+            else:
+                logger.warning("Firebase health check returned False during warmup")
         except Exception as e:
             logger.warning(f"Failed to warm up Firebase connection: {e}")
             # Don't fail startup if warmup fails, but log it
@@ -41,11 +41,8 @@ class FirebaseHealth:
         try:
             from app.services.firebase import firebase_service
 
-            # Simple ping query
-            test_query = firebase_service.db.collection("_health").limit(1)
-            await asyncio.to_thread(lambda: list(test_query.stream()))
-
-            return True
+            # Use canonical service's health check method
+            return await firebase_service.health_check()
         except Exception as e:
             logger.error(f"Firebase health check failed: {e}")
             return False

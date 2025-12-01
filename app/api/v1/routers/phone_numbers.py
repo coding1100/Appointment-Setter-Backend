@@ -4,10 +4,11 @@ Phone number management API routes.
 
 import logging
 from datetime import datetime, timezone
-from typing import List
+from typing import Dict, List
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.api.v1.routers.auth import get_current_user_from_token, verify_tenant_access
 from app.api.v1.schemas.phone_number import AgentPhoneAssignment, PhoneNumberCreate, PhoneNumberResponse, PhoneNumberUpdate
 from app.api.v1.services.phone_number import phone_number_service
 
@@ -17,16 +18,20 @@ router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"])
 
 
 @router.post("/tenant/{tenant_id}", response_model=PhoneNumberResponse, status_code=status.HTTP_201_CREATED)
-async def create_phone_number(tenant_id: str, phone_data: PhoneNumberCreate):
+async def create_phone_number(
+    tenant_id: str, phone_data: PhoneNumberCreate, current_user: Dict = Depends(get_current_user_from_token)
+):
     """
     Create a new phone number assignment.
 
     - **tenant_id**: ID of the tenant
     - **phone_data**: Phone number assignment data
     """
+    verify_tenant_access(current_user, tenant_id)
     try:
         phone = await phone_number_service.create_phone_number(tenant_id, phone_data)
-        return PhoneNumberResponse(**phone)
+        from app.core.response_mappers import to_phone_number_response
+        return to_phone_number_response(phone)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -36,15 +41,17 @@ async def create_phone_number(tenant_id: str, phone_data: PhoneNumberCreate):
 
 
 @router.get("/tenant/{tenant_id}", response_model=List[PhoneNumberResponse])
-async def list_phone_numbers(tenant_id: str):
+async def list_phone_numbers(tenant_id: str, current_user: Dict = Depends(get_current_user_from_token)):
     """
     List all phone numbers for a tenant.
 
     - **tenant_id**: ID of the tenant
     """
+    verify_tenant_access(current_user, tenant_id)
     try:
         phones = await phone_number_service.list_phones_by_tenant(tenant_id)
-        return [PhoneNumberResponse(**phone) for phone in phones]
+        from app.core.response_mappers import to_phone_number_response
+        return [to_phone_number_response(phone) for phone in phones]
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list phone numbers: {str(e)}"
@@ -52,7 +59,7 @@ async def list_phone_numbers(tenant_id: str):
 
 
 @router.get("/{phone_id}", response_model=PhoneNumberResponse)
-async def get_phone_number(phone_id: str):
+async def get_phone_number(phone_id: str, current_user: Dict = Depends(get_current_user_from_token)):
     """
     Get phone number by ID.
 
@@ -62,7 +69,9 @@ async def get_phone_number(phone_id: str):
         phone = await phone_number_service.get_phone_number(phone_id)
         if not phone:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Phone number not found")
-        return PhoneNumberResponse(**phone)
+        verify_tenant_access(current_user, phone.get("tenant_id"))
+        from app.core.response_mappers import to_phone_number_response
+        return to_phone_number_response(phone)
     except HTTPException:
         raise
     except Exception as e:
@@ -70,7 +79,7 @@ async def get_phone_number(phone_id: str):
 
 
 @router.get("/agent/{agent_id}", response_model=PhoneNumberResponse)
-async def get_phone_by_agent(agent_id: str):
+async def get_phone_by_agent(agent_id: str, current_user: Dict = Depends(get_current_user_from_token)):
     """
     Get phone number assigned to an agent.
 
@@ -80,7 +89,9 @@ async def get_phone_by_agent(agent_id: str):
         phone = await phone_number_service.get_phone_by_agent(agent_id)
         if not phone:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No phone number assigned to this agent")
-        return PhoneNumberResponse(**phone)
+        verify_tenant_access(current_user, phone.get("tenant_id"))
+        from app.core.response_mappers import to_phone_number_response
+        return to_phone_number_response(phone)
     except HTTPException:
         raise
     except Exception as e:
@@ -90,7 +101,9 @@ async def get_phone_by_agent(agent_id: str):
 
 
 @router.put("/{phone_id}", response_model=PhoneNumberResponse)
-async def update_phone_number(phone_id: str, phone_data: PhoneNumberUpdate):
+async def update_phone_number(
+    phone_id: str, phone_data: PhoneNumberUpdate, current_user: Dict = Depends(get_current_user_from_token)
+):
     """
     Update phone number assignment.
 
@@ -98,10 +111,14 @@ async def update_phone_number(phone_id: str, phone_data: PhoneNumberUpdate):
     - **phone_data**: Updated phone number data
     """
     try:
+        phone = await phone_number_service.get_phone_number(phone_id)
+        if phone:
+            verify_tenant_access(current_user, phone.get("tenant_id"))
         phone = await phone_number_service.update_phone_number(phone_id, phone_data)
         if not phone:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Phone number not found")
-        return PhoneNumberResponse(**phone)
+        from app.core.response_mappers import to_phone_number_response
+        return to_phone_number_response(phone)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
@@ -113,13 +130,16 @@ async def update_phone_number(phone_id: str, phone_data: PhoneNumberUpdate):
 
 
 @router.delete("/{phone_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_phone_number(phone_id: str):
+async def delete_phone_number(phone_id: str, current_user: Dict = Depends(get_current_user_from_token)):
     """
     Delete phone number assignment.
 
     - **phone_id**: ID of the phone number
     """
     try:
+        phone = await phone_number_service.get_phone_number(phone_id)
+        if phone:
+            verify_tenant_access(current_user, phone.get("tenant_id"))
         success = await phone_number_service.delete_phone_number(phone_id)
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Phone number not found")
@@ -133,7 +153,9 @@ async def delete_phone_number(phone_id: str):
 
 
 @router.post("/tenant/{tenant_id}/assign", response_model=PhoneNumberResponse)
-async def assign_phone_to_agent(tenant_id: str, assignment: AgentPhoneAssignment):
+async def assign_phone_to_agent(
+    tenant_id: str, assignment: AgentPhoneAssignment, current_user: Dict = Depends(get_current_user_from_token)
+):
     """
     Assign a phone number to an agent.
 
@@ -143,6 +165,7 @@ async def assign_phone_to_agent(tenant_id: str, assignment: AgentPhoneAssignment
     - **tenant_id**: ID of the tenant
     - **assignment**: Agent and phone number assignment data
     """
+    verify_tenant_access(current_user, tenant_id)
     try:
         # Get twilio integration for this tenant
         from app.api.v1.services.sip_configuration import sip_configuration_service
@@ -198,7 +221,8 @@ async def assign_phone_to_agent(tenant_id: str, assignment: AgentPhoneAssignment
                 detail=f"Failed to configure SIP infrastructure: {str(sip_error)}. Phone assignment was not completed.",
             )
 
-        return PhoneNumberResponse(**phone)
+        from app.core.response_mappers import to_phone_number_response
+        return to_phone_number_response(phone)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
@@ -210,7 +234,7 @@ async def assign_phone_to_agent(tenant_id: str, assignment: AgentPhoneAssignment
 
 
 @router.delete("/agent/{agent_id}/unassign", status_code=status.HTTP_204_NO_CONTENT)
-async def unassign_phone_from_agent(agent_id: str):
+async def unassign_phone_from_agent(agent_id: str, current_user: Dict = Depends(get_current_user_from_token)):
     """
     Remove phone number assignment from an agent.
 
@@ -223,6 +247,7 @@ async def unassign_phone_from_agent(agent_id: str):
         phone = await phone_number_service.get_phone_by_agent(agent_id)
         if not phone:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No phone number assigned to this agent")
+        verify_tenant_access(current_user, phone.get("tenant_id"))
 
         # Delete phone assignment
         success = await phone_number_service.unassign_phone_from_agent(agent_id)

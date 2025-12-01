@@ -2,10 +2,11 @@
 Twilio Integration Service for managing user's Twilio credentials and phone numbers.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 from twilio.base.exceptions import TwilioException
@@ -18,6 +19,14 @@ from app.services.firebase import firebase_service
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+async def _run_twilio_sync(func: Callable) -> Any:
+    """
+    Helper function to run synchronous Twilio operations in a thread pool.
+    Prevents blocking the event loop.
+    """
+    return await asyncio.to_thread(func)
 
 
 class TwilioIntegrationService:
@@ -34,123 +43,127 @@ class TwilioIntegrationService:
         and validated using alternative methods since they cannot access production-only endpoints.
         """
         try:
-            # Create Twilio client with user's credentials
-            client = Client(credentials.account_sid, credentials.auth_token)
-
-            # Try to fetch account information (works for production accounts only)
-            is_test_account = False
-            account_info = None
-
-            try:
-                account = client.api.accounts(credentials.account_sid).fetch()
-                account_info = {
-                    "account_sid": account.sid,
-                    "friendly_name": account.friendly_name,
-                    "status": account.status,
-                    "type": account.type,
-                    "date_created": account.date_created.isoformat() if account.date_created else None,
-                    "phone_number": credentials.phone_number,
-                }
-            except TwilioException as e:
-                # Check if this is a test account error (error code 20008)
-                error_str = str(e)
-                if (
-                    "20008" in error_str
-                    or "Test Account Credentials" in error_str
-                    or "not accessible with Test Account" in error_str
-                ):
-                    is_test_account = True
-                    logger.info(f"Detected Twilio test account credentials for {credentials.account_sid}")
-                    # For test accounts, validate by listing incoming phone numbers instead
-                    try:
-                        incoming_numbers = client.incoming_phone_numbers.list(limit=1)
-                        # If we can list numbers, credentials are valid (test account)
-                        account_info = {
-                            "account_sid": credentials.account_sid,
-                            "friendly_name": "Test Account",
-                            "status": "active",
-                            "type": "test",
-                            "date_created": None,
-                            "phone_number": credentials.phone_number,
-                            "note": "Test account credentials detected - some features may be limited",
-                        }
-                    except TwilioException as test_error:
-                        return TwilioCredentialTestResponse(
-                            success=False,
-                            message=f"Invalid Twilio test account credentials. Error: {str(test_error)}",
-                            phone_number=None,
-                            account_info=None,
-                            is_test_account=True,
-                        )
-                    except Exception as test_error:
-                        return TwilioCredentialTestResponse(
-                            success=False,
-                            message=f"Error validating test account credentials: {str(test_error)}",
-                            phone_number=None,
-                            account_info=None,
-                            is_test_account=True,
-                        )
-                else:
-                    # Not a test account, but other error occurred
-                    return TwilioCredentialTestResponse(
-                        success=False,
-                        message=f"Twilio error: {str(e)}",
-                        phone_number=None,
-                        account_info=None,
-                        is_test_account=False,
-                    )
-
-            # If phone number is provided, verify it exists in the account
-            if credentials.phone_number:
+            # Wrap all Twilio operations in thread pool to avoid blocking event loop
+            def _test_credentials_sync():
+                client = Client(credentials.account_sid, credentials.auth_token)
+                
+                # Try to fetch account information (works for production accounts only)
+                is_test_account = False
+                account_info = None
+                
                 try:
-                    incoming_numbers = client.incoming_phone_numbers.list(limit=50)
-                    phone_number_exists = False
-                    for number in incoming_numbers:
-                        if number.phone_number == credentials.phone_number:
-                            phone_number_exists = True
-                            break
-
-                    if not phone_number_exists:
-                        msg = f"Phone number {credentials.phone_number} not found in your Twilio account"
-                        if is_test_account:
-                            msg += " (test account)"
-                        return TwilioCredentialTestResponse(
-                            success=False,
-                            message=msg,
-                            phone_number=None,
-                            account_info=account_info,
-                            is_test_account=is_test_account,
-                        )
+                    account = client.api.accounts(credentials.account_sid).fetch()
+                    account_info = {
+                        "account_sid": account.sid,
+                        "friendly_name": account.friendly_name,
+                        "status": account.status,
+                        "type": account.type,
+                        "date_created": account.date_created.isoformat() if account.date_created else None,
+                        "phone_number": credentials.phone_number,
+                    }
                 except TwilioException as e:
-                    if is_test_account:
-                        # For test accounts, phone number validation might fail - warn but allow
-                        logger.warning(f"Could not verify phone number for test account: {e}")
+                    # Check if this is a test account error (error code 20008)
+                    error_str = str(e)
+                    if (
+                        "20008" in error_str
+                        or "Test Account Credentials" in error_str
+                        or "not accessible with Test Account" in error_str
+                    ):
+                        is_test_account = True
+                        logger.info(f"Detected Twilio test account credentials for {credentials.account_sid}")
+                        # For test accounts, validate by listing incoming phone numbers instead
+                        try:
+                            incoming_numbers = client.incoming_phone_numbers.list(limit=1)
+                            # If we can list numbers, credentials are valid (test account)
+                            account_info = {
+                                "account_sid": credentials.account_sid,
+                                "friendly_name": "Test Account",
+                                "status": "active",
+                                "type": "test",
+                                "date_created": None,
+                                "phone_number": credentials.phone_number,
+                                "note": "Test account credentials detected - some features may be limited",
+                            }
+                        except TwilioException as test_error:
+                            return TwilioCredentialTestResponse(
+                                success=False,
+                                message=f"Invalid Twilio test account credentials. Error: {str(test_error)}",
+                                phone_number=None,
+                                account_info=None,
+                                is_test_account=True,
+                            )
+                        except Exception as test_error:
+                            return TwilioCredentialTestResponse(
+                                success=False,
+                                message=f"Error validating test account credentials: {str(test_error)}",
+                                phone_number=None,
+                                account_info=None,
+                                is_test_account=True,
+                            )
                     else:
+                        # Not a test account, but other error occurred
                         return TwilioCredentialTestResponse(
                             success=False,
-                            message=f"Error verifying phone number: {str(e)}",
+                            message=f"Twilio error: {str(e)}",
                             phone_number=None,
-                            account_info=account_info,
-                            is_test_account=is_test_account,
+                            account_info=None,
+                            is_test_account=False,
                         )
 
-            # Credentials are valid
-            message = "Credentials verified successfully"
-            if is_test_account:
-                message += " (Test Account - Some features may be limited)"
-                logger.warning(
-                    f"Twilio test account detected for {credentials.account_sid}. Some production features will be unavailable."
-                )
-            if credentials.phone_number:
-                message += f" and phone number {credentials.phone_number} found"
+                # If phone number is provided, verify it exists in the account
+                if credentials.phone_number:
+                    try:
+                        incoming_numbers = client.incoming_phone_numbers.list(limit=50)
+                        phone_number_exists = False
+                        for number in incoming_numbers:
+                            if number.phone_number == credentials.phone_number:
+                                phone_number_exists = True
+                                break
 
-            return TwilioCredentialTestResponse(
-                success=True,
-                message=message,
-                phone_number=credentials.phone_number,
-                account_info=account_info,
-                is_test_account=is_test_account,
-            )
+                        if not phone_number_exists:
+                            msg = f"Phone number {credentials.phone_number} not found in your Twilio account"
+                            if is_test_account:
+                                msg += " (test account)"
+                            return TwilioCredentialTestResponse(
+                                success=False,
+                                message=msg,
+                                phone_number=None,
+                                account_info=account_info,
+                                is_test_account=is_test_account,
+                            )
+                    except TwilioException as e:
+                        if is_test_account:
+                            # For test accounts, phone number validation might fail - warn but allow
+                            logger.warning(f"Could not verify phone number for test account: {e}")
+                        else:
+                            return TwilioCredentialTestResponse(
+                                success=False,
+                                message=f"Error verifying phone number: {str(e)}",
+                                phone_number=None,
+                                account_info=account_info,
+                                is_test_account=is_test_account,
+                            )
+
+                # Credentials are valid
+                message = "Credentials verified successfully"
+                if is_test_account:
+                    message += " (Test Account - Some features may be limited)"
+                    logger.warning(
+                        f"Twilio test account detected for {credentials.account_sid}. Some production features will be unavailable."
+                    )
+                if credentials.phone_number:
+                    message += f" and phone number {credentials.phone_number} found"
+
+                return TwilioCredentialTestResponse(
+                    success=True,
+                    message=message,
+                    phone_number=credentials.phone_number,
+                    account_info=account_info,
+                    is_test_account=is_test_account,
+                )
+            
+            # Run Twilio operations in thread pool
+            return await _run_twilio_sync(_test_credentials_sync)
 
         except TwilioException as e:
             return TwilioCredentialTestResponse(
@@ -212,6 +225,11 @@ class TwilioIntegrationService:
 
             # Store in Firebase
             result = await firebase_service.create_twilio_integration(integration_data)
+            
+            # Invalidate cache on create
+            if result:
+                from app.core.cache import invalidate_twilio_integration_cache
+                await invalidate_twilio_integration_cache(tenant_id)
 
             # Configure webhook URL on Twilio (only if phone number provided)
             if config.phone_number:
@@ -288,6 +306,11 @@ class TwilioIntegrationService:
 
             # Update in Firebase
             result = await firebase_service.update_twilio_integration(tenant_id, update_data)
+            
+            # Invalidate cache on update
+            if result:
+                from app.core.cache import invalidate_twilio_integration_cache
+                await invalidate_twilio_integration_cache(tenant_id)
 
             # Update webhook configuration on Twilio (only if phone number provided)
             if config.phone_number:
@@ -304,8 +327,21 @@ class TwilioIntegrationService:
             raise Exception(f"Failed to update Twilio integration: {str(e)}")
 
     async def get_integration(self, tenant_id: str) -> Optional[Dict[str, Any]]:
-        """Get Twilio integration for a tenant with decrypted auth_token."""
-        integration = await firebase_service.get_twilio_integration(tenant_id)
+        """Get Twilio integration for a tenant with decrypted auth_token (with caching)."""
+        from app.core.cache import get_cached_twilio_integration, set_cached_twilio_integration
+        
+        # Check cache first
+        cached_integration = await get_cached_twilio_integration(tenant_id)
+        if cached_integration:
+            integration = cached_integration
+        else:
+            # Cache miss: fetch from Firebase
+            integration = await firebase_service.get_twilio_integration(tenant_id)
+            if integration:
+                # Store in cache (with encrypted auth_token)
+                await set_cached_twilio_integration(tenant_id, integration)
+        
+        # Decrypt auth_token before returning (whether from cache or Firebase)
         if integration and "auth_token" in integration:
             # Decrypt auth_token before returning
             try:
@@ -330,6 +366,11 @@ class TwilioIntegrationService:
 
             # Delete from Firebase
             result = await firebase_service.delete_twilio_integration(tenant_id)
+            
+            # Invalidate cache on delete
+            if result is not None:
+                from app.core.cache import invalidate_twilio_integration_cache
+                await invalidate_twilio_integration_cache(tenant_id)
 
             return result is not None
 
@@ -342,21 +383,24 @@ class TwilioIntegrationService:
     ):
         """Configure webhook URL on Twilio phone number."""
         try:
-            client = Client(account_sid, auth_token)
+            def _configure_webhook_sync():
+                client = Client(account_sid, auth_token)
 
-            # Get the phone number resource
-            incoming_numbers = client.incoming_phone_numbers.list()
+                # Get the phone number resource
+                incoming_numbers = client.incoming_phone_numbers.list()
 
-            for number in incoming_numbers:
-                if number.phone_number == phone_number:
-                    # Update webhook URLs
-                    number.update(
-                        voice_url=webhook_url,
-                        voice_method="POST",
-                        status_callback=status_callback_url,
-                        status_callback_method="POST",
-                    )
-                    break
+                for number in incoming_numbers:
+                    if number.phone_number == phone_number:
+                        # Update webhook URLs
+                        number.update(
+                            voice_url=webhook_url,
+                            voice_method="POST",
+                            status_callback=status_callback_url,
+                            status_callback_method="POST",
+                        )
+                        break
+            
+            await _run_twilio_sync(_configure_webhook_sync)
 
         except Exception as e:
             logger.error(f"Error configuring webhook: {e}", exc_info=True)
@@ -365,16 +409,19 @@ class TwilioIntegrationService:
     async def _remove_webhook(self, account_sid: str, auth_token: str, phone_number: str):
         """Remove webhook configuration from Twilio phone number."""
         try:
-            client = Client(account_sid, auth_token)
+            def _remove_webhook_sync():
+                client = Client(account_sid, auth_token)
 
-            # Get the phone number resource
-            incoming_numbers = client.incoming_phone_numbers.list()
+                # Get the phone number resource
+                incoming_numbers = client.incoming_phone_numbers.list()
 
-            for number in incoming_numbers:
-                if number.phone_number == phone_number:
-                    # Remove webhook URLs
-                    number.update(voice_url="", voice_method="POST", status_callback="", status_callback_method="POST")
-                    break
+                for number in incoming_numbers:
+                    if number.phone_number == phone_number:
+                        # Remove webhook URLs
+                        number.update(voice_url="", voice_method="POST", status_callback="", status_callback_method="POST")
+                        break
+            
+            await _run_twilio_sync(_remove_webhook_sync)
 
         except Exception as e:
             logger.error(f"Error removing webhook: {e}", exc_info=True)
@@ -383,30 +430,33 @@ class TwilioIntegrationService:
     async def get_available_phone_numbers(self, account_sid: str, auth_token: str) -> List[Dict[str, Any]]:
         """Get available phone numbers from Twilio account."""
         try:
-            client = Client(account_sid, auth_token)
+            def _get_available_phone_numbers_sync():
+                client = Client(account_sid, auth_token)
 
-            # Get incoming phone numbers
-            incoming_numbers = client.incoming_phone_numbers.list(limit=50)
+                # Get incoming phone numbers
+                incoming_numbers = client.incoming_phone_numbers.list(limit=50)
 
-            phone_numbers = []
-            for number in incoming_numbers:
-                phone_numbers.append(
-                    {
-                        "phone_number": number.phone_number,
-                        "friendly_name": number.friendly_name,
-                        "voice_url": number.voice_url,
-                        "voice_method": number.voice_method,
-                        "status_callback": number.status_callback,
-                        "status_callback_method": number.status_callback_method,
-                        "capabilities": {
-                            "voice": number.capabilities.get("voice", False),
-                            "sms": number.capabilities.get("sms", False),
-                            "mms": number.capabilities.get("mms", False),
-                        },
-                    }
-                )
+                phone_numbers = []
+                for number in incoming_numbers:
+                    phone_numbers.append(
+                        {
+                            "phone_number": number.phone_number,
+                            "friendly_name": number.friendly_name,
+                            "voice_url": number.voice_url,
+                            "voice_method": number.voice_method,
+                            "status_callback": number.status_callback,
+                            "status_callback_method": number.status_callback_method,
+                            "capabilities": {
+                                "voice": number.capabilities.get("voice", False),
+                                "sms": number.capabilities.get("sms", False),
+                                "mms": number.capabilities.get("mms", False),
+                            },
+                        }
+                    )
 
-            return phone_numbers
+                return phone_numbers
+            
+            return await _run_twilio_sync(_get_available_phone_numbers_sync)
 
         except TwilioException as e:
             logger.error(f"Twilio auth/permission error while listing numbers: {e}", exc_info=True)
@@ -460,30 +510,33 @@ class TwilioIntegrationService:
         number_type can be 'local' or 'tollfree'.
         """
         try:
-            client = Client(account_sid, auth_token)
+            def _search_available_numbers_sync():
+                client = Client(account_sid, auth_token)
 
-            kwargs: Dict[str, Any] = {"limit": 30}
-            if area_code and number_type == "local":
-                # Twilio local supports area_code
-                kwargs["area_code"] = area_code
+                kwargs: Dict[str, Any] = {"limit": 30}
+                if area_code and number_type == "local":
+                    # Twilio local supports area_code
+                    kwargs["area_code"] = area_code
 
-            numbers = []
-            if number_type == "local":
-                available = client.available_phone_numbers(country).local.list(**kwargs)
-            else:
-                available = client.available_phone_numbers(country).toll_free.list(**kwargs)
+                numbers = []
+                if number_type == "local":
+                    available = client.available_phone_numbers(country).local.list(**kwargs)
+                else:
+                    available = client.available_phone_numbers(country).toll_free.list(**kwargs)
 
-            for num in available:
-                numbers.append(
-                    {
-                        "phone_number": getattr(num, "phone_number", None),
-                        "friendly_name": getattr(num, "friendly_name", None),
-                        "iso_country": getattr(num, "iso_country", country),
-                        "capabilities": getattr(num, "capabilities", {}),
-                    }
-                )
+                for num in available:
+                    numbers.append(
+                        {
+                            "phone_number": getattr(num, "phone_number", None),
+                            "friendly_name": getattr(num, "friendly_name", None),
+                            "iso_country": getattr(num, "iso_country", country),
+                            "capabilities": getattr(num, "capabilities", {}),
+                        }
+                    )
 
-            return numbers
+                return numbers
+            
+            return await _run_twilio_sync(_search_available_numbers_sync)
         except TwilioException as e:
             logger.error(f"Twilio auth/permission error while searching numbers: {e}", exc_info=True)
             raise
@@ -513,33 +566,39 @@ class TwilioIntegrationService:
             is_system_purchase: If True, allows purchase without tenant integration (for system account purchases)
         """
         try:
-            client = Client(account_sid, auth_token)
-
-            # Create incoming phone number (purchase) - Twilio API requires phone_number parameter
-            incoming = client.incoming_phone_numbers.create(phone_number=phone_number)
-
             # Determine webhook URLs (fallback to env base if not provided)
             base = app_config.TWILIO_WEBHOOK_BASE_URL.strip("/") if app_config.TWILIO_WEBHOOK_BASE_URL else ""
             effective_webhook = webhook_url or (f"{base}/api/v1/voice-agent/twilio/webhook" if base else None)
             effective_status = status_callback_url or (f"{base}/api/v1/voice-agent/twilio/status" if base else None)
 
-            # Configure webhooks immediately after purchase (best practice per Twilio docs)
-            try:
-                if effective_webhook or effective_status:
-                    incoming.update(
-                        voice_url=effective_webhook or "",
-                        voice_method="POST",
-                        status_callback=effective_status or "",
-                        status_callback_method="POST",
+            def _purchase_phone_number_sync():
+                client = Client(account_sid, auth_token)
+
+                # Create incoming phone number (purchase) - Twilio API requires phone_number parameter
+                incoming = client.incoming_phone_numbers.create(phone_number=phone_number)
+
+                # Configure webhooks immediately after purchase (best practice per Twilio docs)
+                try:
+                    if effective_webhook or effective_status:
+                        incoming.update(
+                            voice_url=effective_webhook or "",
+                            voice_method="POST",
+                            status_callback=effective_status or "",
+                            status_callback_method="POST",
+                        )
+                        logger.info(f"Webhooks configured for purchased number {phone_number}")
+                except TwilioException as e:
+                    # Non-fatal: log but continue to store number
+                    logger.warning(
+                        f"Failed to set webhooks on purchased number {phone_number}: {e}. Number purchased but webhooks not configured."
                     )
-                    logger.info(f"Webhooks configured for purchased number {phone_number}")
-            except TwilioException as e:
-                # Non-fatal: log but continue to store number
-                logger.warning(
-                    f"Failed to set webhooks on purchased number {phone_number}: {e}. Number purchased but webhooks not configured."
-                )
-            except Exception as e:
-                logger.warning(f"Unexpected error configuring webhooks: {e}")
+                except Exception as e:
+                    logger.warning(f"Unexpected error configuring webhooks: {e}")
+                
+                return incoming
+            
+            # Run Twilio purchase operation in thread pool
+            incoming = await _run_twilio_sync(_purchase_phone_number_sync)
 
             # Handle integration linking
             integration = await firebase_service.get_twilio_integration(tenant_id)

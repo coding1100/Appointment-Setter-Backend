@@ -83,92 +83,19 @@ class AgentService:
 
     def get_available_voices(self) -> List[VoiceOption]:
         """Get list of available ElevenLabs voices."""
-        # Predefined list of popular ElevenLabs voices
+        from app.core.voice_metadata import get_all_voices
+        
+        # Use centralized voice metadata
+        voice_metadata = get_all_voices()
         voices = [
             VoiceOption(
-                voice_id="21m00Tcm4TlvDq8ikWAM",
-                name="Rachel",
-                description="Calm, natural, young adult female voice",
-                category="female",
-                use_case="customer_service",
-            ),
-            VoiceOption(
-                voice_id="AZnzlk1XvdvUeBnXmlld",
-                name="Domi",
-                description="Strong, confident, young adult female voice",
-                category="female",
-                use_case="conversational",
-            ),
-            VoiceOption(
-                voice_id="EXAVITQu4vr4xnSDxMaL",
-                name="Bella",
-                description="Soft, warm, young adult female voice",
-                category="female",
-                use_case="customer_service",
-            ),
-            VoiceOption(
-                voice_id="ErXwobaYiN019PkySvjV",
-                name="Antoni",
-                description="Professional, well-rounded male voice",
-                category="male",
-                use_case="customer_service",
-            ),
-            VoiceOption(
-                voice_id="VR6AewLTigWG4xSOukaG",
-                name="Arnold",
-                description="Deep, authoritative male voice",
-                category="male",
-                use_case="conversational",
-            ),
-            VoiceOption(
-                voice_id="pNInz6obpgDQGcFmaJgB",
-                name="Adam",
-                description="Deep, mature male voice",
-                category="male",
-                use_case="narration",
-            ),
-            VoiceOption(
-                voice_id="yoZ06aMxZJJ28mfd3POQ",
-                name="Sam",
-                description="Young, dynamic male voice",
-                category="male",
-                use_case="conversational",
-            ),
-            VoiceOption(
-                voice_id="IKne3meq5aSn9XLyUdCD",
-                name="Charlie",
-                description="Casual, natural male voice",
-                category="male",
-                use_case="customer_service",
-            ),
-            VoiceOption(
-                voice_id="XB0fDUnXU5powFXDhCwa",
-                name="Charlotte",
-                description="Clear, professional female voice",
-                category="female",
-                use_case="customer_service",
-            ),
-            VoiceOption(
-                voice_id="pqHfZKP75CvOlQylNhV4",
-                name="Bill",
-                description="Strong, trustworthy male voice",
-                category="male",
-                use_case="conversational",
-            ),
-            VoiceOption(
-                voice_id="N2lVS1w4EtoT3dr4eOWO",
-                name="Callum",
-                description="Smooth, mature male voice",
-                category="male",
-                use_case="customer_service",
-            ),
-            VoiceOption(
-                voice_id="LcfcDJNUP1GQjkzn1xUU",
-                name="Emily",
-                description="Warm, friendly female voice",
-                category="female",
-                use_case="customer_service",
-            ),
+                voice_id=voice["voice_id"],
+                name=voice["name"],
+                description=voice["description"],
+                category=voice["category"],
+                use_case=voice["use_case"],
+            )
+            for voice in voice_metadata
         ]
         return voices
 

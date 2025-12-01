@@ -25,8 +25,9 @@ class AsyncRedisClient:
     - Auto-reconnection on failure
     """
 
-    def __init__(self, redis_url: str = REDIS_URL):
-        self.redis_url = redis_url
+    def __init__(self, redis_url: Optional[str] = None):
+        from app.core.config import REDIS_URL
+        self.redis_url = redis_url if redis_url is not None else REDIS_URL
         self._client: Optional[aioredis.Redis] = None
 
     async def get_client(self) -> aioredis.Redis:
@@ -62,6 +63,11 @@ class AsyncRedisClient:
             await client.setex(key, ttl, value)
         else:
             await client.set(key, value)
+
+    async def setex(self, key: str, ttl: int, value: str):
+        """Set value in Redis with TTL (in seconds)."""
+        client = await self.get_client()
+        await client.setex(key, ttl, value)
 
     async def delete(self, *keys: str) -> int:
         """Delete one or more keys. Returns number of keys deleted."""
@@ -151,6 +157,11 @@ class AsyncRedisClient:
         client = await self.get_client()
         return await client.lrange(key, start, end)
 
+    async def ltrim(self, key: str, start: int, end: int) -> bool:
+        """Trim list to specified range."""
+        client = await self.get_client()
+        return await client.ltrim(key, start, end)
+
     # Set operations
     async def sadd(self, key: str, *members: str) -> int:
         """Add members to set."""
@@ -187,6 +198,16 @@ class AsyncRedisClient:
         """Remove members from sorted set."""
         client = await self.get_client()
         return await client.zrem(key, *members)
+
+    async def zremrangebyscore(self, key: str, min_score: float, max_score: float) -> int:
+        """Remove members from sorted set by score range."""
+        client = await self.get_client()
+        return await client.zremrangebyscore(key, min_score, max_score)
+
+    async def zcard(self, key: str) -> int:
+        """Get cardinality (number of members) of sorted set."""
+        client = await self.get_client()
+        return await client.zcard(key)
 
     # Pattern operations
     async def keys(self, pattern: str) -> List[str]:

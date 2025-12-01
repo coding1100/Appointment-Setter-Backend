@@ -11,15 +11,9 @@ from fastapi.responses import JSONResponse
 from app.api.v1.schemas.voice_agent import TwilioCredentialTest, TwilioCredentialTestResponse, TwilioIntegrationConfig
 from app.api.v1.services.twilio_integration import twilio_integration_service
 from app.core import config
-from app.core.security import SecurityService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/twilio-integration", tags=["twilio-integration"])
-
-
-def get_security_service() -> SecurityService:
-    """Get security service instance."""
-    return SecurityService()
 
 
 @router.post("/test-credentials")
@@ -207,8 +201,6 @@ async def list_unassigned_numbers_for_tenant(tenant_id: str):
             auth_token=integration["auth_token"],
         )
         return {"phone_numbers": numbers, "total": len(numbers)}
-    except twilio_integration_service.__class__.__mro__[0] as e:  # no-op safeguard
-        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list unassigned numbers: {str(e)}"

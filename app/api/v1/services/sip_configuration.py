@@ -3,8 +3,9 @@ SIP Configuration Service for automating LiveKit and Twilio SIP setup.
 Handles SIP trunk, dispatch rules, and phone number webhook configuration.
 """
 
+import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from livekit import api
 from twilio.base.exceptions import TwilioException
@@ -23,6 +24,11 @@ from app.utils.phone_number import normalize_phone_number, normalize_phone_numbe
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+async def _run_twilio_sync(func: Callable) -> Any:
+    """Helper function to run synchronous Twilio operations in a thread pool."""
+    return await asyncio.to_thread(func)
 
 
 class SIPConfigurationService:
@@ -369,48 +375,64 @@ class SIPConfigurationService:
             if not twilio_integration:
                 raise ValueError(f"No Twilio integration found for tenant {tenant_id}")
 
-            # Create Twilio client
-            twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
-
-            # Normalize phone number for Twilio API lookup (Twilio expects E.164 format)
-            normalized_phone = normalize_phone_number(phone_number)
-            logger.info(f"Normalized phone number for Twilio lookup: {phone_number} -> {normalized_phone}")
-
-            # Find the phone number resource in Twilio
-            # Twilio API expects phone number in E.164 format
-            incoming_numbers = twilio_client.incoming_phone_numbers.list(phone_number=normalized_phone)
-
-            if not incoming_numbers:
-                # Try without normalization in case Twilio has it in different format
-                logger.warning(f"Phone number {normalized_phone} not found, trying original format: {phone_number}")
-                incoming_numbers = twilio_client.incoming_phone_numbers.list(phone_number=phone_number)
-
-            if not incoming_numbers:
+            # Build webhook URLs - use TWILIO_WEBHOOK_BASE_URL from config
+            # Required: TWILIO_WEBHOOK_BASE_URL must be set in environment variables
+            # Expected paths: /api/v1/voice-agent/twilio/webhook and /api/v1/voice-agent/twilio/status
+            from app.core.config import TWILIO_WEBHOOK_BASE_URL
+            
+            if not TWILIO_WEBHOOK_BASE_URL:
                 raise ValueError(
-                    f"Phone number {normalized_phone} not found in Twilio account. "
-                    f"Please ensure the phone number exists in your Twilio account."
+                    "TWILIO_WEBHOOK_BASE_URL environment variable is required for webhook configuration. "
+                    "Please set it to your public API base URL (e.g., https://your-domain.com)"
                 )
-
-            phone_number_resource = incoming_numbers[0]
-            logger.info(
-                f"Found Twilio phone number: SID={phone_number_resource.sid}, " f"Number={phone_number_resource.phone_number}"
-            )
-
-            # Build webhook URLs - hardcoded base URL
-            base_url = "https://app-setter.digitalmarketingservicesnewyork.com"
+            
+            base_url = TWILIO_WEBHOOK_BASE_URL.rstrip("/")
             webhook_url = f"{base_url}/api/v1/voice-agent/twilio/webhook"
             status_callback_url = f"{base_url}/api/v1/voice-agent/twilio/status"
 
             logger.info(f"Configuring webhooks - Voice: {webhook_url}, Status: {status_callback_url}")
 
-            # ALWAYS update webhook configuration to ensure it's correct
-            # Per Twilio documentation: https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource#update-an-incomingphonenumber-resource
-            phone_number_resource.update(
-                voice_url=webhook_url,
-                voice_method="POST",
-                status_callback=status_callback_url,
-                status_callback_method="POST",
-            )
+            # Normalize phone number for Twilio API lookup (Twilio expects E.164 format)
+            normalized_phone = normalize_phone_number(phone_number)
+            logger.info(f"Normalized phone number for Twilio lookup: {phone_number} -> {normalized_phone}")
+
+            def _configure_webhook_sync():
+                # Create Twilio client
+                twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
+
+                # Find the phone number resource in Twilio
+                # Twilio API expects phone number in E.164 format
+                incoming_numbers = twilio_client.incoming_phone_numbers.list(phone_number=normalized_phone)
+
+                if not incoming_numbers:
+                    # Try without normalization in case Twilio has it in different format
+                    logger.warning(f"Phone number {normalized_phone} not found, trying original format: {phone_number}")
+                    incoming_numbers = twilio_client.incoming_phone_numbers.list(phone_number=phone_number)
+
+                if not incoming_numbers:
+                    raise ValueError(
+                        f"Phone number {normalized_phone} not found in Twilio account. "
+                        f"Please ensure the phone number exists in your Twilio account."
+                    )
+
+                phone_number_resource = incoming_numbers[0]
+                logger.info(
+                    f"Found Twilio phone number: SID={phone_number_resource.sid}, " f"Number={phone_number_resource.phone_number}"
+                )
+
+                # ALWAYS update webhook configuration to ensure it's correct
+                # Per Twilio documentation: https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource#update-an-incomingphonenumber-resource
+                phone_number_resource.update(
+                    voice_url=webhook_url,
+                    voice_method="POST",
+                    status_callback=status_callback_url,
+                    status_callback_method="POST",
+                )
+
+                return phone_number_resource
+            
+            # Run Twilio operations in thread pool
+            phone_number_resource = await _run_twilio_sync(_configure_webhook_sync)
 
             logger.info(f"✓ Successfully updated webhook configuration for phone number {normalized_phone}")
 

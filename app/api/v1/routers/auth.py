@@ -80,9 +80,84 @@ async def get_current_user_from_token(authorization: str = Header(None)) -> Dict
     return user
 
 
+def verify_tenant_access(user: Dict[str, Any], tenant_id: str) -> None:
+    """
+    Verify that the authenticated user has access to the specified tenant.
+    
+    Tenant Binding Model:
+    - Users have a `tenant_id` field that binds them to a tenant
+    - Users with role 'admin' can access any tenant
+    - Regular users can only access their own tenant (matching `tenant_id`)
+    
+    Raises HTTPException if access is denied.
+    """
+    user_role = user.get("role", "user")
+    user_tenant_id = user.get("tenant_id")
+    
+    # Admins can access any tenant
+    if user_role == "admin":
+        return
+    
+    # Users must belong to the tenant they're trying to access
+    if user_tenant_id != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied: You do not have permission to access tenant {tenant_id}",
+        )
+    
+    # Ensure user has a tenant_id
+    if not user_tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: User is not associated with any tenant",
+        )
+
+
+def require_admin_role(user: Dict[str, Any]) -> None:
+    """
+    Verify that the authenticated user has admin role.
+    
+    Raises HTTPException if user is not an admin.
+    """
+    user_role = user.get("role", "user")
+    if user_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Admin role required",
+        )
+
+
+def get_client_ip(request: Request) -> str:
+    """
+    Get client IP address from request.
+    Checks X-Forwarded-For header (for proxies) and falls back to direct client.
+    """
+    # Check for forwarded IP (when behind proxy/load balancer)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # X-Forwarded-For can contain multiple IPs, take the first one
+        return forwarded_for.split(",")[0].strip()
+    
+    # Check X-Real-IP header (common in Nginx)
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+    
+    # Fallback to direct client IP
+    if request.client:
+        return request.client.host
+    
+    return "unknown"
+
+
 @router.post("/register", response_model=UserResponse)
 async def register_user(user_data: UserCreate, request: Request):
     """Register a new user."""
+    # Rate limiting: 10 requests per minute per IP
+    security_service = get_security_service()
+    client_ip = get_client_ip(request)
+    await security_service.enforce_rate_limit(client_ip, limit=10, window_seconds=60, operation="auth_register")
+    
     try:
         # Check if user already exists
         existing_user = await auth_service.get_user_by_email(user_data.email)
@@ -92,24 +167,8 @@ async def register_user(user_data: UserCreate, request: Request):
         # Create user
         user = await auth_service.create_user(user_data)
 
-        return UserResponse(
-            id=user.get("id", ""),
-            email=user.get("email", ""),
-            username=user.get("username", ""),
-            first_name=user.get("first_name", ""),
-            last_name=user.get("last_name", ""),
-            role=user.get("role", "user"),
-            status=user.get("status", "active"),
-            tenant_id=user.get("tenant_id"),
-            is_email_verified=user.get("is_email_verified", False),
-            last_login=user.get("last_login"),
-            created_at=datetime.fromisoformat(
-                user.get("created_at", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-            ),
-            updated_at=datetime.fromisoformat(
-                user.get("updated_at", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-            ),
-        )
+        from app.core.response_mappers import to_user_response
+        return to_user_response(user)
 
     except HTTPException:
         raise
@@ -120,6 +179,11 @@ async def register_user(user_data: UserCreate, request: Request):
 @router.post("/login", response_model=TokenResponse)
 async def login_user(login_data: UserLogin, request: Request):
     """Authenticate user and return tokens."""
+    # Rate limiting: 10 requests per minute per IP
+    security_service = get_security_service()
+    client_ip = get_client_ip(request)
+    await security_service.enforce_rate_limit(client_ip, limit=10, window_seconds=60, operation="auth_login")
+    
     try:
         # Log the login attempt
         import logging
@@ -139,29 +203,13 @@ async def login_user(login_data: UserLogin, request: Request):
         # Create user session
         await auth_service.create_user_session(user.get("id", ""), refresh_token)
 
+        from app.core.response_mappers import to_user_response
         return TokenResponse(
             access_token=access_token,
             refresh_token=refresh_token,
             token_type="bearer",
             expires_in=1800,  # 30 minutes
-            user=UserResponse(
-                id=user.get("id", ""),
-                email=user.get("email", ""),
-                username=user.get("username", ""),
-                first_name=user.get("first_name", ""),
-                last_name=user.get("last_name", ""),
-                role=user.get("role", "user"),
-                status=user.get("status", "active"),
-                tenant_id=user.get("tenant_id"),
-                is_email_verified=user.get("is_email_verified", False),
-                last_login=user.get("last_login"),
-                created_at=datetime.fromisoformat(
-                    user.get("created_at", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-                ),
-                updated_at=datetime.fromisoformat(
-                    user.get("updated_at", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-                ),
-            ),
+            user=to_user_response(user),
         )
 
     except HTTPException:
@@ -172,27 +220,48 @@ async def login_user(login_data: UserLogin, request: Request):
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(refresh_token: str, request: Request):
-    """Refresh access token using refresh token."""
+    """
+    Refresh access token using refresh token.
+    
+    Uses session lookup from Redis to validate the refresh token.
+    If session is valid, creates new tokens and updates the session.
+    """
+    # Rate limiting: 10 requests per minute per IP
+    security_service = get_security_service()
+    client_ip = get_client_ip(request)
+    await security_service.enforce_rate_limit(client_ip, limit=10, window_seconds=60, operation="auth_refresh")
+    
     try:
-        # Verify refresh token
-        payload = auth_service.verify_token(refresh_token, "refresh")
-        if not payload:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
-
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
-
-        # Get user session
+        # Get user session from Redis (validates session is active and not expired)
         session = await auth_service.get_user_session(refresh_token)
         if not session:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
 
-        # Create new access token
-        new_access_token = auth_service.create_access_token({"sub": user_id})
+        user_id = session.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session data")
+
+        # Get user
+        user = await auth_service.get_user(user_id)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+        # Revoke old session
+        await auth_service.revoke_user_session(refresh_token)
+
+        # Create new tokens
+        access_token = auth_service.create_access_token({"sub": user_id})
+        new_refresh_token = auth_service.create_refresh_token({"sub": user_id})
+
+        # Create new session with new refresh token
+        await auth_service.create_user_session(user_id, new_refresh_token)
 
         return TokenResponse(
-            access_token=new_access_token, refresh_token=refresh_token, token_type="bearer", expires_in=1800  # 30 minutes
+            access_token=access_token,
+            refresh_token=new_refresh_token,
+            token_type="bearer",
+            expires_in=1800,  # 30 minutes
+            user=to_user_response(user),
         )
 
     except HTTPException:
@@ -203,10 +272,16 @@ async def refresh_token(refresh_token: str, request: Request):
 
 @router.post("/logout")
 async def logout_user(logout_data: LogoutRequest, request: Request):
-    """Logout user and revoke session."""
+    """
+    Logout user and invalidate refresh token.
+    
+    Revokes the session in Redis, making the refresh token unusable.
+    """
     try:
-        # Revoke user session
-        await auth_service.revoke_user_session(logout_data.refresh_token)
+        # Revoke refresh token (deletes session from Redis)
+        success = await auth_service.revoke_user_session(logout_data.refresh_token)
+        if not success:
+            logger.warning(f"Failed to revoke session for refresh token (may already be revoked)")
 
         return {"message": "Successfully logged out"}
 
@@ -218,20 +293,8 @@ async def logout_user(logout_data: LogoutRequest, request: Request):
 async def get_current_user(current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
     """Get current user information."""
     try:
-        return UserResponse(
-            id=current_user.get("id", ""),
-            email=current_user.get("email", ""),
-            username=current_user.get("username", ""),
-            first_name=current_user.get("first_name", ""),
-            last_name=current_user.get("last_name", ""),
-            role=current_user.get("role", "user"),
-            status=current_user.get("status", "active"),
-            tenant_id=current_user.get("tenant_id"),
-            is_email_verified=current_user.get("is_email_verified", False),
-            last_login=current_user.get("last_login"),
-            created_at=datetime.fromisoformat(current_user["created_at"].replace("Z", "+00:00")),
-            updated_at=datetime.fromisoformat(current_user["updated_at"].replace("Z", "+00:00")),
-        )
+        from app.core.response_mappers import to_user_response
+        return to_user_response(current_user)
 
     except Exception as e:
         raise HTTPException(
@@ -289,30 +352,8 @@ async def list_users(request: Request, limit: int = 100, offset: int = 0):
         users = await auth_service.list_users(limit, offset)
 
         # Convert to UserResponse objects
-        user_responses = []
-        for user in users:
-            user_responses.append(
-                UserResponse(
-                    id=user.get("id", ""),
-                    email=user.get("email", ""),
-                    username=user.get("username", ""),
-                    first_name=user.get("first_name", ""),
-                    last_name=user.get("last_name", ""),
-                    role=user.get("role", "user"),
-                    status=user.get("status", "active"),
-                    tenant_id=user.get("tenant_id"),
-                    is_email_verified=user.get("is_email_verified", False),
-                    last_login=user.get("last_login"),
-                    created_at=datetime.fromisoformat(
-                        user.get("created_at", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-                    ),
-                    updated_at=datetime.fromisoformat(
-                        user.get("updated_at", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-                    ),
-                )
-            )
-
-        return user_responses
+        from app.core.response_mappers import to_user_response
+        return [to_user_response(user) for user in users]
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list users: {str(e)}")
@@ -326,24 +367,8 @@ async def get_user(user_id: str, request: Request):
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-        return UserResponse(
-            id=user.get("id", ""),
-            email=user.get("email", ""),
-            username=user.get("username", ""),
-            first_name=user.get("first_name", ""),
-            last_name=user.get("last_name", ""),
-            role=user.get("role", "user"),
-            status=user.get("status", "active"),
-            tenant_id=user.get("tenant_id"),
-            is_email_verified=user.get("is_email_verified", False),
-            last_login=user.get("last_login"),
-            created_at=datetime.fromisoformat(
-                user.get("created_at", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-            ),
-            updated_at=datetime.fromisoformat(
-                user.get("updated_at", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-            ),
-        )
+        from app.core.response_mappers import to_user_response
+        return to_user_response(user)
 
     except HTTPException:
         raise
@@ -363,24 +388,8 @@ async def update_user(user_id: str, user_data: UserUpdate, request: Request):
         # Update user
         updated_user = await auth_service.update_user(user_id, user_data)
 
-        return UserResponse(
-            id=updated_user.get("id", ""),
-            email=updated_user.get("email", ""),
-            username=updated_user.get("username", ""),
-            first_name=updated_user.get("first_name", ""),
-            last_name=updated_user.get("last_name", ""),
-            role=updated_user.get("role", "user"),
-            status=updated_user.get("status", "active"),
-            tenant_id=updated_user.get("tenant_id"),
-            is_email_verified=updated_user.get("is_email_verified", False),
-            last_login=updated_user.get("last_login"),
-            created_at=datetime.fromisoformat(
-                updated_user.get("created_at", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-            ),
-            updated_at=datetime.fromisoformat(
-                updated_user.get("updated_at", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-            ),
-        )
+        from app.core.response_mappers import to_user_response
+        return to_user_response(updated_user)
 
     except HTTPException:
         raise

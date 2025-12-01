@@ -3,10 +3,10 @@ Phone number service layer for business logic.
 """
 
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.api.v1.schemas.phone_number import PhoneNumberCreate, PhoneNumberUpdate
+from app.core.utils import add_timestamps
 from app.services.firebase import firebase_service
 from app.utils.phone_number import normalize_phone_number, normalize_phone_number_safe
 
@@ -17,6 +17,39 @@ class PhoneNumberService:
     def __init__(self):
         """Initialize phone number service."""
         pass
+
+    async def _validate_agent_for_tenant(self, agent_id: str, tenant_id: str, agent: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Validate agent exists, belongs to tenant, and has required fields.
+        
+        Args:
+            agent_id: Agent identifier
+            tenant_id: Tenant identifier
+            agent: Optional pre-fetched agent data
+            
+        Returns:
+            Agent data dictionary
+            
+        Raises:
+            ValueError: If validation fails
+        """
+        if not agent:
+            agent = await firebase_service.get_agent(agent_id)
+        
+        if not agent:
+            raise ValueError(f"Agent {agent_id} not found")
+        
+        if agent.get("tenant_id") != tenant_id:
+            raise ValueError(f"Agent {agent_id} does not belong to this tenant")
+        
+        # Verify agent has service_type set (required field)
+        if not agent.get("service_type"):
+            raise ValueError(
+                f"Agent {agent_id} (name: {agent.get('name')}) has no service_type set. "
+                f"Please configure the agent's service_type before assigning a phone number."
+            )
+        
+        return agent
 
     async def create_phone_number(self, tenant_id: str, phone_data: PhoneNumberCreate) -> Dict[str, Any]:
         """Create a new phone number assignment."""
@@ -31,19 +64,8 @@ class PhoneNumberService:
         if existing_phone:
             raise ValueError(f"Phone number {normalized_phone} is already assigned")
 
-        # Verify agent exists and belongs to tenant
-        agent = await firebase_service.get_agent(phone_data.agent_id)
-        if not agent:
-            raise ValueError(f"Agent {phone_data.agent_id} not found")
-        if agent.get("tenant_id") != tenant_id:
-            raise ValueError(f"Agent {phone_data.agent_id} does not belong to this tenant")
-
-        # Verify agent has service_type set (required field)
-        if not agent.get("service_type"):
-            raise ValueError(
-                f"Agent {phone_data.agent_id} (name: {agent.get('name')}) has no service_type set. "
-                f"Please configure the agent's service_type before assigning a phone number."
-            )
+        # Validate agent
+        await self._validate_agent_for_tenant(phone_data.agent_id, tenant_id)
 
         # Verify twilio integration exists and belongs to tenant
         twilio_integration = await firebase_service.get_twilio_integration(tenant_id)
@@ -58,9 +80,8 @@ class PhoneNumberService:
             "agent_id": phone_data.agent_id,
             "twilio_integration_id": phone_data.twilio_integration_id,
             "status": "active",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        add_timestamps(phone_dict)
 
         return await firebase_service.create_phone_number(phone_dict)
 
@@ -106,7 +127,7 @@ class PhoneNumberService:
         if not phone:
             return None
 
-        update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
+        update_data = {}
 
         if phone_data.phone_number is not None:
             # Normalize phone number before checking/updating
@@ -118,22 +139,16 @@ class PhoneNumberService:
             update_data["phone_number"] = normalized_phone  # Store normalized format
 
         if phone_data.agent_id is not None:
-            # Verify agent exists and belongs to same tenant
-            agent = await firebase_service.get_agent(phone_data.agent_id)
-            if not agent:
-                raise ValueError(f"Agent {phone_data.agent_id} not found")
-            if agent.get("tenant_id") != phone.get("tenant_id"):
-                raise ValueError(f"Agent {phone_data.agent_id} does not belong to this tenant")
-            # Verify agent has service_type set
-            if not agent.get("service_type"):
-                raise ValueError(
-                    f"Agent {phone_data.agent_id} (name: {agent.get('name')}) has no service_type set. "
-                    f"Please configure the agent's service_type before assigning a phone number."
-                )
+            # Validate agent
+            await self._validate_agent_for_tenant(phone_data.agent_id, phone.get("tenant_id"))
             update_data["agent_id"] = phone_data.agent_id
 
         if phone_data.status is not None:
             update_data["status"] = phone_data.status
+
+        # Add updated_at timestamp
+        from app.core.utils import add_updated_timestamp
+        add_updated_timestamp(update_data)
 
         return await firebase_service.update_phone_number(phone_id, update_data)
 
@@ -152,19 +167,8 @@ class PhoneNumberService:
         # Normalize phone number first
         normalized_phone = normalize_phone_number(phone_number)
 
-        # Verify agent exists and belongs to tenant first
-        agent = await firebase_service.get_agent(agent_id)
-        if not agent:
-            raise ValueError(f"Agent {agent_id} not found")
-        if agent.get("tenant_id") != tenant_id:
-            raise ValueError(f"Agent {agent_id} does not belong to tenant {tenant_id}")
-
-        # Verify agent has service_type (required field)
-        if not agent.get("service_type"):
-            raise ValueError(
-                f"Agent {agent_id} (name: {agent.get('name')}) has no service_type set. "
-                f"Please configure the agent's service_type before assigning a phone number."
-            )
+        # Validate agent
+        await self._validate_agent_for_tenant(agent_id, tenant_id)
 
         # Check if phone number already assigned (using normalized format)
         existing_phone = await self.get_phone_by_number(normalized_phone)

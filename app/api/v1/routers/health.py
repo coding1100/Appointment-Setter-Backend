@@ -6,12 +6,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-import firebase_admin
-import redis
 from fastapi import APIRouter, status
 from livekit import api as livekit_api
 
-from app.core.config import ENVIRONMENT, LIVEKIT_URL, REDIS_URL
+from app.core.async_redis import async_redis_client
+from app.core.config import ENVIRONMENT, LIVEKIT_URL
+from app.services.firebase import firebase_service
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -57,9 +57,12 @@ async def detailed_health_check() -> Dict[str, Any]:
 
     # Check Redis
     try:
-        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-        redis_client.ping()
-        health_status["components"]["redis"] = {"status": "healthy", "message": "Connected"}
+        ping_result = await async_redis_client.ping()
+        if ping_result:
+            health_status["components"]["redis"] = {"status": "healthy", "message": "Connected"}
+        else:
+            health_status["components"]["redis"] = {"status": "unhealthy", "message": "Ping failed"}
+            overall_healthy = False
     except Exception as e:
         logger.error(f"Redis health check failed: {e}")
         health_status["components"]["redis"] = {"status": "unhealthy", "message": str(e)}
@@ -67,10 +70,11 @@ async def detailed_health_check() -> Dict[str, Any]:
 
     # Check Firebase
     try:
-        if firebase_admin._apps:
-            health_status["components"]["firebase"] = {"status": "healthy", "message": "Initialized"}
+        firebase_healthy = await firebase_service.health_check()
+        if firebase_healthy:
+            health_status["components"]["firebase"] = {"status": "healthy", "message": "Connected"}
         else:
-            health_status["components"]["firebase"] = {"status": "unhealthy", "message": "Not initialized"}
+            health_status["components"]["firebase"] = {"status": "unhealthy", "message": "Failed to connect or query Firebase"}
             overall_healthy = False
     except Exception as e:
         logger.error(f"Firebase health check failed: {e}")
@@ -106,17 +110,19 @@ async def readiness_check() -> Dict[str, Any]:
 
     # Check Redis
     try:
-        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-        redis_client.ping()
-        checks["redis"] = True
+        ping_result = await async_redis_client.ping()
+        checks["redis"] = ping_result
+        if not ping_result:
+            ready = False
     except Exception:
         checks["redis"] = False
         ready = False
 
     # Check Firebase
     try:
-        checks["firebase"] = bool(firebase_admin._apps)
-        if not checks["firebase"]:
+        firebase_healthy = await firebase_service.health_check()
+        checks["firebase"] = firebase_healthy
+        if not firebase_healthy:
             ready = False
     except Exception:
         checks["firebase"] = False

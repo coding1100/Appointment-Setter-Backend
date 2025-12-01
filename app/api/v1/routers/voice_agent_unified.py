@@ -12,6 +12,7 @@ from twilio.request_validator import RequestValidator
 
 from app.core import config
 from app.core.encryption import encryption_service
+from app.core.security import SecurityService
 from app.services.firebase import firebase_service
 from app.services.unified_voice_agent import unified_voice_agent_service
 
@@ -19,6 +20,28 @@ from app.services.unified_voice_agent import unified_voice_agent_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/voice-agent", tags=["Voice Agent"])
+
+
+def get_security_service() -> SecurityService:
+    """Get security service instance."""
+    try:
+        return SecurityService()
+    except Exception as e:
+        logger.warning(f"Security service unavailable: {e}")
+        return None
+
+
+def get_client_ip(request: Request) -> str:
+    """Get client IP address from request."""
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
 
 # Request/Response Models
 
@@ -68,7 +91,7 @@ class SessionStatusResponse(BaseModel):
 
 
 @router.post("/start-session", response_model=StartSessionResponse)
-async def start_session(request: StartSessionRequest):
+async def start_session(request: StartSessionRequest, http_request: Request):
     """
     Start a voice agent session.
 
@@ -83,6 +106,13 @@ async def start_session(request: StartSessionRequest):
     - Requires phone_number parameter
     - Uses tenant's Twilio credentials
     """
+    # Rate limiting: 20 requests per minute per IP
+    # Note: For user-based rate limiting, we'd need to extract user_id from auth token
+    security_service = get_security_service()
+    if security_service:
+        client_ip = get_client_ip(http_request)
+        await security_service.enforce_rate_limit(client_ip, limit=20, window_seconds=60, operation="voice_start_session")
+    
     try:
         # Validate request
         if not request.test_mode and not request.phone_number:
@@ -312,6 +342,12 @@ async def twilio_webhook(request: Request):
 
     Security: Validates X-Twilio-Signature header to ensure request is from Twilio.
     """
+    # Rate limiting: 100 requests per minute per IP (higher for legitimate webhook traffic)
+    security_service = get_security_service()
+    if security_service:
+        client_ip = get_client_ip(request)
+        await security_service.enforce_rate_limit(client_ip, limit=100, window_seconds=60, operation="twilio_webhook")
+    
     try:
         form_data = await request.form()
         form_dict = dict(form_data)
@@ -352,9 +388,15 @@ async def twilio_status_callback(request: Request):
     Twilio status callback endpoint.
 
     This is called by Twilio to report call status changes.
-
+    
     Security: Validates X-Twilio-Signature header to ensure request is from Twilio.
     """
+    # Rate limiting: 100 requests per minute per IP (higher for legitimate webhook traffic)
+    security_service = get_security_service()
+    if security_service:
+        client_ip = get_client_ip(request)
+        await security_service.enforce_rate_limit(client_ip, limit=100, window_seconds=60, operation="twilio_status")
+    
     try:
         form_data = await request.form()
         form_dict = dict(form_data)

@@ -257,3 +257,4 @@ if __name__ == "__main__":
     print("\n💡 Run: locust -f locustfile.py --host=http://localhost:8000")
     print("   Then open: http://localhost:8089\n")
 
+

@@ -8,7 +8,6 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from livekit import api
@@ -31,6 +30,7 @@ from app.core.config import (
     TWILIO_WEBHOOK_BASE_URL,
 )
 from app.core.encryption import encryption_service
+from app.core.utils import get_current_timestamp
 from app.services.dialog_manager import dialog_manager
 from app.services.firebase import firebase_service
 from app.utils.phone_number import normalize_phone_number_safe
@@ -168,7 +168,7 @@ class UnifiedVoiceAgentService:
 
             self.tenant_agents[agent_key] = {
                 "agent": agent,
-                "created_at": datetime.now(timezone.utc),
+                "created_at": get_current_timestamp(),
                 "tenant_id": tenant_id,
                 "service_type": service_type,
                 "voice_id": voice_id,
@@ -282,7 +282,7 @@ class UnifiedVoiceAgentService:
                 "status": "initializing",
                 "dialog_context": dialog_context,
                 "metadata": metadata or {},
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": get_current_timestamp(),
                 "started_at": None,
                 "ended_at": None,
             }
@@ -375,7 +375,7 @@ class UnifiedVoiceAgentService:
 
             # Update session status
             session["status"] = "ended"
-            session["ended_at"] = datetime.now(timezone.utc).isoformat()
+            session["ended_at"] = get_current_timestamp()
 
             # Delete LiveKit room
             await self._delete_room(room_name)
@@ -596,7 +596,7 @@ class UnifiedVoiceAgentService:
                     "call_type": "inbound",
                     "from_number": from_number,
                     "to_number": to_number,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": get_current_timestamp(),
                 }
 
                 logger.info(f"✓ Inbound call setup complete for {to_number} -> Agent {agent.get('name')}")
@@ -618,10 +618,10 @@ class UnifiedVoiceAgentService:
             # Update session status
             if session:
                 session["status"] = "connecting"
-                session["started_at"] = datetime.now(timezone.utc).isoformat()
+                session["started_at"] = get_current_timestamp()
             else:
                 self.active_sessions[call_sid]["status"] = "connecting"
-                self.active_sessions[call_sid]["started_at"] = datetime.now(timezone.utc).isoformat()
+                self.active_sessions[call_sid]["started_at"] = get_current_timestamp()
 
             return response
 
@@ -647,7 +647,7 @@ class UnifiedVoiceAgentService:
 
                     if call_status in ["completed", "failed", "busy", "no-answer"]:
                         session["status"] = "ended"
-                        session["ended_at"] = datetime.now(timezone.utc).isoformat()
+                        session["ended_at"] = get_current_timestamp()
 
                     break
 
@@ -791,23 +791,27 @@ Business: {business_name}"""
             if not twilio_integration:
                 raise ValueError(f"No Twilio integration found for tenant {tenant_id}")
 
-            # Create Twilio client with tenant's credentials
-            twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
-
             # Webhook URL that will return TwiML to connect to LiveKit
             webhook_url = f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/webhook"
 
-            # Initiate call
-            call = twilio_client.calls.create(
-                from_=twilio_integration["phone_number"],
-                to=phone_number,
-                url=webhook_url,
-                status_callback=f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/status",
-                status_callback_event=["initiated", "ringing", "answered", "completed"],
-            )
+            def _initiate_call_sync():
+                # Create Twilio client with tenant's credentials
+                twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
 
-            logger.info(f"Initiated Twilio call: {call.sid}")
-            return call.sid
+                # Initiate call
+                call = twilio_client.calls.create(
+                    from_=twilio_integration["phone_number"],
+                    to=phone_number,
+                    url=webhook_url,
+                    status_callback=f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/status",
+                    status_callback_event=["initiated", "ringing", "answered", "completed"],
+                )
+
+                logger.info(f"Initiated Twilio call: {call.sid}")
+                return call.sid
+            
+            # Run Twilio operation in thread pool
+            return await asyncio.to_thread(_initiate_call_sync)
 
         except Exception as e:
             logger.error(f"Error initiating Twilio call: {e}")
@@ -824,9 +828,12 @@ Business: {business_name}"""
                     logger.error(f"Failed to decrypt auth_token: {e}")
                     return
             if twilio_integration:
-                twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
-                twilio_client.calls(call_sid).update(status="completed")
-                logger.info(f"Hung up Twilio call: {call_sid}")
+                def _hangup_call_sync():
+                    twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
+                    twilio_client.calls(call_sid).update(status="completed")
+                    logger.info(f"Hung up Twilio call: {call_sid}")
+                
+                await asyncio.to_thread(_hangup_call_sync)
         except Exception as e:
             logger.error(f"Error hanging up call: {e}")
 

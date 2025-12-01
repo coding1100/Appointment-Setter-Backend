@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, validator
 
+from app.core.validators import validate_service_type
+
 
 class AgentCreate(BaseModel):
     """Schema for creating a new agent."""
@@ -21,10 +23,7 @@ class AgentCreate(BaseModel):
     @validator("service_type")
     def validate_service_type(cls, v):
         """Validate service type."""
-        valid_types = ["Home Services", "Plumbing", "Electrician", "Painter", "Carpenter", "Maids"]
-        if v not in valid_types:
-            raise ValueError(f"Service type must be one of: {valid_types}")
-        return v
+        return validate_service_type(v)
 
 
 class AgentUpdate(BaseModel):
@@ -42,10 +41,7 @@ class AgentUpdate(BaseModel):
         """Validate service type."""
         if v is None:
             return v
-        valid_types = ["Home Services", "Plumbing", "Electrician", "Painter", "Carpenter", "Maids"]
-        if v not in valid_types:
-            raise ValueError(f"Service type must be one of: {valid_types}")
-        return v
+        return validate_service_type(v)
 
 
 class AgentResponse(BaseModel):

@@ -1,5 +1,5 @@
 """
-Provisioning service for tenant activation pipeline using Supabase.
+Provisioning service for tenant activation pipeline using Firebase/Firestore.
 Handles LiveKit SIP Ingress creation and Twilio integration.
 """
 
@@ -274,22 +274,27 @@ class ProvisioningService:
             if not twilio_integration:
                 raise ValueError(f"No Twilio integration found for tenant {tenant_id}")
 
-            # Create Twilio client with tenant's credentials
-            twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
-
             # Create SIP Domain
             # Format: tenant-{tenant_id}.sip.{region}.twilio.com
             domain_name = f"tenant-{tenant_id[:8]}.sip.twilio.com"
 
-            # Create the SIP domain
-            sip_domain = twilio_client.sip.domains.create(
-                domain_name=domain_name,
-                friendly_name=f"SIP Domain for Tenant {tenant_id}",
-                voice_url=f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/webhook",
-                voice_method="POST",
-                sip_registration=False,  # We're not doing SIP registration, just trunk
-                emergency_calling_enabled=False,
-            )
+            def _create_sip_domain_sync():
+                # Create Twilio client with tenant's credentials
+                twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
+
+                # Create the SIP domain
+                sip_domain = twilio_client.sip.domains.create(
+                    domain_name=domain_name,
+                    friendly_name=f"SIP Domain for Tenant {tenant_id}",
+                    voice_url=f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/webhook",
+                    voice_method="POST",
+                    sip_registration=False,  # We're not doing SIP registration, just trunk
+                    emergency_calling_enabled=False,
+                )
+                return sip_domain
+            
+            # Run Twilio operation in thread pool
+            sip_domain = await asyncio.to_thread(_create_sip_domain_sync)
 
             logger.info(f"Created Twilio SIP Domain for tenant {tenant_id}: {sip_domain.sid}")
 
@@ -319,24 +324,29 @@ class ProvisioningService:
             if not phone_number:
                 raise ValueError(f"No phone number configured for tenant {tenant_id}")
 
-            # Create Twilio client
-            twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
+            def _configure_phone_number_sync():
+                # Create Twilio client
+                twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
 
-            # Find the phone number resource
-            incoming_numbers = twilio_client.incoming_phone_numbers.list(phone_number=phone_number)
+                # Find the phone number resource
+                incoming_numbers = twilio_client.incoming_phone_numbers.list(phone_number=phone_number)
 
-            if not incoming_numbers:
-                raise ValueError(f"Phone number {phone_number} not found in Twilio account")
+                if not incoming_numbers:
+                    raise ValueError(f"Phone number {phone_number} not found in Twilio account")
 
-            phone_number_resource = incoming_numbers[0]
+                phone_number_resource = incoming_numbers[0]
 
-            # Configure the phone number to use our webhook
-            phone_number_resource.update(
-                voice_url=f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/webhook",
-                voice_method="POST",
-                status_callback=f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/status",
-                status_callback_method="POST",
-            )
+                # Configure the phone number to use our webhook
+                phone_number_resource.update(
+                    voice_url=f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/webhook",
+                    voice_method="POST",
+                    status_callback=f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/status",
+                    status_callback_method="POST",
+                )
+                return phone_number_resource
+            
+            # Run Twilio operation in thread pool
+            phone_number_resource = await asyncio.to_thread(_configure_phone_number_sync)
 
             logger.info(f"Configured phone number {phone_number} for tenant {tenant_id}")
 
@@ -361,15 +371,19 @@ class ProvisioningService:
             if not sip_domain_name:
                 raise ValueError(f"No SIP domain configured for tenant {tenant_id}")
 
-            # Create Twilio client
-            twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
+            def _get_sip_domain_sync():
+                # Create Twilio client
+                twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
 
-            # Get the SIP domain
-            sip_domains = twilio_client.sip.domains.list(domain_name=sip_domain_name)
-            if not sip_domains:
-                raise ValueError(f"SIP domain {sip_domain_name} not found")
+                # Get the SIP domain
+                sip_domains = twilio_client.sip.domains.list(domain_name=sip_domain_name)
+                if not sip_domains:
+                    raise ValueError(f"SIP domain {sip_domain_name} not found")
 
-            sip_domain = sip_domains[0]
+                return sip_domains[0]
+            
+            # Run Twilio operation in thread pool
+            sip_domain = await asyncio.to_thread(_get_sip_domain_sync)
 
             # Create credential list for authentication (if needed)
             # Create IP access control list to allow LiveKit servers
@@ -420,9 +434,13 @@ class ProvisioningService:
 
             # Test Twilio connectivity
             try:
-                twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
-                # Verify account is active
-                account = twilio_client.api.accounts(twilio_integration["account_sid"]).fetch()
+                def _test_twilio_connectivity_sync():
+                    twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
+                    # Verify account is active
+                    account = twilio_client.api.accounts(twilio_integration["account_sid"]).fetch()
+                    return account
+                
+                account = await asyncio.to_thread(_test_twilio_connectivity_sync)
                 if account.status != "active":
                     return {
                         "status": "failed",

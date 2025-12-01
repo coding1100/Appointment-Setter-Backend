@@ -1,6 +1,6 @@
 """
 Core security utilities and dependencies.
-PERFORMANCE OPTIMIZATION: Ready for async Redis (currently using sync for backward compatibility).
+PERFORMANCE OPTIMIZATION: Using async Redis for non-blocking operations.
 """
 
 import hashlib
@@ -15,14 +15,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
-import redis
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, status
 
-from app.core.config import AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY, REDIS_URL, SECRET_KEY
-
-# NOTE: To use async Redis, uncomment the line below and update all self.redis_client calls to use await
-# from app.core.async_redis import async_redis_client
+from app.core.async_redis import async_redis_client
+from app.core.config import AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY, SECRET_KEY
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -52,15 +49,12 @@ class IdempotencyKey:
 
 
 class SecurityService:
-    """Service class for security operations."""
+    """Service class for security operations using async Redis."""
 
     def __init__(self):
-        try:
-            self.redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-            # Test connection
-            self.redis_client.ping()
-        except Exception as e:
-            raise ValueError(f"Redis connection failed: {e}")
+        """Initialize security service with async Redis client."""
+        # Use async Redis client (no initialization needed, it's a singleton)
+        self.redis_client = async_redis_client
 
         # Initialize AWS Secrets Manager if credentials are available
         if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
@@ -73,15 +67,16 @@ class SecurityService:
         else:
             self.secrets_manager = None
 
-    def check_rate_limit(self, identifier: str, limit: int, window_seconds: int, operation: str = "default") -> RateLimitInfo:
+    async def check_rate_limit(self, identifier: str, limit: int, window_seconds: int, operation: str = "default") -> RateLimitInfo:
         """Check rate limit for an identifier."""
         try:
             key = f"rate_limit:{operation}:{identifier}"
             current_time = int(time.time())
             window_start = current_time - window_seconds
 
-            # Use Redis sliding window
-            pipe = self.redis_client.pipeline()
+            # Use Redis sliding window with async operations
+            client = await self.redis_client.get_client()
+            pipe = client.pipeline()
 
             # Remove expired entries
             pipe.zremrangebyscore(key, 0, window_start)
@@ -95,13 +90,13 @@ class SecurityService:
             # Set expiration
             pipe.expire(key, window_seconds)
 
-            results = pipe.execute()
+            results = await pipe.execute()
             current_count = results[1]
 
             # Check if limit exceeded
             if current_count >= limit:
                 # Get oldest request time
-                oldest_request = self.redis_client.zrange(key, 0, 0, withscores=True)
+                oldest_request = await self.redis_client.zrange(key, 0, 0, withscores=True)
                 if oldest_request:
                     oldest_time = int(oldest_request[0][1])
                     retry_after = oldest_time + window_seconds - current_time
@@ -128,9 +123,9 @@ class SecurityService:
                 limit=limit, remaining=limit, reset_time=datetime.now(timezone.utc) + timedelta(seconds=window_seconds)
             )
 
-    def enforce_rate_limit(self, identifier: str, limit: int, window_seconds: int, operation: str = "default") -> None:
+    async def enforce_rate_limit(self, identifier: str, limit: int, window_seconds: int, operation: str = "default") -> None:
         """Enforce rate limit, raise exception if exceeded."""
-        rate_limit_info = self.check_rate_limit(identifier, limit, window_seconds, operation)
+        rate_limit_info = await self.check_rate_limit(identifier, limit, window_seconds, operation)
 
         if rate_limit_info.retry_after:
             raise HTTPException(
@@ -150,7 +145,7 @@ class SecurityService:
                 },
             )
 
-    def create_idempotency_key(
+    async def create_idempotency_key(
         self, operation: str, tenant_id: Optional[str] = None, user_id: Optional[str] = None, ttl_hours: int = 24
     ) -> str:
         """Create idempotency key for operation."""
@@ -170,7 +165,7 @@ class SecurityService:
                 expires_at=expires_at,
             )
 
-            self.redis_client.setex(f"idempotency:{key}", ttl_hours * 3600, str(idempotency_data.__dict__))
+            await self.redis_client.setex(f"idempotency:{key}", ttl_hours * 3600, str(idempotency_data.__dict__))
 
             return key
 
@@ -178,10 +173,10 @@ class SecurityService:
             logger.error(f"Error creating idempotency key: {e}", exc_info=True)
             return str(uuid.uuid4())
 
-    def check_idempotency_key(self, key: str) -> Optional[Dict[str, Any]]:
+    async def check_idempotency_key(self, key: str) -> Optional[Dict[str, Any]]:
         """Check if idempotency key exists and return result."""
         try:
-            data = self.redis_client.get(f"idempotency:{key}")
+            data = await self.redis_client.get(f"idempotency:{key}")
             if data:
                 # Parse stored data
                 import ast
@@ -194,10 +189,10 @@ class SecurityService:
             logger.error(f"Error checking idempotency key: {e}", exc_info=True)
             return None
 
-    def store_idempotency_result(self, key: str, result: Dict[str, Any]) -> None:
+    async def store_idempotency_result(self, key: str, result: Dict[str, Any]) -> None:
         """Store result for idempotency key."""
         try:
-            data = self.redis_client.get(f"idempotency:{key}")
+            data = await self.redis_client.get(f"idempotency:{key}")
             if data:
                 import ast
 
@@ -205,9 +200,9 @@ class SecurityService:
                 idempotency_data["result"] = result
 
                 # Update with result
-                ttl = self.redis_client.ttl(f"idempotency:{key}")
+                ttl = await self.redis_client.ttl(f"idempotency:{key}")
                 if ttl > 0:
-                    self.redis_client.setex(f"idempotency:{key}", ttl, str(idempotency_data))
+                    await self.redis_client.setex(f"idempotency:{key}", ttl, str(idempotency_data))
 
         except Exception as e:
             logger.error(f"Error storing idempotency result: {e}", exc_info=True)
@@ -250,7 +245,7 @@ class SecurityService:
                 logger.error(f"Error creating secret {secret_name}: {e}", exc_info=True)
                 return False
 
-    def generate_api_key(self, tenant_id: str) -> str:
+    async def generate_api_key(self, tenant_id: str) -> str:
         """Generate API key for tenant."""
         try:
             # Create API key data
@@ -258,7 +253,7 @@ class SecurityService:
             api_key = hashlib.sha256(key_data.encode()).hexdigest()
 
             # Store in Redis with tenant mapping
-            self.redis_client.setex(f"api_key:{api_key}", 365 * 24 * 3600, tenant_id)  # 1 year TTL
+            await self.redis_client.setex(f"api_key:{api_key}", 365 * 24 * 3600, tenant_id)  # 1 year TTL
 
             return api_key
 
@@ -266,20 +261,20 @@ class SecurityService:
             logger.error(f"Error generating API key: {e}", exc_info=True)
             return str(uuid.uuid4())
 
-    def validate_api_key(self, api_key: str) -> Optional[str]:
+    async def validate_api_key(self, api_key: str) -> Optional[str]:
         """Validate API key and return tenant ID."""
         try:
-            tenant_id = self.redis_client.get(f"api_key:{api_key}")
+            tenant_id = await self.redis_client.get(f"api_key:{api_key}")
             return tenant_id
 
         except Exception as e:
             logger.error(f"Error validating API key: {e}", exc_info=True)
             return None
 
-    def revoke_api_key(self, api_key: str) -> bool:
+    async def revoke_api_key(self, api_key: str) -> bool:
         """Revoke API key."""
         try:
-            result = self.redis_client.delete(f"api_key:{api_key}")
+            result = await self.redis_client.delete(f"api_key:{api_key}")
             return result > 0
 
         except Exception as e:
@@ -321,7 +316,7 @@ class SecurityService:
             "Referrer-Policy": "strict-origin-when-cross-origin",
         }
 
-    def log_security_event(
+    async def log_security_event(
         self,
         event_type: str,
         user_id: Optional[str],
@@ -343,35 +338,35 @@ class SecurityService:
             }
 
             # Store in Redis for security monitoring as JSON string
-            self.redis_client.lpush("security_events", json.dumps(security_log))
+            await self.redis_client.lpush("security_events", json.dumps(security_log))
 
             # Keep only last 1000 events
-            self.redis_client.ltrim("security_events", 0, 999)
+            await self.redis_client.ltrim("security_events", 0, 999)
 
         except Exception as e:
             logger.error(f"Error logging security event: {e}", exc_info=True)
 
-    def get_security_events(self, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_security_events(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get recent security events."""
         try:
-            events = self.redis_client.lrange("security_events", 0, limit - 1)
+            events = await self.redis_client.lrange("security_events", 0, limit - 1)
             return [json.loads(event) for event in events]
 
         except Exception as e:
             logger.error(f"Error getting security events: {e}", exc_info=True)
             return []
 
-    def cleanup_expired_keys(self) -> int:
+    async def cleanup_expired_keys(self) -> int:
         """Clean up expired idempotency keys."""
         try:
             pattern = "idempotency:*"
-            keys = self.redis_client.keys(pattern)
+            keys = await self.redis_client.keys(pattern)
             cleaned_count = 0
 
             for key in keys:
-                ttl = self.redis_client.ttl(key)
+                ttl = await self.redis_client.ttl(key)
                 if ttl == -1:  # No expiration set
-                    self.redis_client.delete(key)
+                    await self.redis_client.delete(key)
                     cleaned_count += 1
                 elif ttl == -2:  # Key doesn't exist
                     cleaned_count += 1

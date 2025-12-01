@@ -4,21 +4,16 @@ Appointment management API routes using Firebase.
 
 import uuid
 from datetime import date, datetime, timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.api.v1.routers.auth import get_current_user_from_token, verify_tenant_access
 from app.api.v1.services.appointment import appointment_service
 from app.api.v1.services.auth import auth_service
 from app.api.v1.services.scheduling import scheduling_service
-from app.core.security import SecurityService
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
-
-
-def get_security_service() -> SecurityService:
-    """Get security service instance."""
-    return SecurityService()
 
 
 @router.post("/")
@@ -32,8 +27,10 @@ async def create_appointment(
     appointment_datetime: datetime,
     service_details: Optional[str] = None,
     duration_minutes: int = 60,
+    current_user: Dict = Depends(get_current_user_from_token),
 ):
     """Create a new appointment."""
+    verify_tenant_access(current_user, tenant_id)
     try:
         appointment = await appointment_service.create_appointment(
             tenant_id=tenant_id,
@@ -61,12 +58,13 @@ async def create_appointment(
 
 
 @router.get("/{appointment_id}")
-async def get_appointment(appointment_id: str):
+async def get_appointment(appointment_id: str, current_user: Dict = Depends(get_current_user_from_token)):
     """Get appointment by ID."""
     try:
         appointment = await appointment_service.get_appointment(appointment_id)
         if not appointment:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Appointment not found")
+        verify_tenant_access(current_user, appointment.get("tenant_id"))
 
         return appointment
 
@@ -84,8 +82,10 @@ async def list_appointments(
     end_date: Optional[date] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    current_user: Dict = Depends(get_current_user_from_token),
 ):
     """List appointments for a tenant."""
+    verify_tenant_access(current_user, tenant_id)
     try:
         # Convert date to datetime for filtering
         start_datetime = None
@@ -108,9 +108,14 @@ async def list_appointments(
 
 
 @router.put("/{appointment_id}/status")
-async def update_appointment_status(appointment_id: str, status: str, notes: Optional[str] = None):
+async def update_appointment_status(
+    appointment_id: str, status: str, notes: Optional[str] = None, current_user: Dict = Depends(get_current_user_from_token)
+):
     """Update appointment status."""
     try:
+        appointment = await appointment_service.get_appointment(appointment_id)
+        if appointment:
+            verify_tenant_access(current_user, appointment.get("tenant_id"))
         appointment = await appointment_service.update_appointment_status(appointment_id, status, notes)
 
         if not appointment:
@@ -127,9 +132,14 @@ async def update_appointment_status(appointment_id: str, status: str, notes: Opt
 
 
 @router.put("/{appointment_id}/cancel")
-async def cancel_appointment(appointment_id: str, reason: Optional[str] = None):
+async def cancel_appointment(
+    appointment_id: str, reason: Optional[str] = None, current_user: Dict = Depends(get_current_user_from_token)
+):
     """Cancel an appointment."""
     try:
+        appointment = await appointment_service.get_appointment(appointment_id)
+        if appointment:
+            verify_tenant_access(current_user, appointment.get("tenant_id"))
         appointment = await appointment_service.cancel_appointment(appointment_id, reason)
 
         if not appointment:
@@ -146,9 +156,17 @@ async def cancel_appointment(appointment_id: str, reason: Optional[str] = None):
 
 
 @router.put("/{appointment_id}/reschedule")
-async def reschedule_appointment(appointment_id: str, new_datetime: datetime, reason: Optional[str] = None):
+async def reschedule_appointment(
+    appointment_id: str,
+    new_datetime: datetime,
+    reason: Optional[str] = None,
+    current_user: Dict = Depends(get_current_user_from_token),
+):
     """Reschedule an appointment."""
     try:
+        appointment = await appointment_service.get_appointment(appointment_id)
+        if appointment:
+            verify_tenant_access(current_user, appointment.get("tenant_id"))
         appointment = await appointment_service.reschedule_appointment(appointment_id, new_datetime, reason)
 
         if not appointment:
@@ -165,9 +183,14 @@ async def reschedule_appointment(appointment_id: str, new_datetime: datetime, re
 
 
 @router.put("/{appointment_id}/complete")
-async def complete_appointment(appointment_id: str, completion_notes: Optional[str] = None):
+async def complete_appointment(
+    appointment_id: str, completion_notes: Optional[str] = None, current_user: Dict = Depends(get_current_user_from_token)
+):
     """Mark appointment as completed."""
     try:
+        appointment = await appointment_service.get_appointment(appointment_id)
+        if appointment:
+            verify_tenant_access(current_user, appointment.get("tenant_id"))
         appointment = await appointment_service.complete_appointment(appointment_id, completion_notes)
 
         if not appointment:
@@ -184,8 +207,11 @@ async def complete_appointment(appointment_id: str, completion_notes: Optional[s
 
 
 @router.get("/tenant/{tenant_id}/upcoming")
-async def get_upcoming_appointments(tenant_id: str, days_ahead: int = Query(7, ge=1, le=30)):
+async def get_upcoming_appointments(
+    tenant_id: str, days_ahead: int = Query(7, ge=1, le=30), current_user: Dict = Depends(get_current_user_from_token)
+):
     """Get upcoming appointments for a tenant."""
+    verify_tenant_access(current_user, tenant_id)
     try:
         appointments = await appointment_service.get_upcoming_appointments(tenant_id, days_ahead)
 
@@ -198,8 +224,11 @@ async def get_upcoming_appointments(tenant_id: str, days_ahead: int = Query(7, g
 
 
 @router.get("/tenant/{tenant_id}/date-range")
-async def get_appointments_by_date_range(tenant_id: str, start_date: date, end_date: date):
+async def get_appointments_by_date_range(
+    tenant_id: str, start_date: date, end_date: date, current_user: Dict = Depends(get_current_user_from_token)
+):
     """Get appointments within a date range."""
+    verify_tenant_access(current_user, tenant_id)
     try:
         start_datetime = datetime.combine(start_date, datetime.min.time())
         end_datetime = datetime.combine(end_date, datetime.max.time())
@@ -220,8 +249,14 @@ async def get_appointments_by_date_range(tenant_id: str, start_date: date, end_d
 
 
 @router.get("/tenant/{tenant_id}/available-slots")
-async def get_available_slots(tenant_id: str, target_date: date, duration_minutes: int = Query(60, ge=15, le=480)):
+async def get_available_slots(
+    tenant_id: str,
+    target_date: date,
+    duration_minutes: int = Query(60, ge=15, le=480),
+    current_user: Dict = Depends(get_current_user_from_token),
+):
     """Get available time slots for a specific date."""
+    verify_tenant_access(current_user, tenant_id)
     try:
         slots = await scheduling_service.get_available_slots_for_date(tenant_id, target_date, duration_minutes)
 
@@ -256,8 +291,10 @@ async def hold_slot(
     customer_name: str,
     customer_phone: str,
     hold_duration_minutes: int = Query(10, ge=5, le=30),
+    current_user: Dict = Depends(get_current_user_from_token),
 ):
     """Hold a time slot for a customer."""
+    verify_tenant_access(current_user, tenant_id)
     try:
         hold_id = await scheduling_service.hold_slot(
             tenant_id, slot_start, slot_end, customer_name, customer_phone, hold_duration_minutes

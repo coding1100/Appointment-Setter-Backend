@@ -27,6 +27,7 @@ from app.core.exceptions import (
     ValidationError,
 )
 from app.core.middleware import TrailingSlashMiddleware
+from app.core.utils import add_cors_headers
 
 # Configure logging
 logging.basicConfig(level=getattr(logging, LOG_LEVEL.upper()), format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -142,11 +143,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
             "details": {},
         },
     )
-    # CORS middleware should add headers automatically, but ensure they're present
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
+    return add_cors_headers(response)
 
 
 # Custom exception handlers
@@ -156,11 +153,7 @@ async def validation_error_handler(request: Request, exc: ValidationError):
     """Handle validation errors."""
     logger.warning(f"Validation error: {exc.message}", extra={"details": exc.details})
     response = JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content=exc.to_dict())
-    # CORS headers should be added by middleware, but ensure they're present
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
+    return add_cors_headers(response)
 
 
 @app.exception_handler(NotFoundError)
@@ -168,11 +161,7 @@ async def not_found_error_handler(request: Request, exc: NotFoundError):
     """Handle not found errors."""
     logger.warning(f"Resource not found: {exc.message}", extra={"details": exc.details})
     response = JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content=exc.to_dict())
-    # Ensure CORS headers are present for 404 responses
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
+    return add_cors_headers(response)
 
 
 @app.exception_handler(AuthenticationError)
@@ -182,11 +171,7 @@ async def authentication_error_handler(request: Request, exc: AuthenticationErro
     response = JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED, content=exc.to_dict(), headers={"WWW-Authenticate": "Bearer"}
     )
-    # Ensure CORS headers are present
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
+    return add_cors_headers(response)
 
 
 @app.exception_handler(AuthorizationError)
@@ -194,10 +179,7 @@ async def authorization_error_handler(request: Request, exc: AuthorizationError)
     """Handle authorization errors."""
     logger.warning(f"Authorization failed: {exc.message}")
     response = JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content=exc.to_dict())
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
+    return add_cors_headers(response)
 
 
 @app.exception_handler(ExternalServiceError)
@@ -205,10 +187,7 @@ async def external_service_error_handler(request: Request, exc: ExternalServiceE
     """Handle external service errors."""
     logger.error(f"External service error: {exc.message}", extra={"details": exc.details})
     response = JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content=exc.to_dict())
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
+    return add_cors_headers(response)
 
 
 @app.exception_handler(AppException)
@@ -216,10 +195,7 @@ async def app_exception_handler(request: Request, exc: AppException):
     """Handle generic application exceptions."""
     logger.error(f"Application error: {exc.message}", extra={"details": exc.details})
     response = JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=exc.to_dict())
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
+    return add_cors_headers(response)
 
 
 # Global exception handler for uncaught exceptions
@@ -235,11 +211,7 @@ async def global_exception_handler(request: Request, exc: Exception):
             "details": {},
         },
     )
-    # CRITICAL: Ensure CORS headers are always present, even for unexpected errors
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
+    return add_cors_headers(response)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """
-Appointment service for managing appointments and email notifications using Supabase.
+Appointment service for managing appointments and email notifications using Firebase/Firestore.
 """
 
 import logging
@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from app.api.v1.services.scheduling import SchedulingService
+from app.core.response_mappers import parse_iso_timestamp
 from app.services.email import EmailService
 from app.services.firebase import firebase_service
 
@@ -105,7 +106,10 @@ class AppointmentService:
                 continue
 
             # Date filters
-            appointment_datetime = datetime.fromisoformat(appointment["appointment_datetime"].replace("Z", "+00:00"))
+            from app.core.response_mappers import parse_iso_timestamp
+            appointment_datetime = parse_iso_timestamp(appointment["appointment_datetime"])
+            if not appointment_datetime:
+                continue
 
             if start_date and appointment_datetime < start_date:
                 continue
@@ -146,7 +150,7 @@ class AppointmentService:
             await self.email_service.send_appointment_cancellation(
                 appointment["customer_email"],
                 appointment["customer_name"],
-                datetime.fromisoformat(appointment["appointment_datetime"].replace("Z", "+00:00")),
+                parse_iso_timestamp(appointment["appointment_datetime"]) or datetime.now(timezone.utc),
                 reason,
             )
 
@@ -184,7 +188,7 @@ class AppointmentService:
             await self.email_service.send_appointment_reschedule(
                 updated_appointment["customer_email"],
                 updated_appointment["customer_name"],
-                datetime.fromisoformat(updated_appointment["appointment_datetime"].replace("Z", "+00:00")),
+                parse_iso_timestamp(updated_appointment["appointment_datetime"]) or datetime.now(timezone.utc),
                 reason,
             )
 
