@@ -29,7 +29,7 @@ class ContactCreate(BaseModel):
                 raise ValueError("Phone number must be between 10 and 15 digits")
         return v
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_at_least_one(self):
         """Ensure at least one of email or phone_number is provided."""
         if not self.email and not self.phone_number:
@@ -47,4 +47,3 @@ class ContactResponse(BaseModel):
 
     class Config:
         from_attributes = True
-
