@@ -8,6 +8,7 @@ from app.api.v1.routers import (
     agents,
     appointments,
     auth,
+    contacts,
     health,
     phone_numbers,
     tenants,
@@ -25,3 +26,4 @@ api_router.include_router(phone_numbers.router)
 api_router.include_router(appointments.router)
 api_router.include_router(voice_agent_unified.router)
 api_router.include_router(twilio_integration.router)
+api_router.include_router(contacts.router)
