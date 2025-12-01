@@ -26,7 +26,7 @@ _firebase_executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="fire
 class FirebaseService:
     """
     Optimized Firebase service that wraps blocking Firestore operations in thread pool.
-    
+
     Key Features:
     - All blocking I/O runs in thread pool (non-blocking)
     - Connection pooling for better performance
@@ -88,13 +88,13 @@ class FirebaseService:
         try:
             if not self._initialized or self.db is None:
                 return False
-            
+
             def _health_check():
                 # Simple ping query to verify connection
                 test_query = self.db.collection("_health").limit(1)
                 list(test_query.stream())  # Execute query
                 return True
-            
+
             return await self._run_in_executor(_health_check)
         except Exception as e:
             logger.error(f"Firebase health check failed: {e}")
@@ -241,7 +241,7 @@ class FirebaseService:
     ) -> List[Dict[str, Any]]:
         """
         List appointments within date range (optimized for scheduling).
-        
+
         This method is 10-100x faster than loading all appointments
         because it filters in the database instead of Python.
         """
@@ -632,7 +632,7 @@ class FirebaseService:
     async def batch_get(self, collection: str, doc_ids: List[str]) -> List[Dict[str, Any]]:
         """
         Batch get multiple documents concurrently (highly optimized).
-        
+
         This is 5-10x faster than getting documents sequentially.
         """
 

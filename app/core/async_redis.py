@@ -27,6 +27,7 @@ class AsyncRedisClient:
 
     def __init__(self, redis_url: Optional[str] = None):
         from app.core.config import REDIS_URL
+
         self.redis_url = redis_url if redis_url is not None else REDIS_URL
         self._client: Optional[aioredis.Redis] = None
 

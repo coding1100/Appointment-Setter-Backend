@@ -109,10 +109,10 @@ VOICE_METADATA: List[Dict[str, str]] = [
 def get_voice_by_id(voice_id: str) -> Optional[Dict[str, str]]:
     """
     Get voice metadata by voice_id.
-    
+
     Args:
         voice_id: ElevenLabs voice ID
-    
+
     Returns:
         Voice metadata dictionary or None if not found
     """
@@ -125,10 +125,10 @@ def get_voice_by_id(voice_id: str) -> Optional[Dict[str, str]]:
 def get_voice_preview_filename(voice_id: str) -> Optional[str]:
     """
     Get preview filename for a voice_id.
-    
+
     Args:
         voice_id: ElevenLabs voice ID
-    
+
     Returns:
         Preview filename (e.g., "rachel.mp3") or None if not found
     """
@@ -139,9 +139,8 @@ def get_voice_preview_filename(voice_id: str) -> Optional[str]:
 def get_all_voices() -> List[Dict[str, str]]:
     """
     Get all voice metadata.
-    
+
     Returns:
         List of all voice metadata dictionaries
     """
     return VOICE_METADATA.copy()
-

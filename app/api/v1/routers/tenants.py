@@ -34,6 +34,7 @@ async def create_tenant(tenant_data: TenantCreate, current_user: Dict = Depends(
         tenant = await tenant_service.create_tenant(tenant_data)
 
         from app.core.response_mappers import to_tenant_response
+
         return to_tenant_response(tenant)
 
     except Exception as e:
@@ -53,6 +54,7 @@ async def list_tenants(
         tenants = await tenant_service.list_tenants(limit, offset)
 
         from app.core.response_mappers import to_tenant_response
+
         return [to_tenant_response(tenant) for tenant in tenants]
 
     except Exception as e:
@@ -69,6 +71,7 @@ async def get_tenant(tenant_id: str, current_user: Dict = Depends(get_current_us
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
         from app.core.response_mappers import to_tenant_response
+
         return to_tenant_response(tenant)
 
     except HTTPException:
@@ -78,9 +81,7 @@ async def get_tenant(tenant_id: str, current_user: Dict = Depends(get_current_us
 
 
 @router.put("/{tenant_id}", response_model=TenantResponse)
-async def update_tenant(
-    tenant_id: str, tenant_data: TenantUpdate, current_user: Dict = Depends(get_current_user_from_token)
-):
+async def update_tenant(tenant_id: str, tenant_data: TenantUpdate, current_user: Dict = Depends(get_current_user_from_token)):
     """Update tenant."""
     verify_tenant_access(current_user, tenant_id)
     try:

@@ -8,8 +8,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from app.core.utils import add_timestamps, add_updated_timestamp, get_current_timestamp
-
 from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
 from passlib.context import CryptContext
@@ -17,6 +15,7 @@ from passlib.context import CryptContext
 from app.api.v1.schemas.auth import LoginRequest, PasswordChangeRequest, UserCreate, UserUpdate
 from app.core.async_redis import async_redis_client
 from app.core.config import JWT_ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
+from app.core.utils import add_timestamps, add_updated_timestamp, get_current_timestamp
 from app.services.firebase import firebase_service
 
 # Password hashing
@@ -211,18 +210,18 @@ class AuthService:
     async def create_user_session(self, user_id: str, refresh_token: str) -> Dict[str, Any]:
         """
         Create a user session and store it in Redis.
-        
+
         Session Storage:
         - Redis key: `session:{session_id}` - stores full session data
         - Redis key: `refresh_token:{token}` - maps refresh token to session_id for lookup
         - TTL matches refresh token expiry (JWT_REFRESH_TOKEN_EXPIRE_DAYS)
         """
         import json
-        
+
         session_id = str(uuid.uuid4())
         expires_at = datetime.now(timezone.utc) + timedelta(days=JWT_REFRESH_TOKEN_EXPIRE_DAYS)
         ttl_seconds = int(JWT_REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60)
-        
+
         session_data = {
             "id": session_id,
             "user_id": user_id,
@@ -234,59 +233,52 @@ class AuthService:
 
         try:
             # Store session data
-            await async_redis_client.setex(
-                f"session:{session_id}",
-                ttl_seconds,
-                json.dumps(session_data)
-            )
+            await async_redis_client.setex(f"session:{session_id}", ttl_seconds, json.dumps(session_data))
             # Store refresh token mapping for lookup
-            await async_redis_client.setex(
-                f"refresh_token:{refresh_token}",
-                ttl_seconds,
-                session_id
-            )
+            await async_redis_client.setex(f"refresh_token:{refresh_token}", ttl_seconds, session_id)
         except Exception as e:
             logger.error(f"Failed to store session in Redis: {e}", exc_info=True)
             logger.warning("Session storage failed, but continuing with session creation")
-        
+
         return session_data
 
     async def get_user_session(self, refresh_token: str) -> Optional[Dict[str, Any]]:
         """
         Get user session by refresh token from Redis.
-        
+
         Looks up session_id from refresh_token mapping, then fetches full session data.
         Verifies session is active and not expired.
         """
         import json
-        
+
         try:
             # Look up session_id from refresh_token
             session_id = await async_redis_client.get(f"refresh_token:{refresh_token}")
             if not session_id:
                 return None
-            
+
             # Get session data
             session_json = await async_redis_client.get(f"session:{session_id}")
             if not session_json:
                 return None
-            
+
             session_data = json.loads(session_json)
-            
+
             # Verify session is active
             if not session_data.get("is_active", False):
                 return None
-            
+
             # Check expiration
             expires_at_str = session_data.get("expires_at")
             if expires_at_str:
                 from app.core.response_mappers import parse_iso_timestamp
+
                 expires_at = parse_iso_timestamp(expires_at_str)
                 if not expires_at:
                     return None
                 if datetime.now(timezone.utc) >= expires_at:
                     return None
-            
+
             return session_data
         except Exception as e:
             logger.error(f"Failed to get session from Redis: {e}", exc_info=True)
@@ -302,18 +294,18 @@ class AuthService:
     async def revoke_user_session(self, refresh_token: str) -> bool:
         """
         Revoke a user session by deleting it from Redis.
-        
+
         Deletes both the session data and the refresh_token mapping.
         """
         try:
             # Get session_id from refresh_token mapping
             session_id = await async_redis_client.get(f"refresh_token:{refresh_token}")
-            
+
             # Delete both keys
             keys_to_delete = [f"refresh_token:{refresh_token}"]
             if session_id:
                 keys_to_delete.append(f"session:{session_id}")
-            
+
             deleted = await async_redis_client.delete(*keys_to_delete)
             return deleted > 0
         except Exception as e:

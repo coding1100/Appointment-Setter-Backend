@@ -84,7 +84,7 @@ class AgentService:
     def get_available_voices(self) -> List[VoiceOption]:
         """Get list of available ElevenLabs voices."""
         from app.core.voice_metadata import get_all_voices
-        
+
         # Use centralized voice metadata
         voice_metadata = get_all_voices()
         voices = [

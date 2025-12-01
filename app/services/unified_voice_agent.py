@@ -809,7 +809,7 @@ Business: {business_name}"""
 
                 logger.info(f"Initiated Twilio call: {call.sid}")
                 return call.sid
-            
+
             # Run Twilio operation in thread pool
             return await asyncio.to_thread(_initiate_call_sync)
 
@@ -828,11 +828,12 @@ Business: {business_name}"""
                     logger.error(f"Failed to decrypt auth_token: {e}")
                     return
             if twilio_integration:
+
                 def _hangup_call_sync():
                     twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
                     twilio_client.calls(call_sid).update(status="completed")
                     logger.info(f"Hung up Twilio call: {call_sid}")
-                
+
                 await asyncio.to_thread(_hangup_call_sync)
         except Exception as e:
             logger.error(f"Error hanging up call: {e}")

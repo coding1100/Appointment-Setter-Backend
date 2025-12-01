@@ -4,7 +4,6 @@ Shared validation functions for schemas and services.
 
 from typing import List
 
-
 # Service type constants
 VALID_SERVICE_TYPES = ["Home Services", "Plumbing", "Electrician", "Painter", "Carpenter", "Maids"]
 
@@ -12,13 +11,13 @@ VALID_SERVICE_TYPES = ["Home Services", "Plumbing", "Electrician", "Painter", "C
 def validate_service_type(service_type: str) -> str:
     """
     Validate service type.
-    
+
     Args:
         service_type: Service type to validate
-        
+
     Returns:
         Validated service type
-        
+
     Raises:
         ValueError: If service type is not valid
     """
@@ -30,14 +29,14 @@ def validate_service_type(service_type: str) -> str:
 def validate_password(password: str, field_name: str = "Password") -> str:
     """
     Validate password strength.
-    
+
     Args:
         password: Password to validate
         field_name: Field name for error messages (default: "Password")
-        
+
     Returns:
         Validated password
-        
+
     Raises:
         ValueError: If password doesn't meet requirements
     """
@@ -52,4 +51,3 @@ def validate_password(password: str, field_name: str = "Password") -> str:
     if not any(c.isdigit() for c in password):
         raise ValueError(f"{field_name} must contain at least one digit")
     return password
-

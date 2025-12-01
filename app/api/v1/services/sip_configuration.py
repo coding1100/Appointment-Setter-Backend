@@ -379,13 +379,13 @@ class SIPConfigurationService:
             # Required: TWILIO_WEBHOOK_BASE_URL must be set in environment variables
             # Expected paths: /api/v1/voice-agent/twilio/webhook and /api/v1/voice-agent/twilio/status
             from app.core.config import TWILIO_WEBHOOK_BASE_URL
-            
+
             if not TWILIO_WEBHOOK_BASE_URL:
                 raise ValueError(
                     "TWILIO_WEBHOOK_BASE_URL environment variable is required for webhook configuration. "
                     "Please set it to your public API base URL (e.g., https://your-domain.com)"
                 )
-            
+
             base_url = TWILIO_WEBHOOK_BASE_URL.rstrip("/")
             webhook_url = f"{base_url}/api/v1/voice-agent/twilio/webhook"
             status_callback_url = f"{base_url}/api/v1/voice-agent/twilio/status"
@@ -417,7 +417,8 @@ class SIPConfigurationService:
 
                 phone_number_resource = incoming_numbers[0]
                 logger.info(
-                    f"Found Twilio phone number: SID={phone_number_resource.sid}, " f"Number={phone_number_resource.phone_number}"
+                    f"Found Twilio phone number: SID={phone_number_resource.sid}, "
+                    f"Number={phone_number_resource.phone_number}"
                 )
 
                 # ALWAYS update webhook configuration to ensure it's correct
@@ -430,7 +431,7 @@ class SIPConfigurationService:
                 )
 
                 return phone_number_resource
-            
+
             # Run Twilio operations in thread pool
             phone_number_resource = await _run_twilio_sync(_configure_webhook_sync)
 

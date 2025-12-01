@@ -18,37 +18,39 @@ class PhoneNumberService:
         """Initialize phone number service."""
         pass
 
-    async def _validate_agent_for_tenant(self, agent_id: str, tenant_id: str, agent: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _validate_agent_for_tenant(
+        self, agent_id: str, tenant_id: str, agent: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
         Validate agent exists, belongs to tenant, and has required fields.
-        
+
         Args:
             agent_id: Agent identifier
             tenant_id: Tenant identifier
             agent: Optional pre-fetched agent data
-            
+
         Returns:
             Agent data dictionary
-            
+
         Raises:
             ValueError: If validation fails
         """
         if not agent:
             agent = await firebase_service.get_agent(agent_id)
-        
+
         if not agent:
             raise ValueError(f"Agent {agent_id} not found")
-        
+
         if agent.get("tenant_id") != tenant_id:
             raise ValueError(f"Agent {agent_id} does not belong to this tenant")
-        
+
         # Verify agent has service_type set (required field)
         if not agent.get("service_type"):
             raise ValueError(
                 f"Agent {agent_id} (name: {agent.get('name')}) has no service_type set. "
                 f"Please configure the agent's service_type before assigning a phone number."
             )
-        
+
         return agent
 
     async def create_phone_number(self, tenant_id: str, phone_data: PhoneNumberCreate) -> Dict[str, Any]:
@@ -148,6 +150,7 @@ class PhoneNumberService:
 
         # Add updated_at timestamp
         from app.core.utils import add_updated_timestamp
+
         add_updated_timestamp(update_data)
 
         return await firebase_service.update_phone_number(phone_id, update_data)

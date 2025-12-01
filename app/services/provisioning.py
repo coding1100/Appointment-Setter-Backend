@@ -292,7 +292,7 @@ class ProvisioningService:
                     emergency_calling_enabled=False,
                 )
                 return sip_domain
-            
+
             # Run Twilio operation in thread pool
             sip_domain = await asyncio.to_thread(_create_sip_domain_sync)
 
@@ -344,7 +344,7 @@ class ProvisioningService:
                     status_callback_method="POST",
                 )
                 return phone_number_resource
-            
+
             # Run Twilio operation in thread pool
             phone_number_resource = await asyncio.to_thread(_configure_phone_number_sync)
 
@@ -381,7 +381,7 @@ class ProvisioningService:
                     raise ValueError(f"SIP domain {sip_domain_name} not found")
 
                 return sip_domains[0]
-            
+
             # Run Twilio operation in thread pool
             sip_domain = await asyncio.to_thread(_get_sip_domain_sync)
 
@@ -434,12 +434,13 @@ class ProvisioningService:
 
             # Test Twilio connectivity
             try:
+
                 def _test_twilio_connectivity_sync():
                     twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
                     # Verify account is active
                     account = twilio_client.api.accounts(twilio_integration["account_sid"]).fetch()
                     return account
-                
+
                 account = await asyncio.to_thread(_test_twilio_connectivity_sync)
                 if account.status != "active":
                     return {

@@ -6,11 +6,11 @@ Handles conversation flow, slot filling, and confirmation.
 import json
 import uuid
 from dataclasses import asdict, dataclass
-from app.core.utils import get_current_timestamp
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from app.core.prompts import prompt_map
+from app.core.utils import get_current_timestamp
 from app.services.firebase import firebase_service
 
 
@@ -95,9 +95,7 @@ class DialogManager:
     async def process_user_input(self, context: DialogContext, user_input: str) -> Dict[str, Any]:
         """Process user input and return response."""
         # Add user input to conversation history
-        context.conversation_history.append(
-            {"role": "user", "message": user_input, "timestamp": get_current_timestamp()}
-        )
+        context.conversation_history.append({"role": "user", "message": user_input, "timestamp": get_current_timestamp()})
 
         # Process based on current state
         if context.current_state == DialogState.GREETING:

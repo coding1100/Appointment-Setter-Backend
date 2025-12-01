@@ -21,16 +21,16 @@ def parse_iso_timestamp(ts: Optional[str]) -> Optional[datetime]:
     """
     Parse ISO timestamp string to datetime object.
     Handles both formats: with "Z" suffix and without.
-    
+
     Args:
         ts: ISO timestamp string (e.g., "2024-01-01T00:00:00Z" or "2024-01-01T00:00:00+00:00")
-    
+
     Returns:
         datetime object or None if input is None/empty
     """
     if not ts:
         return None
-    
+
     try:
         # Replace "Z" with "+00:00" for timezone-aware parsing
         normalized_ts = ts.replace("Z", "+00:00")
@@ -50,16 +50,16 @@ def to_user_response(user_dict: Dict[str, Any]) -> UserResponse:
         created_at = parse_iso_timestamp(user_dict.get("created_at"))
         updated_at = parse_iso_timestamp(user_dict.get("updated_at"))
         last_login = parse_iso_timestamp(user_dict.get("last_login"))
-        
+
         # Convert UUID strings to UUID objects
         user_id = user_dict.get("id")
         if isinstance(user_id, str):
             user_id = UUID(user_id)
-        
+
         tenant_id = user_dict.get("tenant_id")
         if tenant_id and isinstance(tenant_id, str):
             tenant_id = UUID(tenant_id)
-        
+
         return UserResponse(
             id=user_id,
             email=user_dict.get("email", ""),
@@ -88,12 +88,12 @@ def to_tenant_response(tenant_dict: Dict[str, Any]) -> TenantResponse:
         # Parse timestamps
         created_at = parse_iso_timestamp(tenant_dict.get("created_at"))
         updated_at = parse_iso_timestamp(tenant_dict.get("updated_at"))
-        
+
         # Convert UUID strings to UUID objects
         tenant_id = tenant_dict.get("id")
         if isinstance(tenant_id, str):
             tenant_id = UUID(tenant_id)
-        
+
         return TenantResponse(
             id=tenant_id,
             name=tenant_dict.get("name", ""),
@@ -149,4 +149,3 @@ def to_phone_number_response(phone_dict: Dict[str, Any]) -> PhoneNumberResponse:
     except Exception as e:
         logger.error(f"Error converting phone dict to PhoneNumberResponse: {e}", exc_info=True)
         raise
-

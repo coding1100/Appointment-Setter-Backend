@@ -5,8 +5,9 @@ This helps prevent slow queries by pre-warming connections.
 
 import asyncio
 import logging
-from app.core.utils import get_current_timestamp
 from typing import Optional
+
+from app.core.utils import get_current_timestamp
 
 # Configure logging
 logger = logging.getLogger(__name__)

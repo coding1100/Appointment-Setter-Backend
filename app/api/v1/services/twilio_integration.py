@@ -46,11 +46,11 @@ class TwilioIntegrationService:
             # Wrap all Twilio operations in thread pool to avoid blocking event loop
             def _test_credentials_sync():
                 client = Client(credentials.account_sid, credentials.auth_token)
-                
+
                 # Try to fetch account information (works for production accounts only)
                 is_test_account = False
                 account_info = None
-                
+
                 try:
                     account = client.api.accounts(credentials.account_sid).fetch()
                     account_info = {
@@ -161,7 +161,7 @@ class TwilioIntegrationService:
                     account_info=account_info,
                     is_test_account=is_test_account,
                 )
-            
+
             # Run Twilio operations in thread pool
             return await _run_twilio_sync(_test_credentials_sync)
 
@@ -225,10 +225,11 @@ class TwilioIntegrationService:
 
             # Store in Firebase
             result = await firebase_service.create_twilio_integration(integration_data)
-            
+
             # Invalidate cache on create
             if result:
                 from app.core.cache import invalidate_twilio_integration_cache
+
                 await invalidate_twilio_integration_cache(tenant_id)
 
             # Configure webhook URL on Twilio (only if phone number provided)
@@ -306,10 +307,11 @@ class TwilioIntegrationService:
 
             # Update in Firebase
             result = await firebase_service.update_twilio_integration(tenant_id, update_data)
-            
+
             # Invalidate cache on update
             if result:
                 from app.core.cache import invalidate_twilio_integration_cache
+
                 await invalidate_twilio_integration_cache(tenant_id)
 
             # Update webhook configuration on Twilio (only if phone number provided)
@@ -329,7 +331,7 @@ class TwilioIntegrationService:
     async def get_integration(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Get Twilio integration for a tenant with decrypted auth_token (with caching)."""
         from app.core.cache import get_cached_twilio_integration, set_cached_twilio_integration
-        
+
         # Check cache first
         cached_integration = await get_cached_twilio_integration(tenant_id)
         if cached_integration:
@@ -340,7 +342,7 @@ class TwilioIntegrationService:
             if integration:
                 # Store in cache (with encrypted auth_token)
                 await set_cached_twilio_integration(tenant_id, integration)
-        
+
         # Decrypt auth_token before returning (whether from cache or Firebase)
         if integration and "auth_token" in integration:
             # Decrypt auth_token before returning
@@ -366,10 +368,11 @@ class TwilioIntegrationService:
 
             # Delete from Firebase
             result = await firebase_service.delete_twilio_integration(tenant_id)
-            
+
             # Invalidate cache on delete
             if result is not None:
                 from app.core.cache import invalidate_twilio_integration_cache
+
                 await invalidate_twilio_integration_cache(tenant_id)
 
             return result is not None
@@ -383,6 +386,7 @@ class TwilioIntegrationService:
     ):
         """Configure webhook URL on Twilio phone number."""
         try:
+
             def _configure_webhook_sync():
                 client = Client(account_sid, auth_token)
 
@@ -399,7 +403,7 @@ class TwilioIntegrationService:
                             status_callback_method="POST",
                         )
                         break
-            
+
             await _run_twilio_sync(_configure_webhook_sync)
 
         except Exception as e:
@@ -409,6 +413,7 @@ class TwilioIntegrationService:
     async def _remove_webhook(self, account_sid: str, auth_token: str, phone_number: str):
         """Remove webhook configuration from Twilio phone number."""
         try:
+
             def _remove_webhook_sync():
                 client = Client(account_sid, auth_token)
 
@@ -420,7 +425,7 @@ class TwilioIntegrationService:
                         # Remove webhook URLs
                         number.update(voice_url="", voice_method="POST", status_callback="", status_callback_method="POST")
                         break
-            
+
             await _run_twilio_sync(_remove_webhook_sync)
 
         except Exception as e:
@@ -430,6 +435,7 @@ class TwilioIntegrationService:
     async def get_available_phone_numbers(self, account_sid: str, auth_token: str) -> List[Dict[str, Any]]:
         """Get available phone numbers from Twilio account."""
         try:
+
             def _get_available_phone_numbers_sync():
                 client = Client(account_sid, auth_token)
 
@@ -455,7 +461,7 @@ class TwilioIntegrationService:
                     )
 
                 return phone_numbers
-            
+
             return await _run_twilio_sync(_get_available_phone_numbers_sync)
 
         except TwilioException as e:
@@ -510,6 +516,7 @@ class TwilioIntegrationService:
         number_type can be 'local' or 'tollfree'.
         """
         try:
+
             def _search_available_numbers_sync():
                 client = Client(account_sid, auth_token)
 
@@ -535,7 +542,7 @@ class TwilioIntegrationService:
                     )
 
                 return numbers
-            
+
             return await _run_twilio_sync(_search_available_numbers_sync)
         except TwilioException as e:
             logger.error(f"Twilio auth/permission error while searching numbers: {e}", exc_info=True)
@@ -594,9 +601,9 @@ class TwilioIntegrationService:
                     )
                 except Exception as e:
                     logger.warning(f"Unexpected error configuring webhooks: {e}")
-                
+
                 return incoming
-            
+
             # Run Twilio purchase operation in thread pool
             incoming = await _run_twilio_sync(_purchase_phone_number_sync)
 

@@ -67,7 +67,9 @@ class SecurityService:
         else:
             self.secrets_manager = None
 
-    async def check_rate_limit(self, identifier: str, limit: int, window_seconds: int, operation: str = "default") -> RateLimitInfo:
+    async def check_rate_limit(
+        self, identifier: str, limit: int, window_seconds: int, operation: str = "default"
+    ) -> RateLimitInfo:
         """Check rate limit for an identifier."""
         try:
             key = f"rate_limit:{operation}:{identifier}"

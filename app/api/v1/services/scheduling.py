@@ -226,16 +226,14 @@ class SchedulingService:
             query_end = (appointment_end + timedelta(days=buffer_days)).isoformat()
 
             existing_appointments = await firebase_service.list_appointments_by_date_range(
-                tenant_id=tenant_id,
-                start_date=query_start,
-                end_date=query_end,
-                statuses=["scheduled", "confirmed"]
+                tenant_id=tenant_id, start_date=query_start, end_date=query_end, statuses=["scheduled", "confirmed"]
             )
 
             # Check for overlaps with 15-minute buffer (consistent with generate_available_slots)
             buffer_minutes = 15
             for appointment in existing_appointments:
                 from app.core.response_mappers import parse_iso_timestamp
+
                 existing_start = parse_iso_timestamp(appointment["appointment_datetime"])
                 if not existing_start:
                     continue
@@ -243,8 +241,10 @@ class SchedulingService:
 
                 # Check for overlap with buffer (consistent with slot generation logic)
                 # Add buffer to both start and end times
-                if (appointment_datetime < existing_end + timedelta(minutes=buffer_minutes) and 
-                    appointment_end + timedelta(minutes=buffer_minutes) > existing_start):
+                if (
+                    appointment_datetime < existing_end + timedelta(minutes=buffer_minutes)
+                    and appointment_end + timedelta(minutes=buffer_minutes) > existing_start
+                ):
                     return False, f"Time slot conflicts with existing appointment"
 
             return True, None
@@ -273,6 +273,7 @@ class SchedulingService:
                 try:
                     hold_dict = json.loads(hold_data)
                     from app.core.response_mappers import parse_iso_timestamp
+
                     expires_at = parse_iso_timestamp(hold_dict["expires_at"])
                     if not expires_at:
                         continue

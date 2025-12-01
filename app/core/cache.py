@@ -21,7 +21,7 @@ AGENT_CACHE_TTL = 180  # 3 minutes
 async def get_cached_tenant(tenant_id: str) -> Optional[Dict[str, Any]]:
     """
     Get tenant from cache, or None if not cached.
-    
+
     Cache key: cache:tenant:{tenant_id}
     TTL: 5 minutes
     """
@@ -39,7 +39,7 @@ async def get_cached_tenant(tenant_id: str) -> Optional[Dict[str, Any]]:
 async def set_cached_tenant(tenant_id: str, tenant_data: Dict[str, Any]) -> None:
     """
     Store tenant in cache.
-    
+
     Cache key: cache:tenant:{tenant_id}
     TTL: 5 minutes
     """
@@ -53,7 +53,7 @@ async def set_cached_tenant(tenant_id: str, tenant_data: Dict[str, Any]) -> None
 async def invalidate_tenant_cache(tenant_id: str) -> None:
     """
     Invalidate tenant cache (delete from cache).
-    
+
     Also invalidates related caches (business_config, agent_settings).
     """
     try:
@@ -71,7 +71,7 @@ async def invalidate_tenant_cache(tenant_id: str) -> None:
 async def get_cached_business_config(tenant_id: str) -> Optional[Dict[str, Any]]:
     """
     Get business config from cache, or None if not cached.
-    
+
     Cache key: cache:business_config:{tenant_id}
     TTL: 5 minutes
     """
@@ -89,7 +89,7 @@ async def get_cached_business_config(tenant_id: str) -> Optional[Dict[str, Any]]
 async def set_cached_business_config(tenant_id: str, business_config: Dict[str, Any]) -> None:
     """
     Store business config in cache.
-    
+
     Cache key: cache:business_config:{tenant_id}
     TTL: 5 minutes
     """
@@ -103,7 +103,7 @@ async def set_cached_business_config(tenant_id: str, business_config: Dict[str, 
 async def get_cached_agent_settings(tenant_id: str) -> Optional[Dict[str, Any]]:
     """
     Get agent settings from cache, or None if not cached.
-    
+
     Cache key: cache:agent_settings:{tenant_id}
     TTL: 5 minutes
     """
@@ -121,7 +121,7 @@ async def get_cached_agent_settings(tenant_id: str) -> Optional[Dict[str, Any]]:
 async def set_cached_agent_settings(tenant_id: str, agent_settings: Dict[str, Any]) -> None:
     """
     Store agent settings in cache.
-    
+
     Cache key: cache:agent_settings:{tenant_id}
     TTL: 5 minutes
     """
@@ -135,9 +135,9 @@ async def set_cached_agent_settings(tenant_id: str, agent_settings: Dict[str, An
 async def get_cached_twilio_integration(tenant_id: str) -> Optional[Dict[str, Any]]:
     """
     Get Twilio integration from cache, or None if not cached.
-    
+
     Note: This does NOT decrypt auth_token. Decryption should be done after cache retrieval.
-    
+
     Cache key: cache:twilio_integration:{tenant_id}
     TTL: 5 minutes
     """
@@ -155,9 +155,9 @@ async def get_cached_twilio_integration(tenant_id: str) -> Optional[Dict[str, An
 async def set_cached_twilio_integration(tenant_id: str, integration_data: Dict[str, Any]) -> None:
     """
     Store Twilio integration in cache.
-    
+
     Note: Store encrypted auth_token as-is. Decryption happens on retrieval.
-    
+
     Cache key: cache:twilio_integration:{tenant_id}
     TTL: 5 minutes
     """
@@ -177,4 +177,3 @@ async def invalidate_twilio_integration_cache(tenant_id: str) -> None:
         await async_redis_client.delete(cache_key)
     except Exception as e:
         logger.warning(f"Error invalidating Twilio integration cache for {tenant_id}: {e}")
-

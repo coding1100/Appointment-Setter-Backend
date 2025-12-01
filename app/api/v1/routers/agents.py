@@ -30,6 +30,7 @@ async def create_agent(
     verify_tenant_access(current_user, tenant_id)
     agent = await agent_service.create_agent(tenant_id, agent_data)
     from app.core.response_mappers import to_agent_response
+
     return to_agent_response(agent)
 
 
@@ -43,6 +44,7 @@ async def list_agents(tenant_id: str, current_user: Dict = Depends(get_current_u
     verify_tenant_access(current_user, tenant_id)
     agents = await agent_service.list_agents_by_tenant(tenant_id)
     from app.core.response_mappers import to_agent_response
+
     return [to_agent_response(agent) for agent in agents]
 
 
@@ -58,14 +60,13 @@ async def get_agent(agent_id: str, current_user: Dict = Depends(get_current_user
     if agent:
         verify_tenant_access(current_user, agent.get("tenant_id"))
     from app.core.response_mappers import to_agent_response
+
     return to_agent_response(agent)
 
 
 @router.put("/{agent_id}", response_model=AgentResponse)
 @handle_router_errors(not_found_message="Agent not found", operation_name="update agent")
-async def update_agent(
-    agent_id: str, agent_data: AgentUpdate, current_user: Dict = Depends(get_current_user_from_token)
-):
+async def update_agent(agent_id: str, agent_data: AgentUpdate, current_user: Dict = Depends(get_current_user_from_token)):
     """
     Update an agent.
 
@@ -77,6 +78,7 @@ async def update_agent(
         verify_tenant_access(current_user, agent.get("tenant_id"))
     agent = await agent_service.update_agent(agent_id, agent_data)
     from app.core.response_mappers import to_agent_response
+
     return to_agent_response(agent)
 
 
@@ -174,7 +176,7 @@ async def get_voice_preview_url(voice_id: str):
     try:
         # Use centralized voice metadata
         from app.core.voice_metadata import get_voice_preview_filename
-        
+
         filename = get_voice_preview_filename(voice_id)
 
         if not filename:

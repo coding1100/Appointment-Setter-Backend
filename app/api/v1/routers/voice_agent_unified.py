@@ -43,6 +43,7 @@ def get_client_ip(request: Request) -> str:
         return request.client.host
     return "unknown"
 
+
 # Request/Response Models
 
 
@@ -112,7 +113,7 @@ async def start_session(request: StartSessionRequest, http_request: Request):
     if security_service:
         client_ip = get_client_ip(http_request)
         await security_service.enforce_rate_limit(client_ip, limit=20, window_seconds=60, operation="voice_start_session")
-    
+
     try:
         # Validate request
         if not request.test_mode and not request.phone_number:
@@ -347,7 +348,7 @@ async def twilio_webhook(request: Request):
     if security_service:
         client_ip = get_client_ip(request)
         await security_service.enforce_rate_limit(client_ip, limit=100, window_seconds=60, operation="twilio_webhook")
-    
+
     try:
         form_data = await request.form()
         form_dict = dict(form_data)
@@ -388,7 +389,7 @@ async def twilio_status_callback(request: Request):
     Twilio status callback endpoint.
 
     This is called by Twilio to report call status changes.
-    
+
     Security: Validates X-Twilio-Signature header to ensure request is from Twilio.
     """
     # Rate limiting: 100 requests per minute per IP (higher for legitimate webhook traffic)
@@ -396,7 +397,7 @@ async def twilio_status_callback(request: Request):
     if security_service:
         client_ip = get_client_ip(request)
         await security_service.enforce_rate_limit(client_ip, limit=100, window_seconds=60, operation="twilio_status")
-    
+
     try:
         form_data = await request.form()
         form_dict = dict(form_data)

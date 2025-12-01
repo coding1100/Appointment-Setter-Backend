@@ -31,6 +31,7 @@ async def create_phone_number(
     try:
         phone = await phone_number_service.create_phone_number(tenant_id, phone_data)
         from app.core.response_mappers import to_phone_number_response
+
         return to_phone_number_response(phone)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -51,6 +52,7 @@ async def list_phone_numbers(tenant_id: str, current_user: Dict = Depends(get_cu
     try:
         phones = await phone_number_service.list_phones_by_tenant(tenant_id)
         from app.core.response_mappers import to_phone_number_response
+
         return [to_phone_number_response(phone) for phone in phones]
     except Exception as e:
         raise HTTPException(
@@ -71,6 +73,7 @@ async def get_phone_number(phone_id: str, current_user: Dict = Depends(get_curre
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Phone number not found")
         verify_tenant_access(current_user, phone.get("tenant_id"))
         from app.core.response_mappers import to_phone_number_response
+
         return to_phone_number_response(phone)
     except HTTPException:
         raise
@@ -91,6 +94,7 @@ async def get_phone_by_agent(agent_id: str, current_user: Dict = Depends(get_cur
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No phone number assigned to this agent")
         verify_tenant_access(current_user, phone.get("tenant_id"))
         from app.core.response_mappers import to_phone_number_response
+
         return to_phone_number_response(phone)
     except HTTPException:
         raise
@@ -118,6 +122,7 @@ async def update_phone_number(
         if not phone:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Phone number not found")
         from app.core.response_mappers import to_phone_number_response
+
         return to_phone_number_response(phone)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -222,6 +227,7 @@ async def assign_phone_to_agent(
             )
 
         from app.core.response_mappers import to_phone_number_response
+
         return to_phone_number_response(phone)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

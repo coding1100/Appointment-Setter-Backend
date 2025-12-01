@@ -9,7 +9,6 @@ from uuid import UUID
 from pydantic import BaseModel, EmailStr, Field, validator
 
 from app.core.validators import validate_password
-
 from app.models.auth import UserRole, UserStatus
 
 

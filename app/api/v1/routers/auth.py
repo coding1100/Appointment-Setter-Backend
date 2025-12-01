@@ -83,28 +83,28 @@ async def get_current_user_from_token(authorization: str = Header(None)) -> Dict
 def verify_tenant_access(user: Dict[str, Any], tenant_id: str) -> None:
     """
     Verify that the authenticated user has access to the specified tenant.
-    
+
     Tenant Binding Model:
     - Users have a `tenant_id` field that binds them to a tenant
     - Users with role 'admin' can access any tenant
     - Regular users can only access their own tenant (matching `tenant_id`)
-    
+
     Raises HTTPException if access is denied.
     """
     user_role = user.get("role", "user")
     user_tenant_id = user.get("tenant_id")
-    
+
     # Admins can access any tenant
     if user_role == "admin":
         return
-    
+
     # Users must belong to the tenant they're trying to access
     if user_tenant_id != tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access denied: You do not have permission to access tenant {tenant_id}",
         )
-    
+
     # Ensure user has a tenant_id
     if not user_tenant_id:
         raise HTTPException(
@@ -116,7 +116,7 @@ def verify_tenant_access(user: Dict[str, Any], tenant_id: str) -> None:
 def require_admin_role(user: Dict[str, Any]) -> None:
     """
     Verify that the authenticated user has admin role.
-    
+
     Raises HTTPException if user is not an admin.
     """
     user_role = user.get("role", "user")
@@ -137,16 +137,16 @@ def get_client_ip(request: Request) -> str:
     if forwarded_for:
         # X-Forwarded-For can contain multiple IPs, take the first one
         return forwarded_for.split(",")[0].strip()
-    
+
     # Check X-Real-IP header (common in Nginx)
     real_ip = request.headers.get("X-Real-IP")
     if real_ip:
         return real_ip.strip()
-    
+
     # Fallback to direct client IP
     if request.client:
         return request.client.host
-    
+
     return "unknown"
 
 
@@ -157,7 +157,7 @@ async def register_user(user_data: UserCreate, request: Request):
     security_service = get_security_service()
     client_ip = get_client_ip(request)
     await security_service.enforce_rate_limit(client_ip, limit=10, window_seconds=60, operation="auth_register")
-    
+
     try:
         # Check if user already exists
         existing_user = await auth_service.get_user_by_email(user_data.email)
@@ -168,6 +168,7 @@ async def register_user(user_data: UserCreate, request: Request):
         user = await auth_service.create_user(user_data)
 
         from app.core.response_mappers import to_user_response
+
         return to_user_response(user)
 
     except HTTPException:
@@ -183,7 +184,7 @@ async def login_user(login_data: UserLogin, request: Request):
     security_service = get_security_service()
     client_ip = get_client_ip(request)
     await security_service.enforce_rate_limit(client_ip, limit=10, window_seconds=60, operation="auth_login")
-    
+
     try:
         # Log the login attempt
         import logging
@@ -204,6 +205,7 @@ async def login_user(login_data: UserLogin, request: Request):
         await auth_service.create_user_session(user.get("id", ""), refresh_token)
 
         from app.core.response_mappers import to_user_response
+
         return TokenResponse(
             access_token=access_token,
             refresh_token=refresh_token,
@@ -222,7 +224,7 @@ async def login_user(login_data: UserLogin, request: Request):
 async def refresh_token(refresh_token: str, request: Request):
     """
     Refresh access token using refresh token.
-    
+
     Uses session lookup from Redis to validate the refresh token.
     If session is valid, creates new tokens and updates the session.
     """
@@ -230,7 +232,7 @@ async def refresh_token(refresh_token: str, request: Request):
     security_service = get_security_service()
     client_ip = get_client_ip(request)
     await security_service.enforce_rate_limit(client_ip, limit=10, window_seconds=60, operation="auth_refresh")
-    
+
     try:
         # Get user session from Redis (validates session is active and not expired)
         session = await auth_service.get_user_session(refresh_token)
@@ -274,7 +276,7 @@ async def refresh_token(refresh_token: str, request: Request):
 async def logout_user(logout_data: LogoutRequest, request: Request):
     """
     Logout user and invalidate refresh token.
-    
+
     Revokes the session in Redis, making the refresh token unusable.
     """
     try:
@@ -294,6 +296,7 @@ async def get_current_user(current_user: Dict[str, Any] = Depends(get_current_us
     """Get current user information."""
     try:
         from app.core.response_mappers import to_user_response
+
         return to_user_response(current_user)
 
     except Exception as e:
@@ -353,6 +356,7 @@ async def list_users(request: Request, limit: int = 100, offset: int = 0):
 
         # Convert to UserResponse objects
         from app.core.response_mappers import to_user_response
+
         return [to_user_response(user) for user in users]
 
     except Exception as e:
@@ -368,6 +372,7 @@ async def get_user(user_id: str, request: Request):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
         from app.core.response_mappers import to_user_response
+
         return to_user_response(user)
 
     except HTTPException:
@@ -389,6 +394,7 @@ async def update_user(user_id: str, user_data: UserUpdate, request: Request):
         updated_user = await auth_service.update_user(user_id, user_data)
 
         from app.core.response_mappers import to_user_response
+
         return to_user_response(updated_user)
 
     except HTTPException:
