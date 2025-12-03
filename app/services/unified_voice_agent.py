@@ -734,6 +734,18 @@ Business: {business_name}"""
                 await async_redis_client.set(config_key, config_json, ttl=3600)  # Expire in 1 hour
                 logger.info(f"[REDIS STORE] ✓ Successfully stored room configuration in Redis for room: {room_name}")
 
+                # Also store with fallback key (without call_sid suffix) in case LiveKit dispatch rule creates room differently
+                # Pattern: inbound-{caller_number}-{call_sid[-8:]} -> also store as inbound-{caller_number}
+                if room_name.startswith("inbound-") and "-" in room_name[8:]:  # Check if it has the call_sid suffix pattern
+                    # Extract caller number part (everything after "inbound-" and before the last "-")
+                    parts = room_name.split("-")
+                    if len(parts) >= 3:  # inbound-{caller_number}-{call_sid}
+                        caller_number = parts[1]  # The caller number part
+                        fallback_room_name = f"inbound-{caller_number}"
+                        fallback_config_key = f"livekit:room_config:{fallback_room_name}"
+                        await async_redis_client.set(fallback_config_key, config_json, ttl=3600)
+                        logger.info(f"[REDIS STORE] Also stored config with fallback key: {fallback_config_key}")
+
                 # Verify storage by reading back
                 verify_data = await async_redis_client.get(config_key)
                 if verify_data:
