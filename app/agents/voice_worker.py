@@ -132,7 +132,34 @@ async def get_agent_config(room_name: str) -> Optional[Dict[str, Any]]:
             logger.info(f"  - agent_data: {config.get('agent_data')}")
             return config
         else:
-            logger.warning(f"[WORKER REDIS] ✗ No agent configuration found for room {room_name}, using defaults")
+            # Try fallback lookup: if room_name is just "inbound-{caller_number}", 
+            # it might have been created by dispatch rule differently than webhook expected
+            # Also try if room_name has call_sid suffix, try without it
+            logger.warning(f"[WORKER REDIS] ✗ No agent configuration found for room {room_name}, trying fallback lookup...")
+            
+            # Fallback 1: If room_name is "inbound-{caller_number}", it's already the fallback format
+            # Fallback 2: If room_name is "inbound-{caller_number}-{call_sid}", try "inbound-{caller_number}"
+            if room_name.startswith("inbound-"):
+                parts = room_name.split("-")
+                if len(parts) >= 2:
+                    caller_number = parts[1]
+                    # Try the other format (if current is with call_sid, try without; if without, try with common patterns)
+                    fallback_room_name = f"inbound-{caller_number}"
+                    if fallback_room_name != room_name:  # Only try if different
+                        fallback_config_key = f"livekit:room_config:{fallback_room_name}"
+                        logger.info(f"[WORKER REDIS] Trying fallback key: {fallback_config_key}")
+                        fallback_config_data = await async_redis_client.get(fallback_config_key)
+                        if fallback_config_data:
+                            logger.info(f"[WORKER REDIS] ✓ Found config using fallback key: {fallback_config_key}")
+                            config = json.loads(fallback_config_data)
+                            logger.info(f"[WORKER REDIS] Config details:")
+                            logger.info(f"  - agent_id: {config.get('agent_id')}")
+                            logger.info(f"  - voice_id: {config.get('voice_id')}")
+                            logger.info(f"  - service_type: {config.get('service_type')}")
+                            logger.info(f"  - agent_data: {config.get('agent_data')}")
+                            return config
+            
+            logger.warning(f"[WORKER REDIS] ✗ No agent configuration found for room {room_name} (tried fallback), using defaults")
             return None
     except Exception as e:
         logger.error(f"[WORKER REDIS] ✗ Error retrieving agent config from Redis: {e}", exc_info=True)
