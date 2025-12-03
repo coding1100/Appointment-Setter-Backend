@@ -30,17 +30,19 @@ TTS_CACHE: Dict[str, elevenlabs.TTS] = {}
 DEFAULT_TTS_CACHE_KEY = "__default__"
 MAX_HISTORY_LOG_LINES = 40
 
+VAD_SETTINGS = {
+    "min_speech_duration": 0.1,      # seconds
+    "min_silence_duration": 0.5,     # seconds
+    "prefix_padding_duration": 0.1,  # seconds
+    "activation_threshold": 0.5,
+}
+
 
 def prewarm_vad():
     """Pre-warm VAD model to prevent cold start delays."""
     try:
         logger.info("Pre-warming VAD model...")
-        vad = silero.VAD.load(
-            min_speech_duration=0.25,
-            min_silence_duration=0.1,
-            threshold=0.5,
-            sampling_rate=16000
-        )
+        vad = silero.VAD.load(**VAD_SETTINGS)
         # Run a dummy inference
         import numpy as np
         dummy_audio = np.zeros(1600, dtype=np.float32)  # 0.1s of silence
@@ -245,13 +247,7 @@ async def entrypoint(ctx: agents.JobContext):
         stt=deepgram.STT(model="nova-2-general", language="en-US"),
         llm=google.LLM(model="gemini-2.0-flash"),
         tts=tts,
-        # OPTIMIZATION: Configure Silero VAD for faster response and 16kHz to avoid resampling overhead
-        vad=silero.VAD.load(
-            min_speech_duration=0.25,
-            min_silence_duration=0.1,
-            threshold=0.5,
-            sampling_rate=16000
-        ),
+        vad=silero.VAD.load(**VAD_SETTINGS),
     )
 
     # Connect to the LiveKit room
