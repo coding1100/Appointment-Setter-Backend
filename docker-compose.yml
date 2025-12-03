@@ -144,6 +144,14 @@ services:
       - app-network
     depends_on:
       - redis
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
     entrypoint: []
     command: ["python", "run_voice_worker.py", "start"]
     healthcheck:

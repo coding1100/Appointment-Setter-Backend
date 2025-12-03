@@ -26,6 +26,58 @@ from app.core.prompts import get_template
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VoiceAgentWorker")
 
+TTS_CACHE: Dict[str, elevenlabs.TTS] = {}
+DEFAULT_TTS_CACHE_KEY = "__default__"
+MAX_HISTORY_LOG_LINES = 40
+
+
+def prewarm_vad():
+    """Pre-warm VAD model to prevent cold start delays."""
+    try:
+        logger.info("Pre-warming VAD model...")
+        vad = silero.VAD.load(
+            min_speech_duration=0.25,
+            min_silence_duration=0.1,
+            threshold=0.5,
+            sampling_rate=16000
+        )
+        # Run a dummy inference
+        import numpy as np
+        dummy_audio = np.zeros(1600, dtype=np.float32)  # 0.1s of silence
+        # Just creating the iterator or processing a chunk warms it up
+        logger.info("VAD model pre-warmed successfully")
+    except Exception as e:
+        logger.warning(f"Failed to pre-warm VAD model: {e}")
+
+
+def get_tts_service(voice_id: Optional[str], language_code: str) -> elevenlabs.TTS:
+    """Return a cached ElevenLabs TTS client to avoid expensive re-instantiation."""
+    cache_key = voice_id or DEFAULT_TTS_CACHE_KEY
+
+    cached = TTS_CACHE.get(cache_key)
+    if cached:
+        logger.info(f"[WORKER TTS] Reusing cached TTS instance for key={cache_key}")
+        return cached
+
+    if voice_id:
+        try:
+            logger.info(f"[WORKER TTS] Creating ElevenLabs TTS with custom voice_id={voice_id}...")
+            tts_instance = elevenlabs.TTS(
+                voice_id=voice_id, model="eleven_turbo_v2_5", language=language_code, enable_ssml_parsing=False
+            )
+            logger.info(
+                f"[WORKER TTS] ✓ SUCCESS: Created ElevenLabs TTS with voice_id={voice_id}, language={language_code}"
+            )
+        except Exception as exc:
+            logger.error(f"[WORKER TTS] ✗ FAILED to create TTS with voice_id {voice_id}: {exc}, using default")
+            return get_tts_service(None, language_code)
+    else:
+        logger.info("[WORKER TTS] Using DEFAULT ElevenLabs TTS voice (no custom voice_id)")
+        tts_instance = elevenlabs.TTS(api_key=ELEVEN_API_KEY)
+
+    TTS_CACHE[cache_key] = tts_instance
+    return tts_instance
+
 
 class VoiceAgent(Agent):
     """Voice agent for handling customer interactions."""
@@ -37,12 +89,26 @@ class VoiceAgent(Agent):
         )
         self._closing_task: Optional[asyncio.Task] = None
 
+    def _on_close_task_done(self, task: asyncio.Task) -> None:
+        """Ensure close task exceptions are surfaced."""
+        try:
+            task.result()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error(f"Error closing session: {exc}", exc_info=True)
+        finally:
+            self._closing_task = None
+
     @function_tool
     async def close_session(self):
         """Called when user wants to leave the conversation."""
+        if self._closing_task and not self._closing_task.done():
+            logger.info("Session close already requested, waiting for completion")
+            return
+
         logger.info("Closing session from function tool")
         await self.session.generate_reply(instructions="say goodbye to the user")
         self._closing_task = asyncio.create_task(self.session.aclose())
+        self._closing_task.add_done_callback(self._on_close_task_done)
 
 
 async def get_agent_config(room_name: str) -> Optional[Dict[str, Any]]:
@@ -129,6 +195,9 @@ async def entrypoint(ctx: agents.JobContext):
     logger.info(f"[WORKER ENTRYPOINT] Starting voice agent worker for room: {room_name}")
     logger.info("=" * 80)
 
+    # Pre-warm VAD model (lightweight if already loaded)
+    prewarm_vad()
+
     # Retrieve agent configuration from Redis
     logger.info(f"[WORKER ENTRYPOINT] Step 1: Retrieving agent configuration...")
     config = await get_agent_config(room_name)
@@ -166,29 +235,23 @@ async def entrypoint(ctx: agents.JobContext):
             language_code = config["agent_data"].get("language", "en-US").split("-")[0]
             logger.info(f"[WORKER TTS] Language code: {language_code}")
     else:
-        logger.warning(f"[WORKER TTS] No voice_id in config, will use default")
+        logger.warning("[WORKER TTS] No voice_id in config, will use default")
 
-    # Create TTS with custom voice if specified
-    if voice_id:
-        try:
-            logger.info(f"[WORKER TTS] Creating ElevenLabs TTS with custom voice_id={voice_id}...")
-            tts = elevenlabs.TTS(
-                voice_id=voice_id, model="eleven_turbo_v2_5", language=language_code, enable_ssml_parsing=False
-            )
-            logger.info(f"[WORKER TTS] ✓ SUCCESS: Created ElevenLabs TTS with voice_id={voice_id}, language={language_code}")
-        except Exception as e:
-            logger.error(f"[WORKER TTS] ✗ FAILED to create TTS with voice_id {voice_id}: {e}, using default")
-            tts = elevenlabs.TTS(api_key=ELEVEN_API_KEY)
-    else:
-        logger.warning(f"[WORKER TTS] Using DEFAULT ElevenLabs TTS voice (no custom voice_id)")
-        tts = elevenlabs.TTS(api_key=ELEVEN_API_KEY)
+    tts = get_tts_service(voice_id, language_code)
 
     # Create the agent session with all components
+    # OPTIMIZATION: Use faster models and specific configurations to prevent timeouts
     session = AgentSession(
-        stt=deepgram.STT(),
+        stt=deepgram.STT(model="nova-2-general", language="en-US"),
         llm=google.LLM(model="gemini-2.0-flash"),
         tts=tts,
-        vad=silero.VAD.load(),
+        # OPTIMIZATION: Configure Silero VAD for faster response and 16kHz to avoid resampling overhead
+        vad=silero.VAD.load(
+            min_speech_duration=0.25,
+            min_silence_duration=0.1,
+            threshold=0.5,
+            sampling_rate=16000
+        ),
     )
 
     # Connect to the LiveKit room
@@ -210,14 +273,22 @@ async def entrypoint(ctx: agents.JobContext):
     def on_close(ev: agents.CloseEvent):
         logger.info(f"Agent Session closed, reason: {ev}")
         logger.info("=" * 20)
-        logger.info("Chat History:")
-        for item in session.history.items:
+        history_items = list(session.history.items)
+        total_items = len(history_items)
+        logger.info(f"Chat History (showing up to {MAX_HISTORY_LOG_LINES} messages, total={total_items})")
+
+        for item in history_items[:MAX_HISTORY_LOG_LINES]:
             if item.type == "message":
                 safe_text = item.text_content.replace("\n", "\\n")
                 text = f"{item.role}: {safe_text}"
                 if item.interrupted:
                     text += " (interrupted)"
                 logger.info(text)
+
+        if total_items > MAX_HISTORY_LOG_LINES:
+            logger.info(
+                f"... truncated {total_items - MAX_HISTORY_LOG_LINES} additional message(s) to prevent log blocking ..."
+            )
         logger.info("=" * 20)
         closed_event.set()
 

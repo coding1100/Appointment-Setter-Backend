@@ -62,6 +62,16 @@ if __name__ == "__main__":
         )
     except KeyboardInterrupt:
         print("\n\n✓ Worker stopped by user")
+        # OPTIMIZATION: Explicitly close Redis connection on shutdown
+        import asyncio
+        from app.core.async_redis import async_redis_client
+        
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(async_redis_client.close())
+        else:
+            loop.run_until_complete(async_redis_client.close())
+            
         sys.exit(0)
     except Exception as e:
         print(f"\n❌ Fatal error: {e}")

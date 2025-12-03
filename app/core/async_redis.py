@@ -3,6 +3,8 @@ Async Redis client wrapper with connection pooling.
 Provides 5-10x performance improvement over sync redis client.
 """
 
+import asyncio
+import atexit
 import json
 import logging
 from typing import Any, List, Optional
@@ -265,6 +267,24 @@ class AsyncRedisClient:
 
 # Global async Redis client instance
 async_redis_client = AsyncRedisClient()
+
+
+def _close_redis_client_on_exit():
+    """Close Redis connection pool gracefully when the interpreter exits."""
+    try:
+        asyncio.run(async_redis_client.close())
+    except RuntimeError:
+        # If an event loop is already running (e.g., during shutdown), fall back to a new loop
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(async_redis_client.close())
+        finally:
+            loop.close()
+    except Exception as exc:
+        logger.warning(f"Failed to close async Redis client during shutdown: {exc}")
+
+
+atexit.register(_close_redis_client_on_exit)
 
 
 # Context manager for pipeline operations
