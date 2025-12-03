@@ -12,14 +12,20 @@ from typing import Any, Dict, List, Optional
 
 import redis
 import structlog
-from opentelemetry import trace
-from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.redis import RedisInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
+
+# Optional OpenTelemetry imports (not required)
+try:
+    from opentelemetry import trace
+    from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.redis import RedisInstrumentor
+    from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    OPENTELEMETRY_AVAILABLE = True
+except ImportError:
+    OPENTELEMETRY_AVAILABLE = False
 
 from app.core.config import DEBUG, LOG_LEVEL, REDIS_URL
 
@@ -92,11 +98,11 @@ class ObservabilityService:
 
     def __init__(self):
         self.logger = structlog.get_logger()
-        self.tracer = trace.get_tracer(__name__)
+        self.tracer = trace.get_tracer(__name__) if OPENTELEMETRY_AVAILABLE else None
         self.redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-        # Initialize OpenTelemetry if not in debug mode
-        if not DEBUG:
+        # Initialize OpenTelemetry if not in debug mode and available
+        if not DEBUG and OPENTELEMETRY_AVAILABLE:
             self._setup_tracing()
 
     def _setup_tracing(self):
@@ -227,10 +233,14 @@ class ObservabilityService:
     @contextmanager
     def trace_operation(self, operation_name: str, **attributes):
         """Trace an operation."""
-        with self.tracer.start_as_current_span(operation_name) as span:
-            for key, value in attributes.items():
-                span.set_attribute(key, value)
-            yield span
+        if self.tracer and OPENTELEMETRY_AVAILABLE:
+            with self.tracer.start_as_current_span(operation_name) as span:
+                for key, value in attributes.items():
+                    span.set_attribute(key, value)
+                yield span
+        else:
+            # No-op context manager when tracing is not available
+            yield None
 
     def update_system_metrics(self, active_tenants: int, active_sessions: int, redis_connections: int):
         """Update system metrics."""
