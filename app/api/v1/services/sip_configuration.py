@@ -275,13 +275,13 @@ class SIPConfigurationService:
             logger.error(f"LiveKit SIP API method not found: {e}")
             raise Exception(f"LiveKit SIP API method not available. Please check SDK version. Error: {str(e)}")
         except Exception as e:
-            # If trunk already exists, that's fine - use the trunk_name as ID
+            # If trunk already exists, attempt to reuse the real trunk ID
             error_str = str(e).lower()
-                if "already exists" in error_str or "duplicate" in error_str or "409" in error_str:
-                    existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
-                    if existing_trunk_id:
-                        return existing_trunk_id
-                    raise Exception("Could not retrieve existing SIP trunk ID from LiveKit")
+            if "already exists" in error_str or "duplicate" in error_str or "409" in error_str:
+                existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
+                if existing_trunk_id:
+                    return existing_trunk_id
+                raise Exception("Could not retrieve existing SIP trunk ID from LiveKit")
             else:
                 logger.error(f"Failed to get or create SIP trunk for tenant {tenant_id}: {e}")
                 raise Exception(f"Failed to setup SIP trunk: {str(e)}")
