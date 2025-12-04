@@ -383,7 +383,7 @@ class SIPConfigurationService:
                 #   ),
                 #   name="Rule Name",
                 #   trunk_ids=[...],
-                #   room_config={"agents": [{"agentName": "voice-worker"}]}  # CRITICAL for agent dispatch
+                #   room_config={}  # Leave empty when using custom workers (LiveKit agents optional)
                 # )
                 logger.info(f"Creating Direct dispatch rule for tenant {tenant_id} with trunk {trunk_id}")
                 
@@ -400,12 +400,9 @@ class SIPConfigurationService:
                     name="Voice Agent Dispatch Rule (Webhook-Managed)",
                     # Associate with trunk(s)
                     trunk_ids=[trunk_id] if trunk_id else [],
-                    # Room configuration: CRITICAL - tells LiveKit to wait for agent before answering
-                    # This ensures LiveKit sends 200 OK only after worker joins the room
-                    # Using dict format as LiveKit SDK may expect this structure
-                    room_config=api.RoomConfiguration(
-                        agents=[{"agentName": "voice-worker"}]
-                    ),
+                    # Room configuration: leave empty so LiveKit dispatches to any available worker
+                    # Custom agent selection is handled by our backend via Redis
+                    room_config=api.RoomConfiguration(),
                     # Optional: metadata for tracking
                     metadata=f"tenant_id={tenant_id}",
                 )
