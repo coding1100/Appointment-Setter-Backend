@@ -400,10 +400,12 @@ class SIPConfigurationService:
                     name="Voice Agent Dispatch Rule (Webhook-Managed)",
                     # Associate with trunk(s)
                     trunk_ids=[trunk_id] if trunk_id else [],
-                    # Room configuration: Let LiveKit auto-assign to available workers
-                    # No explicit agent_name means any available worker can handle the room
-                    # This works well when you have only one type of worker
-                    room_config=api.RoomConfiguration(),
+                    # Room configuration: CRITICAL - tells LiveKit to wait for agent before answering
+                    # This ensures LiveKit sends 200 OK only after worker joins the room
+                    # Using dict format as LiveKit SDK may expect this structure
+                    room_config=api.RoomConfiguration(
+                        agents=[{"agentName": "voice-worker"}]
+                    ),
                     # Optional: metadata for tracking
                     metadata=f"tenant_id={tenant_id}",
                 )

@@ -58,6 +58,7 @@ if __name__ == "__main__":
                 api_key=LIVEKIT_API_KEY,
                 api_secret=LIVEKIT_API_SECRET,
                 ws_url=LIVEKIT_URL,
+                agent_name="voice-worker",  # CRITICAL: Must match dispatch rule's roomConfig.agents
             )
         )
     except KeyboardInterrupt:
