@@ -36,15 +36,28 @@ class SIPConfigurationService:
 
     def __init__(self):
         """Initialize SIP configuration service."""
-        pass
+        self._livekit_api = None
 
     def _get_livekit_api(self) -> api.LiveKitAPI:
-        """Get LiveKit API client instance."""
+        """
+        Get LiveKit API client instance (singleton pattern).
+        
+        Reuses the same instance to avoid creating multiple aiohttp sessions.
+        """
         if not LIVEKIT_URL or not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
             raise ValueError(
                 "LiveKit configuration is missing. Please set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET."
             )
-        return api.LiveKitAPI(url=LIVEKIT_URL, api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
+        
+        # Reuse existing instance to avoid unclosed aiohttp sessions
+        if self._livekit_api is None:
+            self._livekit_api = api.LiveKitAPI(
+                url=LIVEKIT_URL, 
+                api_key=LIVEKIT_API_KEY, 
+                api_secret=LIVEKIT_API_SECRET
+            )
+        
+        return self._livekit_api
 
     async def _get_decrypted_twilio_integration(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Get Twilio integration with decrypted auth_token."""
@@ -152,7 +165,15 @@ class SIPConfigurationService:
                 )
 
                 # Extract trunk ID from response
-                if hasattr(inbound_trunk_info, "inbound_trunk_id"):
+                # LiveKit returns: { "sipTrunkId": "ST_xxx", ... }
+                # In Python, this becomes: inbound_trunk_info.sip_trunk_id
+                sip_trunk_id = None
+                
+                # Try sip_trunk_id first (correct attribute based on API response)
+                if hasattr(inbound_trunk_info, "sip_trunk_id"):
+                    sip_trunk_id = inbound_trunk_info.sip_trunk_id
+                # Fallback to other possible attribute names
+                elif hasattr(inbound_trunk_info, "inbound_trunk_id"):
                     sip_trunk_id = inbound_trunk_info.inbound_trunk_id
                 elif hasattr(inbound_trunk_info, "trunk_id"):
                     sip_trunk_id = inbound_trunk_info.trunk_id
@@ -160,11 +181,13 @@ class SIPConfigurationService:
                     sip_trunk_id = inbound_trunk_info.id
                 elif isinstance(inbound_trunk_info, str):
                     sip_trunk_id = inbound_trunk_info
-                else:
-                    # If we can't extract ID, use a generated one based on tenant
-                    sip_trunk_id = trunk_name
+                
+                if not sip_trunk_id:
+                    # Should not happen, but log error if it does
+                    logger.error(f"Failed to extract trunk ID from LiveKit response. Response type: {type(inbound_trunk_info)}")
+                    raise Exception("Could not extract trunk ID from LiveKit API response")
 
-                logger.info(f"Created SIP inbound trunk for tenant {tenant_id}: {sip_trunk_id}")
+                logger.info(f"✓ Created SIP inbound trunk with ID: {sip_trunk_id} (for phone {normalized_phone})")
                 return sip_trunk_id
             except Exception as create_error:
                 error_str = str(create_error)
@@ -286,23 +309,34 @@ class SIPConfigurationService:
                             # Update the rule to include the new trunk_id if not already present
                             try:
                                 existing_trunk_ids = list(getattr(rule, "trunk_ids", []))
+                                
+                                # Filter out invalid trunk IDs (should start with "ST_")
+                                # This cleans up any trunk IDs that were incorrectly stored as "trunk-13524030701"
+                                valid_trunk_ids = [tid for tid in existing_trunk_ids if tid.startswith("ST_")]
+                                if len(valid_trunk_ids) != len(existing_trunk_ids):
+                                    invalid_ids = [tid for tid in existing_trunk_ids if not tid.startswith("ST_")]
+                                    logger.warning(f"Removing invalid trunk IDs from dispatch rule: {invalid_ids}")
+                                    existing_trunk_ids = valid_trunk_ids
+                                
+                                # Add new trunk if not already present
                                 if trunk_id and trunk_id not in existing_trunk_ids:
-                                    logger.info(f"Updating dispatch rule to include trunk: {trunk_id}")
+                                    logger.info(f"Adding trunk to dispatch rule: {trunk_id}")
                                     existing_trunk_ids.append(trunk_id)
                                     
-                                    # Update the dispatch rule with new trunk_ids
+                                    # Update the dispatch rule with cleaned trunk_ids
                                     update_request = api.UpdateSIPDispatchRuleRequest(
-                                        sip_dispatch_rule_id=rule_id,
+                                        sip_dispatch_rule_id=rule_id_attr,  # Use actual rule ID from response
                                         trunk_ids=existing_trunk_ids,
                                     )
                                     await livekit_api.sip.update_sip_dispatch_rule(update_request)
                                     logger.info(f"✓ Updated dispatch rule with trunk: {trunk_id}")
+                                    logger.info(f"  - All trunk IDs in rule: {existing_trunk_ids}")
                                 else:
                                     logger.info(f"Trunk {trunk_id} already in dispatch rule")
                             except Exception as update_error:
                                 logger.warning(f"Could not update dispatch rule with new trunk: {update_error}")
                             
-                            return rule_id
+                            return rule_id_attr
             except (AttributeError, Exception) as e:
                 # Method doesn't exist or error - we'll try to create
                 logger.debug(f"Could not check for existing dispatch rule (may not be supported): {e}")
@@ -345,16 +379,10 @@ class SIPConfigurationService:
                     name="Voice Agent Dispatch Rule (Webhook-Managed)",
                     # Associate with trunk(s)
                     trunk_ids=[trunk_id] if trunk_id else [],
-                    # CRITICAL: Room configuration with agent dispatch
-                    # This tells LiveKit which worker to dispatch to for rooms created by this rule
-                    # The agentName must match the name set in WorkerOptions.agent_name
-                    room_config=api.RoomConfiguration(
-                        agents=[
-                            api.RoomAgentDispatch(
-                                agent_name="voice-worker",  # Must match worker's agent_name
-                            )
-                        ]
-                    ),
+                    # Room configuration: Let LiveKit auto-assign to available workers
+                    # No explicit agent_name means any available worker can handle the room
+                    # This works well when you have only one type of worker
+                    room_config=api.RoomConfiguration(),
                     # Optional: metadata for tracking
                     metadata=f"tenant_id={tenant_id}",
                 )
