@@ -16,6 +16,9 @@ livekit-plugins-deepgram>=0.7.0
 livekit-plugins-elevenlabs>=0.7.0
 livekit-plugins-google>=0.7.0
 livekit-plugins-silero>=0.7.0
+# Pin OpenTelemetry SDK versions to avoid import conflicts with livekit-agents
+opentelemetry-api>=1.27.0,<2.0.0
+opentelemetry-sdk>=1.27.0,<2.0.0
 boto3
 structlog
 prometheus-client
