@@ -255,15 +255,15 @@ class UnifiedVoiceAgentService:
                 }
                 logger.info(f"Cleaned agent data for storage: {clean_agent_data}")
 
-            room_config = {
-                "tenant_id": tenant_id,
-                "service_type": service_type,
-                "agent_id": agent_id,
-                "voice_id": voice_id,
-                "agent_data": clean_agent_data,
-            }
-            logger.info(f"Room config to store: {room_config}")
-            await self._create_room(room_name, room_config)
+        room_config = {
+            "tenant_id": tenant_id,
+            "service_type": service_type,
+            "agent_id": agent_id,
+            "voice_id": voice_id,
+            "agent_data": clean_agent_data,
+        }
+        logger.info(f"Room config to store: {room_config}")
+        await self._store_room_config(room_name, room_config)
             logger.info(f"LiveKit room created successfully")
 
             # Create dialog context
@@ -536,15 +536,6 @@ class UnifiedVoiceAgentService:
                     response.hangup()
                     return response
 
-                # Create LiveKit room for inbound call
-                # Match LiveKit dispatch rule pattern: inbound-<caller-number>
-                # Use caller number + call_sid for uniqueness (to avoid conflicts if same caller calls multiple times)
-                caller_number_clean = from_number.replace("+", "").replace("-", "").replace(" ", "")
-                # Use format: inbound-{caller_number}-{short_call_sid} to ensure uniqueness
-                # This matches dispatch rule prefix 'inbound-' while keeping each call unique
-                room_name = f"inbound-{caller_number_clean}-{call_sid[-8:]}"  # Last 8 chars of call_sid for uniqueness
-                logger.info(f"Creating LiveKit room {room_name} for inbound call")
-
                 # Prepare agent config for Redis (worker will pick this up)
                 config_data = {
                     "agent_id": agent_id,
@@ -562,28 +553,47 @@ class UnifiedVoiceAgentService:
                     f"Agent={agent.get('name')}, ServiceType={service_type}, VoiceID={agent.get('voice_id')}"
                 )
 
-                # Create room and store config in Redis
-                # Note: Room must exist and be ready before Twilio can connect via SIP
-                room_created = await self._create_room(room_name, config_data)
+                room_name_override = self._extract_livekit_room_name(form_data)
+                if room_name_override:
+                    logger.info(f"[SIP ROOM] Received LiveKit room override: {room_name_override}")
 
-                if not room_created:
-                    logger.error(f"Failed to create LiveKit room {room_name}")
-                    response = VoiceResponse()
-                    response.say("Unable to connect the call. Please try again later.")
-                    response.hangup()
-                    return response
+                caller_number_clean = from_number.replace("+", "").replace("-", "").replace(" ", "")
+                generated_room_name = f"inbound-{caller_number_clean}-{call_sid[-8:]}"
+                using_livekit_room = bool(room_name_override)
+                room_name = room_name_override or generated_room_name
 
-                # Verify room exists and is ready (critical for SIP connections)
-                room_verified = await self._verify_room_exists(room_name)
-                if not room_verified:
-                    logger.warning(f"Room {room_name} created but verification failed. Continuing anyway...")
-                    # Don't fail here - room might be ready but not yet in list
-                    # LiveKit sometimes has a small delay in room availability
+                if using_livekit_room:
+                    logger.info(f"[DIRECT FLOW] Using LiveKit-provided room name: {room_name}")
+                    stored = await self._store_room_config(room_name, config_data)
+                    if not stored:
+                        logger.error(f"[DIRECT FLOW] Failed to store configuration for LiveKit room {room_name}")
+                        response = VoiceResponse()
+                        response.say("Unable to initialize the call configuration. Please try again later.")
+                        response.hangup()
+                        return response
+                else:
+                    logger.info(f"[DIRECT FLOW] Creating LiveKit room {room_name} for inbound call")
 
-                logger.info(f"✓ Created LiveKit room {room_name} and stored agent config")
-                logger.info(
-                    f"Agent: {agent.get('name')}, Service: {agent.get('service_type')}, Voice: {agent.get('voice_id')}"
-                )
+                    room_created = await self._create_room(room_name, config_data)
+
+                    if not room_created:
+                        logger.error(f"Failed to create LiveKit room {room_name}")
+                        response = VoiceResponse()
+                        response.say("Unable to connect the call. Please try again later.")
+                        response.hangup()
+                        return response
+
+                    # Verify room exists and is ready (critical for SIP connections)
+                    room_verified = await self._verify_room_exists(room_name)
+                    if not room_verified:
+                        logger.warning(f"Room {room_name} created but verification failed. Continuing anyway...")
+                        # Don't fail here - room might be ready but not yet in list
+                        # LiveKit sometimes has a small delay in room availability
+
+                    logger.info(f"✓ Created LiveKit room {room_name} and stored agent config")
+                    logger.info(
+                        f"Agent: {agent.get('name')}, Service: {agent.get('service_type')}, Voice: {agent.get('voice_id')}"
+                    )
 
                 # Track inbound call session
                 self.active_sessions[call_sid] = {
@@ -723,40 +733,84 @@ Business: {business_name}"""
             )
             logger.info(f"Created LiveKit room: {room_name}")
 
-            # Store room configuration in Redis for worker to retrieve
             if room_config:
-                import json
-
-                config_key = f"livekit:room_config:{room_name}"
-                config_json = json.dumps(room_config)
-                logger.info(f"[REDIS STORE] Storing config in Redis with key: {config_key}")
-                logger.info(f"[REDIS STORE] Config JSON: {config_json}")
-                await async_redis_client.set(config_key, config_json, ttl=3600)  # Expire in 1 hour
-                logger.info(f"[REDIS STORE] ✓ Successfully stored room configuration in Redis for room: {room_name}")
-
-                # Also store with fallback key (without call_sid suffix) in case LiveKit dispatch rule creates room differently
-                # Pattern: inbound-{caller_number}-{call_sid[-8:]} -> also store as inbound-{caller_number}
-                if room_name.startswith("inbound-") and "-" in room_name[8:]:  # Check if it has the call_sid suffix pattern
-                    # Extract caller number part (everything after "inbound-" and before the last "-")
-                    parts = room_name.split("-")
-                    if len(parts) >= 3:  # inbound-{caller_number}-{call_sid}
-                        caller_number = parts[1]  # The caller number part
-                        fallback_room_name = f"inbound-{caller_number}"
-                        fallback_config_key = f"livekit:room_config:{fallback_room_name}"
-                        await async_redis_client.set(fallback_config_key, config_json, ttl=3600)
-                        logger.info(f"[REDIS STORE] Also stored config with fallback key: {fallback_config_key}")
-
-                # Verify storage by reading back
-                verify_data = await async_redis_client.get(config_key)
-                if verify_data:
-                    logger.info(f"[REDIS VERIFY] ✓ Configuration verified in Redis: {verify_data}")
-                else:
-                    logger.error(f"[REDIS VERIFY] ✗ Failed to verify configuration in Redis!")
+                stored = await self._store_room_config(room_name, room_config)
+                if not stored:
+                    logger.error(f"[REDIS STORE] ✗ Failed to persist configuration for room: {room_name}")
 
             return True
         except Exception as e:
             logger.error(f"Error creating room: {e}")
             return False
+
+    async def _store_room_config(
+        self, room_name: str, room_config: Dict[str, Any], ttl: int = CALL_CONFIG_TTL_SECONDS
+    ) -> bool:
+        """Persist room configuration in Redis for workers to consume."""
+        try:
+            config_key = f"livekit:room_config:{room_name}"
+            config_json = json.dumps(room_config)
+            logger.info(f"[REDIS STORE] Storing config in Redis with key: {config_key}")
+            logger.info(f"[REDIS STORE] Config JSON: {config_json}")
+            await async_redis_client.set(config_key, config_json, ttl=ttl)
+            logger.info(f"[REDIS STORE] ✓ Successfully stored room configuration in Redis for room: {room_name}")
+
+            # Maintain legacy fallback for inbound-{caller}-{suffix} names
+            if room_name.startswith("inbound-") and "-" in room_name[8:]:
+                parts = room_name.split("-")
+                if len(parts) >= 3:
+                    caller_number = parts[1]
+                    fallback_room_name = f"inbound-{caller_number}"
+                    fallback_config_key = f"livekit:room_config:{fallback_room_name}"
+                    await async_redis_client.set(fallback_config_key, config_json, ttl=ttl)
+                    logger.info(f"[REDIS STORE] Also stored config with fallback key: {fallback_config_key}")
+
+            # Verify storage
+            verify_data = await async_redis_client.get(config_key)
+            if verify_data:
+                logger.info(f"[REDIS VERIFY] ✓ Configuration verified in Redis: {verify_data}")
+            else:
+                logger.error(f"[REDIS VERIFY] ✗ Failed to verify configuration in Redis for key: {config_key}")
+                return False
+
+            return True
+        except Exception as exc:
+            logger.error(f"[REDIS STORE] ✗ Error storing room config for {room_name}: {exc}", exc_info=True)
+            return False
+
+    def _extract_livekit_room_name(self, payload: Dict[str, Any]) -> Optional[str]:
+        """Extract a LiveKit-provided room name from the inbound webhook payload, if available."""
+        candidate_keys = [
+            "room",
+            "Room",
+            "livekit_room",
+            "LiveKitRoom",
+            "LivekitRoom",
+            "sip_room",
+            "SipRoom",
+            "Sip_room",
+            "SipHeader_room",
+            "SipHeader_Room",
+            "SipHeader_X-LiveKit-Room",
+            "SipHeader_X-Livekit-Room",
+        ]
+
+        for key in candidate_keys:
+            value = payload.get(key)
+            if value:
+                candidate = value.strip()
+                if candidate:
+                    return candidate
+
+        for key, value in payload.items():
+            if key.startswith("SipHeader_") and value:
+                header_name = key[len("SipHeader_") :].lower()
+                if header_name in {"room", "x-livekit-room", "x-livekitroom"}:
+                    candidate = value.strip()
+                    if candidate:
+                        return candidate
+
+        return None
 
     async def _delete_room(self, room_name: str) -> bool:
         """Delete a LiveKit room and clean up configuration."""
