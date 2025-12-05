@@ -288,172 +288,18 @@ class SIPConfigurationService:
 
     async def _create_or_update_dispatch_rule(self, tenant_id: str, phone_number: str, trunk_id: str) -> str:
         """
-        Create or update LiveKit Direct dispatch rule that routes calls based on SIP URI room name.
-
-        **IMPORTANT FLOW:**
-        1. Twilio webhook creates room: `inbound-{caller}-{call_sid}` and stores config in Redis
-        2. Twilio dials LiveKit SIP URI with room name in the "To" address
-        3. LiveKit Direct dispatch rule extracts room name from SIP URI and dispatches to `voice-worker`
-        4. Worker retrieves agent config from Redis and runs the assigned agent
-
-        Official Documentation: https://docs.livekit.io/sip/api/#createsipdispatchrule
-
-        Returns dispatch_rule_id.
+        Dispatch rule provisioning is handled manually from the LiveKit dashboard.
+        This method now acts as a stub to keep existing API responses compatible.
         """
-        try:
-            livekit_api = self._get_livekit_api()
-
-            # Use a global dispatch rule ID for all phone numbers
-            # Since we're using Direct dispatch (room name from SIP URI), one rule handles all phone numbers
-            rule_id = "dispatch-rule-direct-webhook"
-
-            # Try to check for existing rule (if API method exists)
-            try:
-                if hasattr(livekit_api.sip, "list_sip_dispatch_rule"):
-                    # List dispatch rules for this trunk
-                    list_request = api.ListSIPDispatchRuleRequest()
-                    rules_response = await livekit_api.sip.list_sip_dispatch_rule(list_request)
-                    
-                    # Check if our global rule already exists
-                    if hasattr(rules_response, "items"):
-                        rules = rules_response.items
-                    elif isinstance(rules_response, list):
-                        rules = rules_response
-                    else:
-                        rules = []
-                    
-                    for rule in rules:
-                        rule_id_attr = getattr(rule, "sip_dispatch_rule_id", None) or getattr(rule, "dispatch_rule_id", None)
-                        if rule_id_attr == rule_id:
-                            logger.info(f"Found existing Direct dispatch rule: {rule_id}")
-                            
-                            # Update the rule to include the new trunk_id if not already present
-                            try:
-                                existing_trunk_ids = list(getattr(rule, "trunk_ids", []))
-                                
-                                # Filter out invalid trunk IDs (should start with "ST_")
-                                # This cleans up any trunk IDs that were incorrectly stored as "trunk-13524030701"
-                                valid_trunk_ids = [tid for tid in existing_trunk_ids if tid.startswith("ST_")]
-                                if len(valid_trunk_ids) != len(existing_trunk_ids):
-                                    invalid_ids = [tid for tid in existing_trunk_ids if not tid.startswith("ST_")]
-                                    logger.warning(f"Removing invalid trunk IDs from dispatch rule: {invalid_ids}")
-                                    existing_trunk_ids = valid_trunk_ids
-                                
-                                # Add new trunk if not already present
-                                if trunk_id and trunk_id not in existing_trunk_ids:
-                                    logger.info(f"Adding trunk to dispatch rule: {trunk_id}")
-                                    existing_trunk_ids.append(trunk_id)
-                                    
-                                    # Update the dispatch rule with cleaned trunk_ids
-                                    update_request = api.UpdateSIPDispatchRuleRequest(
-                                        sip_dispatch_rule_id=rule_id_attr,  # Use actual rule ID from response
-                                        trunk_ids=existing_trunk_ids,
-                                    )
-                                    await livekit_api.sip.update_sip_dispatch_rule(update_request)
-                                    logger.info(f"✓ Updated dispatch rule with trunk: {trunk_id}")
-                                    logger.info(f"  - All trunk IDs in rule: {existing_trunk_ids}")
-                                else:
-                                    logger.info(f"Trunk {trunk_id} already in dispatch rule")
-                            except Exception as update_error:
-                                logger.warning(f"Could not update dispatch rule with new trunk: {update_error}")
-                            
-                            return rule_id_attr
-            except (AttributeError, Exception) as e:
-                # Method doesn't exist or error - we'll try to create
-                logger.debug(f"Could not check for existing dispatch rule (may not be supported): {e}")
-
-            # Create dispatch rule using correct API
-            # Official Documentation: https://docs.livekit.io/sip/api/#createsipdispatchrule
-            if not hasattr(livekit_api.sip, "create_sip_dispatch_rule"):
-                logger.warning(
-                    f"Dispatch rule creation not available in LiveKit SDK. "
-                    f"Skipping dispatch rule - manual configuration required in LiveKit dashboard."
-                )
-                return rule_id  # Return the rule_id we would have used
-
-            # Create Direct dispatch rule
-            # Official Documentation: https://docs.livekit.io/sip/dispatch-rule/
-            # Direct dispatch rule uses the room name from the SIP "To" URI
-            # This allows the webhook to control room naming and agent assignment via Redis
-            try:
-                # Structure per official docs and API examples:
-                # CreateSIPDispatchRuleRequest(
-                #   rule=SIPDispatchRule(
-                #     dispatch_rule_direct=SIPDispatchRuleDirect(room_name="")  # Empty = use SIP URI room name
-                #   ),
-                #   name="Rule Name",
-                #   trunk_ids=[...],
-                #   room_config={}  # Leave empty when using custom workers (LiveKit agents optional)
-                # )
-                logger.info(f"Creating Direct dispatch rule for tenant {tenant_id} with trunk {trunk_id}")
-                
-                dispatch_rule_request = api.CreateSIPDispatchRuleRequest(
-                    # Core rule configuration
-                    rule=api.SIPDispatchRule(
-                        # Use Direct dispatch: room name comes from SIP "To" URI
-                        # Empty room_name means: use the room name from the SIP URI
-                        dispatch_rule_direct=api.SIPDispatchRuleDirect(
-                            room_name="",  # Empty = extract room name from SIP URI
-                        ),
-                    ),
-                    # Rule metadata
-                    name="Voice Agent Dispatch Rule (Webhook-Managed)",
-                    # Associate with trunk(s)
-                    trunk_ids=[trunk_id] if trunk_id else [],
-                    # Room configuration: leave empty so LiveKit dispatches to any available worker
-                    # Custom agent selection is handled by our backend via Redis
-                    room_config=api.RoomConfiguration(),
-                    # Optional: metadata for tracking
-                    metadata=f"tenant_id={tenant_id}",
-                )
-
-                dispatch_rule = await livekit_api.sip.create_sip_dispatch_rule(dispatch_rule_request)
-
-                # Handle different response structures
-                if hasattr(dispatch_rule, "sip_dispatch_rule_id"):
-                    rule_id_result = dispatch_rule.sip_dispatch_rule_id
-                elif hasattr(dispatch_rule, "dispatch_rule_id"):
-                    rule_id_result = dispatch_rule.dispatch_rule_id
-                elif hasattr(dispatch_rule, "rule_id"):
-                    rule_id_result = dispatch_rule.rule_id
-                elif isinstance(dispatch_rule, str):
-                    rule_id_result = dispatch_rule
-                else:
-                    rule_id_result = rule_id  # Fallback
-
-                logger.info(f"✓ Created Direct dispatch rule: {rule_id_result}")
-                logger.info(f"  - Room naming: Uses SIP URI (webhook-controlled)")
-                logger.info(f"  - Agent dispatch: voice-worker")
-                logger.info(f"  - Trunk: {trunk_id}")
-                return rule_id_result
-                
-            except Exception as create_error:
-                # If rule already exists or conflicts, that's fine
-                error_str = str(create_error).lower()
-                if (
-                    "already exists" in error_str
-                    or "duplicate" in error_str
-                    or "conflicting" in error_str
-                    or "409" in error_str
-                ):
-                    logger.info(
-                        f"Direct dispatch rule already exists: {rule_id}. "
-                        f"This is expected - one Direct rule handles all phone numbers."
-                    )
-                    return rule_id
-                else:
-                    # For other errors, log and re-raise (dispatch rule is critical for automation)
-                    logger.error(
-                        f"Failed to create Direct dispatch rule: {create_error}. "
-                        f"This may require manual configuration in LiveKit dashboard."
-                    )
-                    raise Exception(f"Dispatch rule creation failed: {str(create_error)}")
-
-        except Exception as e:
-            logger.error(f"Failed to create/update dispatch rule: {e}")
-            # Dispatch rule is important for automation, so we raise the error
-            # This will trigger the rollback in the phone assignment endpoint
-            raise Exception(f"Dispatch rule configuration failed: {str(e)}")
+        logger.info(
+            "Skipping automatic LiveKit dispatch-rule creation/update for tenant %s. "
+            "Ensure the appropriate rule exists in the LiveKit console.",
+            tenant_id,
+        )
+        # The code that previously called livekit_api.sip.list/create/update has been intentionally
+        # commented out to prevent backend-driven modifications. Returning a static identifier keeps
+        # callers compatible while placing full control in the dashboard.
+        return "dispatch-rule-direct-webhook"
 
     async def _configure_twilio_phone_webhook(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
         """
