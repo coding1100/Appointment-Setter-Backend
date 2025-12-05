@@ -977,207 +977,343 @@
 
 
 
-"""
-SIP Configuration Service
-Strict-Mode Version (Dashboard-Managed Dispatch Rules)
-
-This version is compliant with:
-✔ LiveKit SIP assigns room names
-✔ Backend NEVER creates rooms
-✔ Backend NEVER creates/updates dispatch rules
-✔ Backend ONLY:
-    - Verifies/creates inbound SIP trunks (1 per phone number)
-    - Configures Twilio webhook URLs
-    - Returns trunk ID
-"""
+# =====================================================================
+# UnifiedVoiceAgentService — Corrected for OPTION A + F1 (HARD FAIL)
+# LiveKit controls ALL room names.
+# Backend NEVER generates room names for inbound.
+# Room config stored ONLY under EXACT incoming SIP room name.
+# =====================================================================
 
 import asyncio
+import json
 import logging
-from typing import Any, Callable, Dict, Optional
+import uuid
+from typing import Any, Dict, Optional
 
 from livekit import api
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm, stt, tts
+from livekit.agents.voice.agent import Agent
+from livekit.plugins import deepgram, elevenlabs, google, silero
 from twilio.rest import Client
-from twilio.base.exceptions import TwilioException
+from twilio.twiml.voice_response import Dial, VoiceResponse
 
+from app.core.async_redis import async_redis_client
 from app.core.config import (
+    DEEPGRAM_API_KEY,
+    ELEVEN_API_KEY,
+    GOOGLE_API_KEY,
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
     LIVEKIT_SIP_DOMAIN,
     LIVEKIT_URL,
+    TWILIO_WEBHOOK_BASE_URL,
 )
 from app.core.encryption import encryption_service
+from app.core.utils import get_current_timestamp
+from app.services.dialog_manager import dialog_manager
 from app.services.firebase import firebase_service
-from app.utils.phone_number import normalize_phone_number_safe, normalize_phone_number
+from app.utils.phone_number import normalize_phone_number_safe
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
-async def _run_twilio_sync(fn: Callable):
-    """Run a blocking Twilio API call in a thread pool."""
-    return await asyncio.to_thread(fn)
+# =====================================================================
+# Unified Voice Agent Service
+# =====================================================================
 
-
-class SIPConfigurationService:
-    """Strict-mode SIP configuration service."""
+class UnifiedVoiceAgentService:
+    """
+    Corrected for OPTION A:
+    - LiveKit ALWAYS controls inbound SIP room naming.
+    - Backend NEVER creates room names.
+    - Backend NEVER creates LiveKit rooms for inbound calls.
+    - Backend MUST extract room name from SIP headers.
+    """
 
     def __init__(self):
-        self._livekit_api: Optional[api.LiveKitAPI] = None
+        self.tenant_agents = {}
+        self.active_sessions = {}
+        self._livekit_api = None
+        self._validate_livekit_config()
 
-    #
-    # 🔧 LiveKit API Client
-    #
-    def _lk(self) -> api.LiveKitAPI:
-        if not self._livekit_api:
+    # -----------------------------------------------------------------
+    # CONFIG VALIDATION
+    # -----------------------------------------------------------------
+    def _validate_livekit_config(self):
+        logger.info("=" * 60)
+        logger.info("VALIDATING LIVEKIT CONFIGURATION")
+        logger.info("=" * 60)
+        logger.info(f"LIVEKIT_URL: '{LIVEKIT_URL}'")
+        logger.info(f"LIVEKIT_API_KEY: {'✓' if LIVEKIT_API_KEY else '✗'}")
+        logger.info(f"LIVEKIT_API_SECRET: {'✓' if LIVEKIT_API_SECRET else '✗'}")
+        logger.info("=" * 60)
+
+    @property
+    def livekit_api(self):
+        if self._livekit_api is None:
             self._livekit_api = api.LiveKitAPI(
-                url=LIVEKIT_URL,
-                api_key=LIVEKIT_API_KEY,
-                api_secret=LIVEKIT_API_SECRET,
+                url=LIVEKIT_URL, api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET
             )
         return self._livekit_api
 
-    #
-    # 🔍 Look for existing trunk by phone number
-    #
-    async def _find_trunk(self, phone: str) -> Optional[str]:
-        lk = self._lk()
+    # -----------------------------------------------------------------
+    # AGENT CONSTRUCTION
+    # -----------------------------------------------------------------
+    async def get_or_create_agent(
+        self, tenant_id: str, service_type: str, voice_id: Optional[str] = None,
+        agent_id: Optional[str] = None, agent_config: Optional[Dict[str, Any]] = None
+    ) -> Agent:
 
+        key = f"{tenant_id}:{service_type}"
+        if agent_id:
+            key += f":{agent_id}"
+
+        if key in self.tenant_agents:
+            return self.tenant_agents[key]["agent"]
+
+        # Build TTS
+        language = "en"
+        if agent_config and "language" in agent_config:
+            language = agent_config["language"].split("-")[0]
+
+        if voice_id:
+            try:
+                tts_service = elevenlabs.TTS(
+                    voice_id=voice_id,
+                    model="eleven_turbo_v2_5",
+                    language=language,
+                    enable_ssml_parsing=False,
+                )
+            except Exception:
+                tts_service = elevenlabs.TTS()
+        else:
+            tts_service = elevenlabs.TTS()
+
+        # Build system prompt
+        system_prompt = self._get_system_prompt(
+            await self._get_tenant_config(tenant_id),
+            service_type,
+            agent_config,
+        )
+
+        agent = Agent(
+            vad=silero.VAD.load(),
+            stt=deepgram.STT(),
+            llm=google.LLM(model="gemini-2.0-flash"),
+            tts=tts_service,
+            instructions=system_prompt,
+        )
+
+        self.tenant_agents[key] = {
+            "agent": agent,
+            "voice_id": voice_id,
+            "agent_id": agent_id,
+        }
+
+        return agent
+
+    # -----------------------------------------------------------------
+    # INBOUND SIP HANDLER (MAIN FIXED LOGIC)
+    # -----------------------------------------------------------------
+
+    async def handle_twilio_webhook(self, form_data: Dict[str, Any]) -> VoiceResponse:
+        """
+        INBOUND CALLS ONLY — corrected for Option A.
+        LiveKit provides the SIP room name.
+        Backend extracts it and stores config for EXACT match.
+        """
+
+        call_sid = form_data.get("CallSid")
+        from_number = form_data.get("From")
+        to_number = form_data.get("To")
+
+        logger.info(f"[WEBHOOK] From={from_number} To={to_number} CallSid={call_sid}")
+
+        # -----------------------------------------------------------------
+        # 1. Match inbound phone number → agent
+        # -----------------------------------------------------------------
+        normalized_to = normalize_phone_number_safe(to_number)
+
+        phone_record = await firebase_service.get_phone_by_number(normalized_to)
+        if not phone_record:
+            # Try raw version
+            phone_record = await firebase_service.get_phone_by_number(to_number)
+
+        if not phone_record:
+            resp = VoiceResponse()
+            resp.say("This number is not configured.")
+            resp.hangup()
+            return resp
+
+        agent_id = phone_record.get("agent_id")
+        tenant_id = phone_record.get("tenant_id")
+        if not agent_id or not tenant_id:
+            resp = VoiceResponse()
+            resp.say("Configuration incomplete.")
+            resp.hangup()
+            return resp
+
+        # Fetch agent config
+        agent_cfg = await firebase_service.get_agent(agent_id)
+        if not agent_cfg:
+            resp = VoiceResponse()
+            resp.say("Agent not found.")
+            resp.hangup()
+            return resp
+
+        service_type = agent_cfg.get("service_type")
+        if not service_type:
+            resp = VoiceResponse()
+            resp.say("Agent service type missing.")
+            resp.hangup()
+            return resp
+
+        # -----------------------------------------------------------------
+        # 2. Extract LiveKit room name FROM SIP HEADERS ONLY  (OPTION A)
+        # -----------------------------------------------------------------
+        room_name = self._extract_livekit_room_name(form_data)
+
+        if not room_name:
+            # HARD FAIL (F1)
+            logger.error("[F1] NO ROOM NAME PROVIDED BY LIVEKIT — FAILING CALL")
+            resp = VoiceResponse()
+            resp.say("Room information missing. Please check configuration.")
+            resp.hangup()
+            return resp
+
+        logger.info(f"[SIP] Using LiveKit room: {room_name}")
+
+        # -----------------------------------------------------------------
+        # 3. Store config ONLY under exact room name
+        # -----------------------------------------------------------------
+        config = {
+            "agent_id": agent_id,
+            "tenant_id": tenant_id,
+            "agent_data": agent_cfg,
+            "voice_id": agent_cfg.get("voice_id"),
+            "service_type": service_type,
+            "call_type": "inbound",
+            "caller_number": from_number,
+            "called_number": normalized_to,
+        }
+
+        stored = await self._store_room_config(room_name, config)
+        if not stored:
+            resp = VoiceResponse()
+            resp.say("Failed to store call configuration.")
+            resp.hangup()
+            return resp
+
+        logger.info(f"[REDIS] Stored room config for {room_name}")
+
+        # -----------------------------------------------------------------
+        # 4. Generate SIP URI and return TwiML
+        # -----------------------------------------------------------------
+        sip_uri = self._get_livekit_sip_uri(room_name)
+        resp = VoiceResponse()
+        dial = Dial()
+        dial.sip(sip_uri)
+        resp.append(dial)
+
+        # Track session
+        self.active_sessions[call_sid] = {
+            "session_id": call_sid,
+            "room_name": room_name,
+            "agent_id": agent_id,
+            "tenant_id": tenant_id,
+            "twilio_call_sid": call_sid,
+            "status": "connecting",
+            "created_at": get_current_timestamp(),
+        }
+
+        return resp
+
+    # -----------------------------------------------------------------
+    # TWILIO STATUS CALLBACK
+    # -----------------------------------------------------------------
+
+    async def handle_twilio_status_callback(self, form_data: Dict[str, Any]):
+        call_sid = form_data.get("CallSid")
+        status = form_data.get("CallStatus")
+        if call_sid in self.active_sessions:
+            self.active_sessions[call_sid]["twilio_status"] = status
+
+    # -----------------------------------------------------------------
+    # SUPPORTING INTERNAL METHODS
+    # -----------------------------------------------------------------
+
+    async def _get_tenant_config(self, tenant_id: str) -> Dict[str, Any]:
+        cfg = await firebase_service.get_agent_settings(tenant_id)
+        return cfg or {"business_name": "our company"}
+
+    def _get_system_prompt(self, tenant_cfg, service_type: str, agent_cfg=None):
+        business = tenant_cfg.get("business_name", "our company")
+
+        if agent_cfg:
+            return f"""
+You are {agent_cfg.get('name','Agent')}, a booking assistant for {business}.
+Your greeting: "{agent_cfg.get('greeting_message','')}"
+Service: {service_type}
+"""
+
+        return f"""
+You are a booking assistant for {business}.
+Service: {service_type}
+"""
+
+    async def _store_room_config(self, room_name: str, config: Dict[str, Any]) -> bool:
         try:
-            resp = await lk.sip.list_sip_inbound_trunk(
-                api.ListSIPInboundTrunkRequest()
-            )
-            trunks = getattr(resp, "items", [])
+            key = f"livekit:room_config:{room_name}"
+            await async_redis_client.set(key, json.dumps(config), ttl=3600)
 
-            for t in trunks:
-                nums = getattr(t, "numbers", []) or []
-                if phone in nums:
-                    tid = getattr(t, "sip_trunk_id", None)
-                    if tid:
-                        logger.info(f"[TRUNK] Reusing existing trunk {tid} for {phone}")
-                        return tid
-        except Exception as e:
-            logger.warning(f"[TRUNK] Failed listing trunks: {e}")
+            verify = await async_redis_client.get(key)
+            return verify is not None
+        except Exception:
+            return False
+
+    # -----------------------------------------------------------------
+    # EXTRACT ROOM NAME FROM SIP HEADERS
+    # -----------------------------------------------------------------
+    def _extract_livekit_room_name(self, payload: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract room name exactly as LiveKit generates.
+
+        Valid sources:
+        - SIP URI in To/Request-URI: sip:ROOM@domain
+        - SipHeader_X-LiveKit-Room
+        - SipHeader_room
+        """
+
+        # Direct SIP header fields
+        sip_keys = [
+            "SipHeader_X-LiveKit-Room",
+            "SipHeader_X-Livekit-Room",
+            "SipHeader_room",
+            "SipHeader_Room",
+        ]
+        for key in sip_keys:
+            if payload.get(key):
+                return payload[key].strip()
+
+        # Try parsing "To" header if it contains SIP URI
+        to_header = payload.get("To")
+        if to_header and "sip:" in to_header:
+            try:
+                part = to_header.split("sip:")[1]
+                room = part.split("@")[0]
+                return room
+            except Exception:
+                pass
 
         return None
 
-    #
-    # 🏗 Create SIP inbound trunk
-    #
-    async def _create_trunk(self, phone: str) -> str:
-        lk = self._lk()
-
-        normalized = normalize_phone_number_safe(phone) or phone
-
-        try:
-            resp = await lk.sip.create_sip_inbound_trunk(
-                api.CreateSIPInboundTrunkRequest(
-                    trunk=api.SIPInboundTrunkInfo(
-                        name=f"Trunk {normalized}",
-                        numbers=[normalized],
-                        allowed_addresses=["0.0.0.0/0"],
-                        metadata=f"phone_number={normalized}",
-                    )
-                )
-            )
-
-            tid = getattr(resp, "sip_trunk_id", None)
-            if not tid:
-                raise Exception("No sip_trunk_id returned")
-
-            logger.info(f"[TRUNK] Created new trunk {tid} for {normalized}")
-            return tid
-
-        except Exception as e:
-            # Handle "already exists"
-            msg = str(e).lower()
-            if "exists" in msg or "409" in msg:
-                tid = await self._find_trunk(normalized)
-                if tid:
-                    return tid
-                raise Exception("Trunk exists but cannot be retrieved")
-            raise
-
-    #
-    # 📞 Configure Twilio webhooks
-    #
-    async def _configure_twilio_webhook(self, tenant_id: str, phone: str) -> Dict[str, Any]:
-        integ = await firebase_service.get_twilio_integration(tenant_id)
-        if not integ:
-            raise ValueError(f"No Twilio integration found for tenant {tenant_id}")
-
-        # decrypt token
-        if "auth_token" in integ:
-            integ["auth_token"] = encryption_service.decrypt(integ["auth_token"])
-
-        normalized = normalize_phone_number(phone)
-
-        from app.core.config import TWILIO_WEBHOOK_BASE_URL
-        base = TWILIO_WEBHOOK_BASE_URL.rstrip("/")
-        voice_url = f"{base}/api/v1/voice-agent/twilio/webhook"
-        status_url = f"{base}/api/v1/voice-agent/twilio/status"
-
-        def _update_sync():
-            client = Client(integ["account_sid"], integ["auth_token"])
-            nums = client.incoming_phone_numbers.list(phone_number=normalized)
-            if not nums:
-                nums = client.incoming_phone_numbers.list(phone_number=phone)
-
-            if not nums:
-                raise ValueError(
-                    f"Phone number {phone} not found in Twilio account"
-                )
-
-            pn = nums[0]
-            pn.update(
-                voice_url=voice_url,
-                voice_method="POST",
-                status_callback=status_url,
-                status_callback_method="POST",
-            )
-            return pn
-
-        pn = await _run_twilio_sync(_update_sync)
-
-        return {
-            "phone_sid": pn.sid,
-            "phone_number": pn.phone_number,
-            "voice_url": voice_url,
-            "status_callback": status_url,
-        }
-
-    #
-    # 🚀 Public setup method (STRICT MODE)
-    #
-    async def setup_phone_number_sip(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
-        """
-        STRICT MODE:
-        ✔ Only creates trunk
-        ✔ Does NOT touch dispatch rules (dashboard-managed)
-        ✔ Configures Twilio webhook
-        """
-        logger.info(f"[SIP SETUP] Starting for tenant={tenant_id}, phone={phone_number}")
-
-        # 1) Ensure trunk exists
-        normalized = normalize_phone_number_safe(phone_number) or phone_number
-        trunk_id = await self._find_trunk(normalized)
-        if not trunk_id:
-            trunk_id = await self._create_trunk(normalized)
-
-        logger.info(f"[SIP SETUP] Using trunk={trunk_id}")
-
-        # 2) DO NOT touch dispatch rules
-        dispatch_rule_id = "dashboard-managed"  # purely informational
-
-        # 3) Ensure Twilio webhook is correct
-        twilio_cfg = await self._configure_twilio_webhook(tenant_id, normalized)
-
-        return {
-            "status": "configured",
-            "trunk_id": trunk_id,
-            "dispatch_rule": dispatch_rule_id,
-            "twilio": twilio_cfg,
-            "sip_domain": LIVEKIT_SIP_DOMAIN,
-        }
+    # -----------------------------------------------------------------
+    # SIP URI BUILDER
+    # -----------------------------------------------------------------
+    def _get_livekit_sip_uri(self, room_name: str) -> str:
+        return f"sip:{room_name}@{LIVEKIT_SIP_DOMAIN}"
 
 
-# Global instance
-sip_configuration_service = SIPConfigurationService()
+# Global
+unified_voice_agent_service = UnifiedVoiceAgentService()
