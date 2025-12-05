@@ -562,239 +562,207 @@
 
 
 
-# ===============================================================
-# SIP Configuration Service (Corrected & Production-Ready)
-# ===============================================================
+"""
+SIP Configuration Service
+Strict-Mode Version (Dashboard-Managed Dispatch Rules)
+
+This version is compliant with:
+✔ LiveKit SIP assigns room names
+✔ Backend NEVER creates rooms
+✔ Backend NEVER creates/updates dispatch rules
+✔ Backend ONLY:
+    - Verifies/creates inbound SIP trunks (1 per phone number)
+    - Configures Twilio webhook URLs
+    - Returns trunk ID
+"""
 
 import asyncio
 import logging
 from typing import Any, Callable, Dict, Optional
 
 from livekit import api
-from twilio.base.exceptions import TwilioException
 from twilio.rest import Client
+from twilio.base.exceptions import TwilioException
 
-from app.api.v1.services.tenant import tenant_service
-from app.core.config import LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_SIP_DOMAIN, LIVEKIT_URL
+from app.core.config import (
+    LIVEKIT_API_KEY,
+    LIVEKIT_API_SECRET,
+    LIVEKIT_SIP_DOMAIN,
+    LIVEKIT_URL,
+)
 from app.core.encryption import encryption_service
 from app.services.firebase import firebase_service
-from app.utils.phone_number import normalize_phone_number, normalize_phone_number_safe
+from app.utils.phone_number import normalize_phone_number_safe, normalize_phone_number
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------
-#  Utility helper for running synchronous Twilio calls
-# ---------------------------------------------------------------
-async def _run_twilio_sync(func: Callable) -> Any:
-    return await asyncio.to_thread(func)
+async def _run_twilio_sync(fn: Callable):
+    """Run a blocking Twilio API call in a thread pool."""
+    return await asyncio.to_thread(fn)
 
 
 class SIPConfigurationService:
-    """Service for managing SIP trunks + Twilio webhook configuration."""
+    """Strict-mode SIP configuration service."""
 
     def __init__(self):
-        self._livekit_api = None
+        self._livekit_api: Optional[api.LiveKitAPI] = None
 
-    # -----------------------------------------------------------
-    #  LiveKit API instance (singleton)
-    # -----------------------------------------------------------
-    def _get_livekit_api(self) -> api.LiveKitAPI:
-        if not LIVEKIT_URL or not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
-            raise ValueError(
-                "LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be configured."
-            )
-
-        if self._livekit_api is None:
+    #
+    # 🔧 LiveKit API Client
+    #
+    def _lk(self) -> api.LiveKitAPI:
+        if not self._livekit_api:
             self._livekit_api = api.LiveKitAPI(
                 url=LIVEKIT_URL,
                 api_key=LIVEKIT_API_KEY,
-                api_secret=LIVEKIT_API_SECRET
+                api_secret=LIVEKIT_API_SECRET,
             )
-
         return self._livekit_api
 
-    # -----------------------------------------------------------
-    #  Retrieve Twilio integration with decrypted auth_token
-    # -----------------------------------------------------------
-    async def _get_decrypted_twilio_integration(self, tenant_id: str) -> Optional[Dict[str, Any]]:
-        integration = await firebase_service.get_twilio_integration(tenant_id)
-        if integration and "auth_token" in integration:
-            try:
-                integration["auth_token"] = encryption_service.decrypt(integration["auth_token"])
-            except Exception as e:
-                logger.error(f"Failed to decrypt Twilio auth token: {e}")
-                return None
-        return integration
-
-    # -----------------------------------------------------------
-    #  Find existing SIP trunk by phone number
-    # -----------------------------------------------------------
-    async def _find_trunk_id_by_number(self, livekit_api: api.LiveKitAPI, phone_number: str) -> Optional[str]:
-        normalized = normalize_phone_number_safe(phone_number) or phone_number
+    #
+    # 🔍 Look for existing trunk by phone number
+    #
+    async def _find_trunk(self, phone: str) -> Optional[str]:
+        lk = self._lk()
 
         try:
-            resp = await livekit_api.sip.list_sip_inbound_trunk(
+            resp = await lk.sip.list_sip_inbound_trunk(
                 api.ListSIPInboundTrunkRequest()
             )
-            trunks = resp.items if hasattr(resp, "items") else resp
+            trunks = getattr(resp, "items", [])
 
-            for trunk in trunks:
-                numbers = getattr(trunk, "numbers", []) or []
-                if normalized in numbers or phone_number in numbers:
-                    trunk_id = (
-                        getattr(trunk, "sip_trunk_id", None)
-                        or getattr(trunk, "inbound_trunk_id", None)
-                        or getattr(trunk, "trunk_id", None)
-                        or getattr(trunk, "id", None)
-                    )
-                    if trunk_id:
-                        logger.info(f"[TRUNK] Reusing existing trunk {trunk_id}")
-                        return trunk_id
-
+            for t in trunks:
+                nums = getattr(t, "numbers", []) or []
+                if phone in nums:
+                    tid = getattr(t, "sip_trunk_id", None)
+                    if tid:
+                        logger.info(f"[TRUNK] Reusing existing trunk {tid} for {phone}")
+                        return tid
         except Exception as e:
-            logger.warning(f"[TRUNK LOOKUP ERROR] {e}")
+            logger.warning(f"[TRUNK] Failed listing trunks: {e}")
 
         return None
 
-    # -----------------------------------------------------------
-    #  Create or fetch SIP trunk for this specific phone number
-    # -----------------------------------------------------------
-    async def _get_or_create_sip_trunk(self, tenant_id: str, phone_number: str) -> str:
-        livekit_api = self._get_livekit_api()
+    #
+    # 🏗 Create SIP inbound trunk
+    #
+    async def _create_trunk(self, phone: str) -> str:
+        lk = self._lk()
 
-        normalized = normalize_phone_number(phone_number)
-        logger.info(f"Normalized phone for trunk: {phone_number} -> {normalized}")
+        normalized = normalize_phone_number_safe(phone) or phone
 
-        # Attempt reuse first
-        existing = await self._find_trunk_id_by_number(livekit_api, phone_number)
-        if existing:
-            return existing
-
-        # Create new inbound trunk
         try:
-            req = api.CreateSIPInboundTrunkRequest(
-                trunk=api.SIPInboundTrunkInfo(
-                    name=f"Trunk for {normalized}",
-                    numbers=[normalized],            # IMPORTANT: Phone-number-specific
-                    allowed_addresses=["0.0.0.0/0"],
-                    metadata=f"tenant_id={tenant_id},phone_number={normalized}"
+            resp = await lk.sip.create_sip_inbound_trunk(
+                api.CreateSIPInboundTrunkRequest(
+                    trunk=api.SIPInboundTrunkInfo(
+                        name=f"Trunk {normalized}",
+                        numbers=[normalized],
+                        allowed_addresses=["0.0.0.0/0"],
+                        metadata=f"phone_number={normalized}",
+                    )
                 )
             )
-            result = await livekit_api.sip.create_sip_inbound_trunk(req)
 
-            trunk_id = (
-                getattr(result, "sip_trunk_id", None)
-                or getattr(result, "inbound_trunk_id", None)
-                or getattr(result, "trunk_id", None)
-                or getattr(result, "id", None)
-            )
+            tid = getattr(resp, "sip_trunk_id", None)
+            if not tid:
+                raise Exception("No sip_trunk_id returned")
 
-            if not trunk_id:
-                raise Exception("Trunk created but no trunk_id returned by LiveKit")
-
-            logger.info(f"✓ Created SIP trunk {trunk_id}")
-            return trunk_id
+            logger.info(f"[TRUNK] Created new trunk {tid} for {normalized}")
+            return tid
 
         except Exception as e:
+            # Handle "already exists"
             msg = str(e).lower()
-
-            # If trunk exists already, return that
-            if "already exists" in msg or "duplicate" in msg or "409" in msg:
-                existing = await self._find_trunk_id_by_number(livekit_api, phone_number)
-                if existing:
-                    return existing
-                raise Exception("Trunk exists but could not retrieve ID.")
-
-            logger.error(f"Failed to create SIP trunk: {e}")
+            if "exists" in msg or "409" in msg:
+                tid = await self._find_trunk(normalized)
+                if tid:
+                    return tid
+                raise Exception("Trunk exists but cannot be retrieved")
             raise
 
-    # -----------------------------------------------------------
-    #  Dispatch rule — intentionally disabled per user instruction
-    # -----------------------------------------------------------
-    async def _create_or_update_dispatch_rule(self, tenant_id: str, phone_number: str, trunk_id: str) -> str:
-        logger.info("Skipping dispatch rule creation (disabled by design).")
-        return "dispatch-rule-direct-webhook"
+    #
+    # 📞 Configure Twilio webhooks
+    #
+    async def _configure_twilio_webhook(self, tenant_id: str, phone: str) -> Dict[str, Any]:
+        integ = await firebase_service.get_twilio_integration(tenant_id)
+        if not integ:
+            raise ValueError(f"No Twilio integration found for tenant {tenant_id}")
 
-    # -----------------------------------------------------------
-    #  Configure Twilio phone number webhook
-    # -----------------------------------------------------------
-    async def _configure_twilio_phone_webhook(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
+        # decrypt token
+        if "auth_token" in integ:
+            integ["auth_token"] = encryption_service.decrypt(integ["auth_token"])
+
+        normalized = normalize_phone_number(phone)
+
         from app.core.config import TWILIO_WEBHOOK_BASE_URL
-
-        integration = await self._get_decrypted_twilio_integration(tenant_id)
-        if not integration:
-            raise ValueError("No Twilio integration found.")
-
-        if not TWILIO_WEBHOOK_BASE_URL:
-            raise ValueError("TWILIO_WEBHOOK_BASE_URL not configured.")
-
         base = TWILIO_WEBHOOK_BASE_URL.rstrip("/")
         voice_url = f"{base}/api/v1/voice-agent/twilio/webhook"
         status_url = f"{base}/api/v1/voice-agent/twilio/status"
 
-        normalized = normalize_phone_number(phone_number)
-
-        def _sync():
-            client = Client(integration["account_sid"], integration["auth_token"])
-
+        def _update_sync():
+            client = Client(integ["account_sid"], integ["auth_token"])
             nums = client.incoming_phone_numbers.list(phone_number=normalized)
             if not nums:
-                nums = client.incoming_phone_numbers.list(phone_number=phone_number)
+                nums = client.incoming_phone_numbers.list(phone_number=phone)
 
             if not nums:
-                raise ValueError(f"Phone number {phone_number} not found in Twilio.")
+                raise ValueError(
+                    f"Phone number {phone} not found in Twilio account"
+                )
 
-            num = nums[0]
-
-            num.update(
+            pn = nums[0]
+            pn.update(
                 voice_url=voice_url,
                 voice_method="POST",
                 status_callback=status_url,
                 status_callback_method="POST",
             )
+            return pn
 
-            return num
-
-        phone_res = await _run_twilio_sync(_sync)
-
-        logger.info(f"✓ Updated Twilio webhook for {phone_res.phone_number}")
+        pn = await _run_twilio_sync(_update_sync)
 
         return {
-            "phone_sid": phone_res.sid,
-            "phone_number": phone_res.phone_number,
+            "phone_sid": pn.sid,
+            "phone_number": pn.phone_number,
             "voice_url": voice_url,
             "status_callback": status_url,
         }
 
-    # -----------------------------------------------------------
-    #  FULL SETUP: trunk + dispatch-rule stub + Twilio webhook
-    # -----------------------------------------------------------
-    async def setup_phone_number_sip(self, tenant_id: str, phone_number: str, agent_id: str) -> Dict[str, Any]:
-        logger.info(f"Configuring SIP for phone={phone_number}, agent={agent_id}, tenant={tenant_id}")
+    #
+    # 🚀 Public setup method (STRICT MODE)
+    #
+    async def setup_phone_number_sip(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
+        """
+        STRICT MODE:
+        ✔ Only creates trunk
+        ✔ Does NOT touch dispatch rules (dashboard-managed)
+        ✔ Configures Twilio webhook
+        """
+        logger.info(f"[SIP SETUP] Starting for tenant={tenant_id}, phone={phone_number}")
 
-        trunk_id = await self._get_or_create_sip_trunk(tenant_id, phone_number)
-        logger.info(f"✓ SIP trunk ready: {trunk_id}")
+        # 1) Ensure trunk exists
+        normalized = normalize_phone_number_safe(phone_number) or phone_number
+        trunk_id = await self._find_trunk(normalized)
+        if not trunk_id:
+            trunk_id = await self._create_trunk(normalized)
 
-        dispatch_rule_id = await self._create_or_update_dispatch_rule(tenant_id, phone_number, trunk_id)
+        logger.info(f"[SIP SETUP] Using trunk={trunk_id}")
 
-        phone_cfg = await self._configure_twilio_phone_webhook(tenant_id, phone_number)
+        # 2) DO NOT touch dispatch rules
+        dispatch_rule_id = "dashboard-managed"  # purely informational
+
+        # 3) Ensure Twilio webhook is correct
+        twilio_cfg = await self._configure_twilio_webhook(tenant_id, normalized)
 
         return {
-            "trunk_id": trunk_id,
-            "dispatch_rule_id": dispatch_rule_id,
-            "phone_config": phone_cfg,
-            "sip_domain": LIVEKIT_SIP_DOMAIN,
             "status": "configured",
+            "trunk_id": trunk_id,
+            "dispatch_rule": dispatch_rule_id,
+            "twilio": twilio_cfg,
+            "sip_domain": LIVEKIT_SIP_DOMAIN,
         }
 
-    # -----------------------------------------------------------
-    #  Cleanup (remove trunk from dispatch-rule if ever needed)
-    # -----------------------------------------------------------
-    async def cleanup_phone_number_sip(self, tenant_id: str, phone_number: str, dispatch_rule_id: Optional[str] = None) -> bool:
-        logger.info(f"Cleanup requested for {phone_number} (noop for now).")
-        return True
 
-
-# GLOBAL INSTANCE
+# Global instance
 sip_configuration_service = SIPConfigurationService()
