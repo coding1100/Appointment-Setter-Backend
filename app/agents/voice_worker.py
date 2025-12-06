@@ -5,6 +5,7 @@ Based on the LiveKit agents framework pattern.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -20,7 +21,18 @@ from livekit.agents import (
 from livekit.plugins import deepgram, elevenlabs, google, silero
 
 from app.core.async_redis import async_redis_client
-from app.core.config import DEEPGRAM_API_KEY, ELEVEN_API_KEY, GOOGLE_API_KEY, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
+from app.core.config import (
+    DEEPGRAM_API_KEY,
+    ELEVEN_API_KEY,
+    GOOGLE_API_KEY,
+    LIVEKIT_API_KEY,
+    LIVEKIT_API_SECRET,
+    LIVEKIT_SIP_ATTRIBUTE_AGENT,
+    LIVEKIT_SIP_ATTRIBUTE_CALL_KEY,
+    LIVEKIT_SIP_ATTRIBUTE_CONFIG,
+    LIVEKIT_SIP_ATTRIBUTE_TENANT,
+    LIVEKIT_URL,
+)
 from app.core.prompts import get_template
 
 logging.basicConfig(level=logging.INFO)
@@ -79,6 +91,63 @@ def get_tts_service(voice_id: Optional[str], language_code: str) -> elevenlabs.T
 
     TTS_CACHE[cache_key] = tts_instance
     return tts_instance
+
+
+def _extract_participant_attributes(ctx: agents.JobContext) -> Dict[str, str]:
+    """Normalize participant attribute structure into a simple dictionary."""
+    attributes: Dict[str, str] = {}
+    job = getattr(ctx, "job", None)
+    participant = getattr(job, "participant", None) if job else None
+    raw_attributes = getattr(participant, "attributes", None) if participant else None
+
+    if not raw_attributes:
+        return attributes
+
+    if isinstance(raw_attributes, dict):
+        return {str(key): value for key, value in raw_attributes.items() if value is not None}
+
+    try:
+        for entry in raw_attributes:
+            key = getattr(entry, "key", None)
+            value = getattr(entry, "value", None)
+            if key and value is not None:
+                attributes[str(key)] = value
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning(f"[WORKER ENTRYPOINT] Failed to normalize participant attributes: {exc}")
+
+    return attributes
+
+
+def extract_call_metadata(ctx: agents.JobContext) -> Dict[str, Optional[str]]:
+    """Extract high-level metadata (tenant, agent, call key) for logging and fallbacks."""
+    attributes = _extract_participant_attributes(ctx)
+    metadata = {
+        "call_key": attributes.get(LIVEKIT_SIP_ATTRIBUTE_CALL_KEY),
+        "tenant_id": attributes.get(LIVEKIT_SIP_ATTRIBUTE_TENANT),
+        "agent_id": attributes.get(LIVEKIT_SIP_ATTRIBUTE_AGENT),
+    }
+    logger.info(f"[WORKER ENTRYPOINT] SIP attributes: {metadata}")
+    return metadata
+
+
+def load_config_from_attributes(ctx: agents.JobContext) -> Optional[Dict[str, Any]]:
+    """Decode agent configuration embedded in SIP participant attributes."""
+    attributes = _extract_participant_attributes(ctx)
+    encoded_config = attributes.get(LIVEKIT_SIP_ATTRIBUTE_CONFIG)
+
+    if not encoded_config:
+        logger.info("[WORKER ATTRIBUTES] No embedded config attribute present")
+        return None
+
+    try:
+        padding = "=" * (-len(encoded_config) % 4)
+        decoded = base64.urlsafe_b64decode((encoded_config + padding).encode("utf-8")).decode("utf-8")
+        config = json.loads(decoded)
+        logger.info("[WORKER ATTRIBUTES] ✓ Loaded agent config from SIP attributes")
+        return config
+    except Exception as exc:
+        logger.warning(f"[WORKER ATTRIBUTES] Failed to decode config from SIP attribute: {exc}")
+        return None
 
 
 class VoiceAgent(Agent):
@@ -227,9 +296,17 @@ async def entrypoint(ctx: agents.JobContext):
     # Pre-warm VAD model (lightweight if already loaded)
     prewarm_vad()
 
+    # Inspect SIP participant attributes for embedded metadata/config
+    extract_call_metadata(ctx)
+    attribute_config = load_config_from_attributes(ctx)
+
     # Retrieve agent configuration from Redis
     logger.info(f"[WORKER ENTRYPOINT] Step 1: Retrieving agent configuration...")
-    config = await get_agent_config(room_name)
+    if attribute_config:
+        config = attribute_config
+        logger.info("[WORKER ENTRYPOINT] Using agent config supplied via SIP attributes")
+    else:
+        config = await get_agent_config(room_name)
 
     if config:
         logger.info(f"[WORKER ENTRYPOINT] ✓ Configuration retrieved successfully")
