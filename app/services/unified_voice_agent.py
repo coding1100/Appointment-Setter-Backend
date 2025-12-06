@@ -256,15 +256,15 @@ class UnifiedVoiceAgentService:
                 }
                 logger.info(f"Cleaned agent data for storage: {clean_agent_data}")
 
-        room_config = {
-            "tenant_id": tenant_id,
-            "service_type": service_type,
-            "agent_id": agent_id,
-            "voice_id": voice_id,
-            "agent_data": clean_agent_data,
-        }
-        logger.info(f"Room config to store: {room_config}")
-        await self._store_room_config(room_name, room_config)
+            room_config = {
+                "tenant_id": tenant_id,
+                "service_type": service_type,
+                "agent_id": agent_id,
+                "voice_id": voice_id,
+                "agent_data": clean_agent_data,
+            }
+            logger.info(f"Room config to store: {room_config}")
+            await self._store_room_config(room_name, room_config)
             logger.info(f"LiveKit room created successfully")
 
             # Create dialog context
