@@ -2,35 +2,31 @@
 LiveKit Voice Agent Worker
 This worker connects to LiveKit and handles voice agent sessions.
 Based on the LiveKit agents framework pattern.
+
+Works with LiveKit Individual dispatch rule where room names are:
+  inbound_{callerNumber}_{randomSuffix}
+
+Config is stored in Redis by caller phone number and looked up when worker starts.
 """
 
 import asyncio
-import base64
 import json
 import logging
-import os
 from typing import Any, Dict, Optional
 
 from livekit import agents
 from livekit.agents import (
     Agent,
     AgentSession,
-    RoomInputOptions,
     function_tool,
 )
 from livekit.plugins import deepgram, elevenlabs, google, silero
 
 from app.core.async_redis import async_redis_client
 from app.core.config import (
-    DEEPGRAM_API_KEY,
     ELEVEN_API_KEY,
-    GOOGLE_API_KEY,
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
-    LIVEKIT_SIP_ATTRIBUTE_AGENT,
-    LIVEKIT_SIP_ATTRIBUTE_CALL_KEY,
-    LIVEKIT_SIP_ATTRIBUTE_CONFIG,
-    LIVEKIT_SIP_ATTRIBUTE_TENANT,
     LIVEKIT_URL,
 )
 from app.core.prompts import get_template
@@ -42,23 +38,36 @@ TTS_CACHE: Dict[str, elevenlabs.TTS] = {}
 DEFAULT_TTS_CACHE_KEY = "__default__"
 MAX_HISTORY_LOG_LINES = 40
 
+# VAD settings optimized for telephony
+# Lower thresholds = more responsive but may trigger on noise
+# Higher thresholds = more stable but may miss quiet speech
 VAD_SETTINGS = {
-    "min_speech_duration": 0.1,      # seconds
-    "min_silence_duration": 0.5,     # seconds
-    "prefix_padding_duration": 0.1,  # seconds
-    "activation_threshold": 0.5,
+    "min_speech_duration": 0.05,     # 50ms - faster detection
+    "min_silence_duration": 0.3,     # 300ms - quicker turn-taking
+    "prefix_padding_duration": 0.1,  # 100ms padding
+    "activation_threshold": 0.5,     # Standard threshold
 }
+
+# Global VAD cache to prevent reloading model per call
+_CACHED_VAD = None
+
+
+def get_cached_vad():
+    """Get or create a cached VAD instance to prevent repeated model loads."""
+    global _CACHED_VAD
+    if _CACHED_VAD is None:
+        logger.info("[VAD] Loading Silero VAD model (first time)...")
+        _CACHED_VAD = silero.VAD.load(**VAD_SETTINGS)
+        logger.info("[VAD] ✓ Silero VAD model loaded and cached")
+    return _CACHED_VAD
 
 
 def prewarm_vad():
     """Pre-warm VAD model to prevent cold start delays."""
     try:
         logger.info("Pre-warming VAD model...")
-        vad = silero.VAD.load(**VAD_SETTINGS)
-        # Run a dummy inference
-        import numpy as np
-        dummy_audio = np.zeros(1600, dtype=np.float32)  # 0.1s of silence
-        # Just creating the iterator or processing a chunk warms it up
+        # Use the cached VAD getter to ensure model is loaded once
+        get_cached_vad()
         logger.info("VAD model pre-warmed successfully")
     except Exception as e:
         logger.warning(f"Failed to pre-warm VAD model: {e}")
@@ -93,63 +102,6 @@ def get_tts_service(voice_id: Optional[str], language_code: str) -> elevenlabs.T
     return tts_instance
 
 
-def _extract_participant_attributes(ctx: agents.JobContext) -> Dict[str, str]:
-    """Normalize participant attribute structure into a simple dictionary."""
-    attributes: Dict[str, str] = {}
-    job = getattr(ctx, "job", None)
-    participant = getattr(job, "participant", None) if job else None
-    raw_attributes = getattr(participant, "attributes", None) if participant else None
-
-    if not raw_attributes:
-        return attributes
-
-    if isinstance(raw_attributes, dict):
-        return {str(key): value for key, value in raw_attributes.items() if value is not None}
-
-    try:
-        for entry in raw_attributes:
-            key = getattr(entry, "key", None)
-            value = getattr(entry, "value", None)
-            if key and value is not None:
-                attributes[str(key)] = value
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning(f"[WORKER ENTRYPOINT] Failed to normalize participant attributes: {exc}")
-
-    return attributes
-
-
-def extract_call_metadata(ctx: agents.JobContext) -> Dict[str, Optional[str]]:
-    """Extract high-level metadata (tenant, agent, call key) for logging and fallbacks."""
-    attributes = _extract_participant_attributes(ctx)
-    metadata = {
-        "call_key": attributes.get(LIVEKIT_SIP_ATTRIBUTE_CALL_KEY),
-        "tenant_id": attributes.get(LIVEKIT_SIP_ATTRIBUTE_TENANT),
-        "agent_id": attributes.get(LIVEKIT_SIP_ATTRIBUTE_AGENT),
-    }
-    logger.info(f"[WORKER ENTRYPOINT] SIP attributes: {metadata}")
-    return metadata
-
-
-def load_config_from_attributes(ctx: agents.JobContext) -> Optional[Dict[str, Any]]:
-    """Decode agent configuration embedded in SIP participant attributes."""
-    attributes = _extract_participant_attributes(ctx)
-    encoded_config = attributes.get(LIVEKIT_SIP_ATTRIBUTE_CONFIG)
-
-    if not encoded_config:
-        logger.info("[WORKER ATTRIBUTES] No embedded config attribute present")
-        return None
-
-    try:
-        padding = "=" * (-len(encoded_config) % 4)
-        decoded = base64.urlsafe_b64decode((encoded_config + padding).encode("utf-8")).decode("utf-8")
-        config = json.loads(decoded)
-        logger.info("[WORKER ATTRIBUTES] ✓ Loaded agent config from SIP attributes")
-        return config
-    except Exception as exc:
-        logger.warning(f"[WORKER ATTRIBUTES] Failed to decode config from SIP attribute: {exc}")
-        return None
-
-
 class VoiceAgent(Agent):
     """Voice agent for handling customer interactions."""
 
@@ -182,54 +134,87 @@ class VoiceAgent(Agent):
         self._closing_task.add_done_callback(self._on_close_task_done)
 
 
+def extract_caller_from_room_name(room_name: str) -> Optional[str]:
+    """
+    Extract caller phone number from LiveKit Individual dispatch room name.
+    
+    Room name format: inbound_+14438600638_w9TNRqtPr5A2
+                      {prefix}_{caller}_{suffix}
+    
+    Returns the caller number (e.g., "+14438600638") or None if parsing fails.
+    """
+    if not room_name:
+        return None
+    
+    # Handle both underscore (LiveKit) and dash (legacy) separators
+    if room_name.startswith("inbound_"):
+        # LiveKit Individual dispatch format: inbound_+14438600638_suffix
+        parts = room_name.split("_")
+        if len(parts) >= 2:
+            # parts[0] = "inbound", parts[1] = "+14438600638", parts[2] = suffix
+            caller = parts[1]
+            logger.info(f"[ROOM PARSE] Extracted caller '{caller}' from room '{room_name}'")
+            return caller
+    elif room_name.startswith("inbound-"):
+        # Legacy format: inbound-14438600638-suffix
+        parts = room_name.split("-")
+        if len(parts) >= 2:
+            caller = parts[1]
+            # Add + prefix if missing
+            if not caller.startswith("+"):
+                caller = f"+{caller}"
+            logger.info(f"[ROOM PARSE] Extracted caller '{caller}' from legacy room '{room_name}'")
+            return caller
+    
+    logger.warning(f"[ROOM PARSE] Could not extract caller from room name: {room_name}")
+    return None
+
+
 async def get_agent_config(room_name: str) -> Optional[Dict[str, Any]]:
-    """Retrieve agent configuration for a room from Redis."""
+    """
+    Retrieve agent configuration from Redis.
+    
+    Lookup order:
+    1. By caller number (extracted from room name) - for Individual dispatch
+    2. By room name - for backward compatibility with Direct dispatch
+    """
     try:
-        config_key = f"livekit:room_config:{room_name}"
-        logger.info(f"[WORKER REDIS] Attempting to retrieve config with key: {config_key}")
+        # Step 1: Try to extract caller from room name and look up by caller
+        caller = extract_caller_from_room_name(room_name)
+        if caller:
+            caller_config_key = f"livekit:caller_config:{caller}"
+            logger.info(f"[WORKER REDIS] Trying caller-based lookup with key: {caller_config_key}")
+            
+            config_data = await async_redis_client.get(caller_config_key)
+            if config_data:
+                config = json.loads(config_data)
+                logger.info(f"[WORKER REDIS] ✓ Found config by caller number: {caller}")
+                logger.info(f"[WORKER REDIS] Config details:")
+                logger.info(f"  - agent_id: {config.get('agent_id')}")
+                logger.info(f"  - voice_id: {config.get('voice_id')}")
+                logger.info(f"  - service_type: {config.get('service_type')}")
+                logger.info(f"  - agent_data keys: {list(config.get('agent_data', {}).keys())}")
+                return config
+            else:
+                logger.info(f"[WORKER REDIS] No config found for caller {caller}, trying room-based lookup...")
 
-        config_data = await async_redis_client.get(config_key)
-        logger.info(f"[WORKER REDIS] Raw config data retrieved: {config_data}")
-
+        # Step 2: Fall back to room name lookup (backward compatibility)
+        room_config_key = f"livekit:room_config:{room_name}"
+        logger.info(f"[WORKER REDIS] Trying room-based lookup with key: {room_config_key}")
+        
+        config_data = await async_redis_client.get(room_config_key)
         if config_data:
             config = json.loads(config_data)
-            logger.info(f"[WORKER REDIS] ✓ Parsed configuration successfully")
+            logger.info(f"[WORKER REDIS] ✓ Found config by room name: {room_name}")
             logger.info(f"[WORKER REDIS] Config details:")
             logger.info(f"  - agent_id: {config.get('agent_id')}")
             logger.info(f"  - voice_id: {config.get('voice_id')}")
             logger.info(f"  - service_type: {config.get('service_type')}")
-            logger.info(f"  - agent_data: {config.get('agent_data')}")
             return config
-        else:
-            # Try fallback lookup: if room_name is just "inbound-{caller_number}", 
-            # it might have been created by dispatch rule differently than webhook expected
-            # Also try if room_name has call_sid suffix, try without it
-            logger.warning(f"[WORKER REDIS] ✗ No agent configuration found for room {room_name}, trying fallback lookup...")
-            
-            # Fallback 1: If room_name is "inbound-{caller_number}", it's already the fallback format
-            # Fallback 2: If room_name is "inbound-{caller_number}-{call_sid}", try "inbound-{caller_number}"
-            if room_name.startswith("inbound-"):
-                parts = room_name.split("-")
-                if len(parts) >= 2:
-                    caller_number = parts[1]
-                    # Try the other format (if current is with call_sid, try without; if without, try with common patterns)
-                    fallback_room_name = f"inbound-{caller_number}"
-                    if fallback_room_name != room_name:  # Only try if different
-                        fallback_config_key = f"livekit:room_config:{fallback_room_name}"
-                        logger.info(f"[WORKER REDIS] Trying fallback key: {fallback_config_key}")
-                        fallback_config_data = await async_redis_client.get(fallback_config_key)
-                        if fallback_config_data:
-                            logger.info(f"[WORKER REDIS] ✓ Found config using fallback key: {fallback_config_key}")
-                            config = json.loads(fallback_config_data)
-                            logger.info(f"[WORKER REDIS] Config details:")
-                            logger.info(f"  - agent_id: {config.get('agent_id')}")
-                            logger.info(f"  - voice_id: {config.get('voice_id')}")
-                            logger.info(f"  - service_type: {config.get('service_type')}")
-                            logger.info(f"  - agent_data: {config.get('agent_data')}")
-                            return config
-            
-            logger.warning(f"[WORKER REDIS] ✗ No agent configuration found for room {room_name} (tried fallback), using defaults")
-            return None
+
+        logger.warning(f"[WORKER REDIS] ✗ No agent configuration found (tried caller and room lookups)")
+        return None
+        
     except Exception as e:
         logger.error(f"[WORKER REDIS] ✗ Error retrieving agent config from Redis: {e}", exc_info=True)
         return None
@@ -287,6 +272,9 @@ async def entrypoint(ctx: agents.JobContext):
     """
     Main entrypoint for the LiveKit voice agent worker.
     This is called when a participant joins a room.
+    
+    Room name format from Individual dispatch: inbound_+14438600638_randomSuffix
+    We extract the caller number and look up config from Redis.
     """
     room_name = ctx.room.name
     logger.info("=" * 80)
@@ -296,17 +284,10 @@ async def entrypoint(ctx: agents.JobContext):
     # Pre-warm VAD model (lightweight if already loaded)
     prewarm_vad()
 
-    # Inspect SIP participant attributes for embedded metadata/config
-    extract_call_metadata(ctx)
-    attribute_config = load_config_from_attributes(ctx)
-
     # Retrieve agent configuration from Redis
+    # Config is stored by caller phone number (extracted from room name)
     logger.info(f"[WORKER ENTRYPOINT] Step 1: Retrieving agent configuration...")
-    if attribute_config:
-        config = attribute_config
-        logger.info("[WORKER ENTRYPOINT] Using agent config supplied via SIP attributes")
-    else:
-        config = await get_agent_config(room_name)
+    config = await get_agent_config(room_name)
 
     if config:
         logger.info(f"[WORKER ENTRYPOINT] ✓ Configuration retrieved successfully")
@@ -346,12 +327,13 @@ async def entrypoint(ctx: agents.JobContext):
     tts = get_tts_service(voice_id, language_code)
 
     # Create the agent session with all components
-    # OPTIMIZATION: Use faster models and specific configurations to prevent timeouts
+    # OPTIMIZATION: Use cached VAD and faster models to prevent timeouts
+    # Using cached VAD prevents model reload per call (major source of slowness)
     session = AgentSession(
         stt=deepgram.STT(model="nova-2-general", language="en-US"),
         llm=google.LLM(model="gemini-2.0-flash"),
         tts=tts,
-        vad=silero.VAD.load(**VAD_SETTINGS),
+        vad=get_cached_vad(),
     )
 
     # Connect to the LiveKit room
@@ -362,7 +344,6 @@ async def entrypoint(ctx: agents.JobContext):
     await session.start(
         room=ctx.room,
         agent=voice_agent,
-        room_input_options=RoomInputOptions(),
     )
     logger.info("Agent session started")
 
