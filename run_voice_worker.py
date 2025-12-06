@@ -82,6 +82,9 @@
 """
 Run the LiveKit Voice Agent Worker
 Starts a single worker instance that handles all inbound SIP calls.
+
+IMPORTANT: This worker uses num_idle_processes=1 to avoid spawning
+multiple competing processes that cause VAD slowness.
 """
 
 import os
@@ -105,6 +108,7 @@ if __name__ == "__main__":
     print("Starting LiveKit Voice Agent Worker…")
     print(f"LiveKit URL: {LIVEKIT_URL}")
     print("Worker agent_name: '' (empty, allowed & intentional)")
+    print("num_idle_processes: 1 (prevents duplicate workers)")
     print("=" * 70)
 
     # Windows IPC warning suppressor
@@ -118,14 +122,19 @@ if __name__ == "__main__":
         print("NOTE: Running on Windows — IPC watcher warnings suppressed.\n")
 
     try:
-        # Start the worker
+        # Start the worker with limited processes to prevent VAD slowness
+        # - num_idle_processes=1: Only keep 1 idle process (prevents multiple workers competing for CPU)
+        # - This reduces "inference is slower than realtime" warnings
         agents.cli.run_app(
             agents.WorkerOptions(
                 entrypoint_fnc=entrypoint,
                 api_key=LIVEKIT_API_KEY,
                 api_secret=LIVEKIT_API_SECRET,
-                ws_url=LIVEKIT_URL,    # must be wss://….livekit.cloud
-                agent_name="",         # ← YOU REQUIRE EMPTY NAME (valid)
+                ws_url=LIVEKIT_URL,
+                agent_name="",
+                # Limit to 1 idle process to prevent CPU contention
+                # Multiple processes cause Silero VAD to run 10-15+ seconds behind realtime
+                num_idle_processes=1,
             )
         )
 

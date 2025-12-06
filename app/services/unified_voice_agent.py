@@ -5,7 +5,6 @@ Single service for all voice agent interactions.
 """
 
 import asyncio
-import base64
 import json
 import logging
 import uuid
@@ -29,10 +28,6 @@ from app.core.config import (
     LIVEKIT_API_SECRET,
     LIVEKIT_SIP_DOMAIN,
     LIVEKIT_URL,
-    LIVEKIT_SIP_HEADER_AGENT,
-    LIVEKIT_SIP_HEADER_CALL_KEY,
-    LIVEKIT_SIP_HEADER_CONFIG,
-    LIVEKIT_SIP_HEADER_TENANT,
     TWILIO_WEBHOOK_BASE_URL,
 )
 from app.core.encryption import encryption_service
@@ -556,59 +551,32 @@ class UnifiedVoiceAgentService:
                     "called_number": normalized_to_number,
                 }
 
-                sip_headers = self._build_sip_headers(
-                    tenant_id=tenant_id,
-                    agent_id=agent_id,
-                    call_sid=call_sid,
-                    config=config_data,
-                )
-
                 logger.info(
                     f"Agent configuration prepared: "
                     f"Agent={agent.get('name')}, ServiceType={service_type}, VoiceID={agent.get('voice_id')}"
                 )
 
-                room_name_override = self._extract_livekit_room_name(form_data)
-                if room_name_override:
-                    logger.info(f"[SIP ROOM] Received LiveKit room override: {room_name_override}")
+                # Store config by CALLER phone number
+                # LiveKit Individual dispatch creates rooms like: inbound_+14438600638_randomSuffix
+                # We can't predict the exact room name, but we know the caller number
+                # Worker will parse room name, extract caller, and look up config by caller
+                stored = await self._store_caller_config(from_number, config_data)
+                if not stored:
+                    logger.error(f"[INBOUND] Failed to store configuration for caller {from_number}")
+                    response = VoiceResponse()
+                    response.say("Unable to initialize the call configuration. Please try again later.")
+                    response.hangup()
+                    return response
 
-                caller_number_clean = from_number.replace("+", "").replace("-", "").replace(" ", "")
-                generated_room_name = f"inbound-{caller_number_clean}-{call_sid[-8:]}"
-                using_livekit_room = bool(room_name_override)
-                room_name = room_name_override or generated_room_name
+                logger.info(f"✓ Stored agent config for caller {from_number}")
+                logger.info(
+                    f"Agent: {agent.get('name')}, Service: {agent.get('service_type')}, Voice: {agent.get('voice_id')}"
+                )
 
-                if using_livekit_room:
-                    logger.info(f"[DIRECT FLOW] Using LiveKit-provided room name: {room_name}")
-                    stored = await self._store_room_config(room_name, config_data)
-                    if not stored:
-                        logger.error(f"[DIRECT FLOW] Failed to store configuration for LiveKit room {room_name}")
-                        response = VoiceResponse()
-                        response.say("Unable to initialize the call configuration. Please try again later.")
-                        response.hangup()
-                        return response
-                else:
-                    logger.info(f"[DIRECT FLOW] Creating LiveKit room {room_name} for inbound call")
-
-                    room_created = await self._create_room(room_name, config_data)
-
-                    if not room_created:
-                        logger.error(f"Failed to create LiveKit room {room_name}")
-                        response = VoiceResponse()
-                        response.say("Unable to connect the call. Please try again later.")
-                        response.hangup()
-                        return response
-
-                    # Verify room exists and is ready (critical for SIP connections)
-                    room_verified = await self._verify_room_exists(room_name)
-                    if not room_verified:
-                        logger.warning(f"Room {room_name} created but verification failed. Continuing anyway...")
-                        # Don't fail here - room might be ready but not yet in list
-                        # LiveKit sometimes has a small delay in room availability
-
-                    logger.info(f"✓ Created LiveKit room {room_name} and stored agent config")
-                    logger.info(
-                        f"Agent: {agent.get('name')}, Service: {agent.get('service_type')}, Voice: {agent.get('voice_id')}"
-                    )
+                # Room name is controlled by LiveKit's Individual dispatch rule
+                # Format: {roomPrefix}_{callerNumber}_{randomSuffix}
+                # We don't create the room - LiveKit does it automatically
+                room_name = f"inbound_{from_number}_pending"  # Placeholder for session tracking
 
                 # Track inbound call session
                 self.active_sessions[call_sid] = {
@@ -627,21 +595,17 @@ class UnifiedVoiceAgentService:
                 logger.info(f"✓ Inbound call setup complete for {to_number} -> Agent {agent.get('name')}")
 
             # For inbound calls: Use TwiML <Dial><SIP> to route to LiveKit
-            # The SIP URI format: sip:room_name@livekit_sip_domain
-            # LiveKit will automatically create the SIP participant when the call arrives
-            sip_uri = self._get_livekit_sip_uri(room_name)
+            # With Individual dispatch rule, LiveKit creates the room automatically
+            # The SIP URI just needs to point to the LiveKit SIP domain
+            sip_uri = self._get_livekit_sip_uri_simple()
 
             logger.info(f"Routing call to LiveKit with SIP URI: {sip_uri}")
-            logger.info(f"Room: {room_name}, Agent: {agent.get('name')}")
+            logger.info(f"Caller: {from_number}, Agent: {agent.get('name')}")
 
-            # Create TwiML response that dials into LiveKit room
+            # Create TwiML response that dials into LiveKit
             response = VoiceResponse()
             dial = Dial()
-            if sip_headers:
-                logger.info(f"Attaching SIP headers for LiveKit dispatch: {sip_headers}")
-                dial.sip(sip_uri, headers=sip_headers)
-            else:
-                dial.sip(sip_uri)
+            dial.sip(sip_uri)
             response.append(dial)
 
             # Update session status
@@ -797,76 +761,58 @@ Business: {business_name}"""
             logger.error(f"[REDIS STORE] ✗ Error storing room config for {room_name}: {exc}", exc_info=True)
             return False
 
-    def _build_sip_headers(
-        self, tenant_id: Optional[str], agent_id: Optional[str], call_sid: Optional[str], config: Dict[str, Any]
-    ) -> Dict[str, str]:
-        """Construct SIP headers so LiveKit can inject metadata as participant attributes."""
-        headers: Dict[str, str] = {}
-
-        if tenant_id:
-            headers[LIVEKIT_SIP_HEADER_TENANT] = tenant_id
-        if agent_id:
-            headers[LIVEKIT_SIP_HEADER_AGENT] = agent_id
-        if call_sid:
-            headers[LIVEKIT_SIP_HEADER_CALL_KEY] = call_sid
-
-        encoded_config = self._encode_config_for_header(config)
-        if encoded_config:
-            headers[LIVEKIT_SIP_HEADER_CONFIG] = encoded_config
-        else:
-            logger.warning("[SIP HEADERS] Skipping agent config header - payload encoding failed")
-
-        return headers
-
-    def _encode_config_for_header(self, config: Dict[str, Any]) -> Optional[str]:
-        """Serialize and base64-encode agent config for transport via SIP headers."""
+    async def _store_caller_config(
+        self, caller_number: str, config: Dict[str, Any], ttl: int = CALL_CONFIG_TTL_SECONDS
+    ) -> bool:
+        """
+        Store agent configuration keyed by caller phone number.
+        
+        This is used with LiveKit's Individual dispatch rule where the room name
+        is generated by LiveKit (format: inbound_{caller}_{suffix}).
+        
+        The worker will parse the room name to extract the caller number,
+        then look up the config using this key.
+        """
         try:
-            payload = self._sanitize_config_payload(config)
-            if not payload:
-                return None
-
-            json_payload = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-            encoded = base64.urlsafe_b64encode(json_payload.encode("utf-8")).decode("ascii")
-
-            if len(encoded) > 3500:
-                logger.warning(
-                    "[SIP HEADERS] Encoded config size is %s bytes, Twilio may truncate headers", len(encoded)
-                )
-
-            return encoded
+            # Normalize caller number for consistent lookup
+            # LiveKit uses the format with + sign: inbound_+14438600638_xxx
+            normalized_caller = caller_number.strip()
+            
+            config_key = f"livekit:caller_config:{normalized_caller}"
+            config_json = json.dumps(config)
+            
+            logger.info(f"[REDIS STORE] Storing caller config with key: {config_key}")
+            await async_redis_client.set(config_key, config_json, ttl=ttl)
+            logger.info(f"[REDIS STORE] ✓ Successfully stored config for caller: {normalized_caller}")
+            
+            # Verify storage
+            verify_data = await async_redis_client.get(config_key)
+            if verify_data:
+                logger.info(f"[REDIS VERIFY] ✓ Caller config verified in Redis")
+                return True
+            else:
+                logger.error(f"[REDIS VERIFY] ✗ Failed to verify caller config in Redis for key: {config_key}")
+                return False
+                
         except Exception as exc:
-            logger.warning(f"[SIP HEADERS] Failed to encode agent config for SIP header: {exc}")
-            return None
+            logger.error(f"[REDIS STORE] ✗ Error storing caller config for {caller_number}: {exc}", exc_info=True)
+            return False
 
-    def _sanitize_config_payload(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Trim agent config down to SIP-safe payload."""
-        safe_config: Dict[str, Any] = {
-            "agent_id": config.get("agent_id"),
-            "tenant_id": config.get("tenant_id"),
-            "service_type": config.get("service_type"),
-            "voice_id": config.get("voice_id"),
-            "call_type": config.get("call_type"),
-            "caller_number": config.get("caller_number"),
-            "called_number": config.get("called_number"),
-        }
-
-        agent_data = config.get("agent_data") or {}
-        if agent_data:
-            safe_agent_data = {
-                "id": agent_data.get("id"),
-                "name": agent_data.get("name"),
-                "service_type": agent_data.get("service_type"),
-                "language": agent_data.get("language"),
-                "greeting_message": agent_data.get("greeting_message"),
-                "voice_id": agent_data.get("voice_id"),
-                "tenant_id": agent_data.get("tenant_id"),
-                "business_name": agent_data.get("business_name"),
-            }
-            filtered_agent_data = {k: v for k, v in safe_agent_data.items() if v not in (None, "", [])}
-            if filtered_agent_data:
-                safe_config["agent_data"] = filtered_agent_data
-
-        return {k: v for k, v in safe_config.items() if v not in (None, "", [])}
+    def _get_livekit_sip_uri_simple(self) -> str:
+        """
+        Generate simple SIP URI for LiveKit with Individual dispatch rule.
+        
+        With Individual dispatch, LiveKit creates the room automatically.
+        We just need to point to the SIP domain - no room name needed in URI.
+        """
+        if not LIVEKIT_SIP_DOMAIN:
+            raise ValueError("LIVEKIT_SIP_DOMAIN is not configured")
+        
+        # Simple URI format for Individual dispatch
+        # LiveKit will create room based on dispatch rule's roomPrefix + caller + suffix
+        sip_uri = f"sip:{LIVEKIT_SIP_DOMAIN}"
+        logger.info(f"[SIP URI] Generated simple SIP URI: {sip_uri}")
+        return sip_uri
 
     def _extract_livekit_room_name(self, payload: Dict[str, Any]) -> Optional[str]:
         """Extract a LiveKit-provided room name from the inbound webhook payload, if available."""

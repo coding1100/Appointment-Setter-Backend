@@ -28,16 +28,8 @@ LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "")
 # Get this from LiveKit Cloud Dashboard → SIP → Inbound Trunks
 LIVEKIT_SIP_DOMAIN = os.environ.get("LIVEKIT_SIP_DOMAIN", "")
 
-# LiveKit SIP metadata propagation
+# Redis config TTL for caller-based lookups (Individual dispatch)
 CALL_CONFIG_TTL_SECONDS = int(os.environ.get("CALL_CONFIG_TTL_SECONDS", "3600"))
-LIVEKIT_SIP_HEADER_CALL_KEY = os.environ.get("LIVEKIT_SIP_HEADER_CALL_KEY", "X-LK-CallKey")
-LIVEKIT_SIP_HEADER_TENANT = os.environ.get("LIVEKIT_SIP_HEADER_TENANT", "X-LK-TenantId")
-LIVEKIT_SIP_HEADER_AGENT = os.environ.get("LIVEKIT_SIP_HEADER_AGENT", "X-LK-AgentId")
-LIVEKIT_SIP_HEADER_CONFIG = os.environ.get("LIVEKIT_SIP_HEADER_CONFIG", "X-LK-AgentConfig")
-LIVEKIT_SIP_ATTRIBUTE_CALL_KEY = os.environ.get("LIVEKIT_SIP_ATTRIBUTE_CALL_KEY", "lk_call_key")
-LIVEKIT_SIP_ATTRIBUTE_TENANT = os.environ.get("LIVEKIT_SIP_ATTRIBUTE_TENANT", "lk_tenant_id")
-LIVEKIT_SIP_ATTRIBUTE_AGENT = os.environ.get("LIVEKIT_SIP_ATTRIBUTE_AGENT", "lk_agent_id")
-LIVEKIT_SIP_ATTRIBUTE_CONFIG = os.environ.get("LIVEKIT_SIP_ATTRIBUTE_CONFIG", "lk_agent_config")
 
 # Twilio settings
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
