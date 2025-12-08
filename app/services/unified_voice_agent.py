@@ -556,20 +556,42 @@ class UnifiedVoiceAgentService:
                     f"Agent={agent.get('name')}, ServiceType={service_type}, VoiceID={agent.get('voice_id')}"
                 )
 
-                # Store config by CALLED phone number (to_number) - the Twilio number that was called
-                # This is the correct key because the agent config is tied to the phone number, not the caller
-                # Worker will get to_number from SIP participant attributes and look up config
-                stored = await self._store_called_number_config(to_number, config_data)
-                if not stored:
-                    logger.error(f"[INBOUND] Failed to store configuration for called number {to_number}")
-                    response = VoiceResponse()
-                    response.say("Unable to initialize the call configuration. Please try again later.")
-                    response.hangup()
-                    return response
+                # Get trunk_id from phone record (stored during phone assignment)
+                # Trunk ID is always available in SIP participant attributes (sip.trunkID)
+                # This is more reliable than extracting phone number from attributes
+                trunk_id = phone_record.get("sip_trunk_id")
+                if not trunk_id:
+                    logger.warning(
+                        f"Phone number {normalized_to_number} has no sip_trunk_id. "
+                        f"This may indicate SIP setup was incomplete. Attempting to continue with phone number lookup..."
+                    )
+                    # Fallback: Store by called number (for backward compatibility)
+                    stored = await self._store_called_number_config(to_number, config_data)
+                    if not stored:
+                        logger.error(f"[INBOUND] Failed to store configuration for called number {to_number}")
+                        response = VoiceResponse()
+                        response.say("Unable to initialize the call configuration. Please try again later.")
+                        response.hangup()
+                        return response
+                    logger.info(f"✓ Stored agent config for called number {to_number} (fallback - no trunk_id)")
+                else:
+                    # PRIMARY METHOD: Store config by trunk_id (most reliable)
+                    stored = await self._store_trunk_config(trunk_id, config_data)
+                    if not stored:
+                        logger.error(f"[INBOUND] Failed to store configuration for trunk {trunk_id}")
+                        # Fallback to called number storage
+                        logger.warning(f"Falling back to called-number-based storage for {to_number}")
+                        stored = await self._store_called_number_config(to_number, config_data)
+                        if not stored:
+                            response = VoiceResponse()
+                            response.say("Unable to initialize the call configuration. Please try again later.")
+                            response.hangup()
+                            return response
+                    else:
+                        logger.info(f"✓ Stored agent config for trunk {trunk_id}")
 
-                logger.info(f"✓ Stored agent config for called number {to_number}")
                 logger.info(
-                    f"Agent: {agent.get('name')}, Service: {agent.get('service_type')}, Voice: {agent.get('voice_id')}"
+                    f"Agent: {agent.get('name')}, Service: {agent.get('service_type')}, Voice: {agent.get('voice_id')}, TrunkID: {trunk_id or 'N/A'}"
                 )
 
                 # Room name is controlled by LiveKit's Individual dispatch rule
@@ -764,13 +786,54 @@ Business: {business_name}"""
             logger.error(f"[REDIS STORE] ✗ Error storing room config for {room_name}: {exc}", exc_info=True)
             return False
 
+    async def _store_trunk_config(
+        self, trunk_id: str, config: Dict[str, Any], ttl: int = CALL_CONFIG_TTL_SECONDS
+    ) -> bool:
+        """
+        Store agent configuration keyed by LiveKit SIP trunk ID.
+        
+        This is the PRIMARY and most reliable approach because:
+        - Trunk ID is always available in SIP participant attributes (sip.trunkID)
+        - One trunk per phone number = unique mapping
+        - No dependency on phone number extraction from attributes
+        - Trunk ID is stored in phone number record during assignment
+        
+        Worker will extract sip.trunkID from participant attributes and look up config.
+        """
+        try:
+            if not trunk_id or not trunk_id.strip():
+                logger.error(f"[REDIS STORE] Invalid trunk_id: {trunk_id}")
+                return False
+            
+            trunk_id = trunk_id.strip()
+            config_key = f"livekit:trunk_config:{trunk_id}"
+            config_json = json.dumps(config)
+            
+            logger.info(f"[REDIS STORE] Storing config for trunk with key: {config_key}")
+            logger.info(f"[REDIS STORE] Trunk ID: {trunk_id}")
+            await async_redis_client.set(config_key, config_json, ttl=ttl)
+            logger.info(f"[REDIS STORE] ✓ Successfully stored config for trunk: {trunk_id}")
+            
+            # Verify storage
+            verify_data = await async_redis_client.get(config_key)
+            if verify_data:
+                logger.info(f"[REDIS VERIFY] ✓ Trunk config verified in Redis")
+                return True
+            else:
+                logger.error(f"[REDIS VERIFY] ✗ Failed to verify trunk config in Redis for key: {config_key}")
+                return False
+                
+        except Exception as exc:
+            logger.error(f"[REDIS STORE] ✗ Error storing trunk config for {trunk_id}: {exc}", exc_info=True)
+            return False
+
     async def _store_called_number_config(
         self, called_number: str, config: Dict[str, Any], ttl: int = CALL_CONFIG_TTL_SECONDS
     ) -> bool:
         """
         Store agent configuration keyed by called phone number (to_number).
         
-        This is the correct approach because:
+        FALLBACK METHOD: Used when trunk_id is not available.
         - The agent config is tied to the Twilio phone number (to_number), not the caller
         - Multiple callers can call the same number, and they should all get the same agent config
         - Worker will get to_number from SIP participant attributes and look up config

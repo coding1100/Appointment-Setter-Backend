@@ -262,19 +262,82 @@ async def extract_called_number_from_attributes(ctx: agents.JobContext, max_wait
         return None
 
 
+def extract_trunk_id_from_attributes(ctx: agents.JobContext) -> Optional[str]:
+    """
+    Extract LiveKit SIP trunk ID from SIP participant attributes.
+    
+    Trunk ID is always available in sip.trunkID attribute and is the most reliable
+    identifier for looking up agent configuration.
+    """
+    try:
+        # Get SIP participant (the caller)
+        sip_participants = [p for p in ctx.room.remote_participants.values() if p.identity.startswith("sip_")]
+        if not sip_participants:
+            logger.warning(f"[ATTRIBUTES] No SIP participants found in room")
+            return None
+        
+        sip_participant = sip_participants[0]
+        logger.info(f"[ATTRIBUTES] Found SIP participant: {sip_participant.identity}")
+        
+        # Extract trunk ID from participant attributes
+        # LiveKit always provides sip.trunkID for SIP participants
+        trunk_id = sip_participant.attributes.get("sip.trunkID")
+        if trunk_id:
+            logger.info(f"[ATTRIBUTES] ✓ Extracted trunk ID '{trunk_id}' from attribute 'sip.trunkID'")
+            return trunk_id
+        
+        # Try alternative attribute names
+        for attr_key in ["trunkID", "sip_trunk_id", "trunk_id"]:
+            trunk_id = sip_participant.attributes.get(attr_key)
+            if trunk_id:
+                logger.info(f"[ATTRIBUTES] ✓ Extracted trunk ID '{trunk_id}' from attribute '{attr_key}'")
+                return trunk_id
+        
+        logger.warning(f"[ATTRIBUTES] ✗ Could not find trunk ID in participant attributes.")
+        logger.warning(f"[ATTRIBUTES] Available attributes: {list(sip_participant.attributes.keys())}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"[ATTRIBUTES] Error extracting trunk ID from attributes: {e}", exc_info=True)
+        return None
+
+
 async def get_agent_config(room_name: str, ctx: Optional[agents.JobContext] = None) -> Optional[Dict[str, Any]]:
     """
     Retrieve agent configuration from Redis.
     
-    CORRECT APPROACH: Look up config by called number (to_number), not caller number.
-    The agent config is tied to the Twilio phone number that was called, not the caller.
+    PRIMARY APPROACH: Look up config by trunk ID (most reliable).
+    Trunk ID is always available in SIP participant attributes (sip.trunkID).
     
     Lookup order:
-    1. By called number (from SIP participant attributes) - CORRECT approach
-    2. By room name - for backward compatibility with Direct dispatch
+    1. By trunk ID (from SIP participant attributes) - PRIMARY approach
+    2. By called number (from SIP participant attributes) - FALLBACK
+    3. By room name - for backward compatibility with Direct dispatch
     """
     try:
-        # Step 1: Get called number from SIP participant attributes and look up config
+        # Step 1: Get trunk ID from SIP participant attributes and look up config (PRIMARY)
+        if ctx:
+            trunk_id = extract_trunk_id_from_attributes(ctx)
+            if trunk_id:
+                trunk_config_key = f"livekit:trunk_config:{trunk_id}"
+                logger.info(f"[WORKER REDIS] Trying trunk-based lookup with key: {trunk_config_key}")
+                
+                config_data = await async_redis_client.get(trunk_config_key)
+                if config_data:
+                    config = json.loads(config_data)
+                    logger.info(f"[WORKER REDIS] ✓ Found config by trunk ID: {trunk_id}")
+                    logger.info(f"[WORKER REDIS] Config details:")
+                    logger.info(f"  - agent_id: {config.get('agent_id')}")
+                    logger.info(f"  - voice_id: {config.get('voice_id')}")
+                    logger.info(f"  - service_type: {config.get('service_type')}")
+                    logger.info(f"  - agent_data keys: {list(config.get('agent_data', {}).keys())}")
+                    return config
+                else:
+                    logger.warning(f"[WORKER REDIS] No config found for trunk ID {trunk_id}, trying called-number lookup...")
+            else:
+                logger.warning(f"[WORKER REDIS] Could not extract trunk ID from attributes, trying called-number lookup...")
+
+        # Step 2: Fallback to called number lookup (if trunk ID not available)
         if ctx:
             called_number = await extract_called_number_from_attributes(ctx)
             if called_number:
@@ -293,16 +356,11 @@ async def get_agent_config(room_name: str, ctx: Optional[agents.JobContext] = No
                         logger.info(f"  - agent_id: {config.get('agent_id')}")
                         logger.info(f"  - voice_id: {config.get('voice_id')}")
                         logger.info(f"  - service_type: {config.get('service_type')}")
-                        logger.info(f"  - agent_data keys: {list(config.get('agent_data', {}).keys())}")
                         return config
                     else:
                         logger.warning(f"[WORKER REDIS] No config found for called number {normalized_called}, trying room-based lookup...")
-                else:
-                    logger.warning(f"[WORKER REDIS] Could not normalize called number: {called_number}")
-            else:
-                logger.warning(f"[WORKER REDIS] Could not extract called number from attributes, trying room-based lookup...")
 
-        # Step 2: Fall back to room name lookup (backward compatibility with Direct dispatch)
+        # Step 3: Fall back to room name lookup (backward compatibility with Direct dispatch)
         room_config_key = f"livekit:room_config:{room_name}"
         logger.info(f"[WORKER REDIS] Trying room-based lookup with key: {room_config_key}")
         
@@ -316,7 +374,7 @@ async def get_agent_config(room_name: str, ctx: Optional[agents.JobContext] = No
             logger.info(f"  - service_type: {config.get('service_type')}")
             return config
 
-        logger.warning(f"[WORKER REDIS] ✗ No agent configuration found (tried called number and room lookups)")
+        logger.warning(f"[WORKER REDIS] ✗ No agent configuration found (tried trunk ID, called number, and room lookups)")
         return None
         
     except Exception as e:
