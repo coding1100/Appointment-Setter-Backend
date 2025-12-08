@@ -28,8 +28,13 @@ LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "")
 # Get this from LiveKit Cloud Dashboard → SIP → Inbound Trunks
 LIVEKIT_SIP_DOMAIN = os.environ.get("LIVEKIT_SIP_DOMAIN", "")
 
-# Redis config TTL for caller-based lookups (Individual dispatch)
+# Redis config TTL for called-number-based lookups (Individual dispatch)
 CALL_CONFIG_TTL_SECONDS = int(os.environ.get("CALL_CONFIG_TTL_SECONDS", "3600"))
+
+# LiveKit SIP header mapping for called number
+# We pass to_number via SIP header so worker can look up config by called number
+LIVEKIT_SIP_HEADER_CALLED_NUMBER = os.environ.get("LIVEKIT_SIP_HEADER_CALLED_NUMBER", "X-LK-CalledNumber")
+LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER = os.environ.get("LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER", "lk_called_number")
 
 # Twilio settings
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
