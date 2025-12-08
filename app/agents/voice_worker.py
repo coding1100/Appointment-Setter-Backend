@@ -12,6 +12,7 @@ Config is stored in Redis by caller phone number and looked up when worker start
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Dict, Optional
 
 from livekit import agents
@@ -204,14 +205,14 @@ async def extract_called_number_from_attributes(ctx: agents.JobContext, max_wait
         logger.info(f"[ATTRIBUTES] Participant attributes: {dict(sip_participant.attributes)}")
         
         # Try to get called number from participant attributes
-        # LiveKit maps SIP header X-LK-CalledNumber to attribute lk_called_number
+        # Priority 1: Custom header (if backend passes it via TwiML)
         from app.core.config import LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER
         called_number = sip_participant.attributes.get(LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER)
         if called_number:
             logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{called_number}' from attribute '{LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER}'")
             return called_number
         
-        # Fallback: try alternative attribute names
+        # Priority 2: Try alternative custom header names
         from app.core.config import LIVEKIT_SIP_HEADER_CALLED_NUMBER
         for attr_key in [LIVEKIT_SIP_HEADER_CALLED_NUMBER, "called_number", "to_number", "X-LK-CalledNumber"]:
             called_number = sip_participant.attributes.get(attr_key)
@@ -219,9 +220,41 @@ async def extract_called_number_from_attributes(ctx: agents.JobContext, max_wait
                 logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{called_number}' from attribute '{attr_key}'")
                 return called_number
         
+        # Priority 3: Extract from sip.trunkPhoneNumber (LiveKit provides this automatically)
+        trunk_phone = sip_participant.attributes.get("sip.trunkPhoneNumber")
+        if trunk_phone:
+            # Ensure it has + prefix
+            if not trunk_phone.startswith("+"):
+                trunk_phone = f"+{trunk_phone}"
+            logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{trunk_phone}' from 'sip.trunkPhoneNumber'")
+            return trunk_phone
+        
+        # Priority 4: Extract from sip.h.to header (format: <sip:+18334005770@domain>)
+        to_header = sip_participant.attributes.get("sip.h.to")
+        if to_header:
+            import re
+            # Extract phone number from SIP URI: <sip:+18334005770@domain>
+            match = re.search(r'<sip:(\+?\d+)@', to_header)
+            if match:
+                called_number = match.group(1)
+                if not called_number.startswith("+"):
+                    called_number = f"+{called_number}"
+                logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{called_number}' from 'sip.h.to' header")
+                return called_number
+        
+        # Priority 5: Extract from sip.h.x-orig-cdpn (format: 18334005770;noa=4)
+        orig_cdpn = sip_participant.attributes.get("sip.h.x-orig-cdpn")
+        if orig_cdpn:
+            # Format: "18334005770;noa=4" - extract just the number
+            number_part = orig_cdpn.split(";")[0]
+            if number_part:
+                if not number_part.startswith("+"):
+                    number_part = f"+{number_part}"
+                logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{number_part}' from 'sip.h.x-orig-cdpn'")
+                return number_part
+        
         logger.warning(f"[ATTRIBUTES] ✗ Could not find called number in participant attributes.")
         logger.warning(f"[ATTRIBUTES] Available attributes: {list(sip_participant.attributes.keys())}")
-        logger.warning(f"[ATTRIBUTES] All attribute values: {dict(sip_participant.attributes)}")
         return None
         
     except Exception as e:
