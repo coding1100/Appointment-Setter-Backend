@@ -281,3 +281,40 @@ async def unassign_phone_from_agent(agent_id: str, current_user: Dict = Depends(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to unassign phone number: {str(e)}"
         )
+
+
+@router.get("/debug/redis-caller-configs")
+async def debug_redis_caller_configs():
+    """
+    Debug endpoint to list all caller configs stored in Redis.
+    This helps diagnose if configs are being stored correctly.
+    """
+    from app.core.async_redis import async_redis_client
+    
+    try:
+        # Get all keys matching the caller config pattern
+        keys = await async_redis_client.keys("livekit:caller_config:*")
+        
+        configs = {}
+        for key in keys:
+            value = await async_redis_client.get(key)
+            configs[key] = value
+        
+        # Also check room config keys
+        room_keys = await async_redis_client.keys("livekit:room_config:*")
+        for key in room_keys:
+            value = await async_redis_client.get(key)
+            configs[key] = value
+        
+        return {
+            "status": "ok",
+            "total_caller_configs": len(keys),
+            "total_room_configs": len(room_keys),
+            "configs": configs
+        }
+    except Exception as e:
+        logger.error(f"Error reading Redis configs: {e}")
+        return {
+            "status": "error",
+            "error": str(e)
+        }
