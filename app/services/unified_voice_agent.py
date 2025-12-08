@@ -816,9 +816,16 @@ Business: {business_name}"""
         if not LIVEKIT_SIP_DOMAIN:
             raise ValueError("LIVEKIT_SIP_DOMAIN is not configured")
         
+        # Strip any existing 'sip:' prefix from LIVEKIT_SIP_DOMAIN
+        # LIVEKIT_SIP_DOMAIN should be just the domain (e.g., "3nbu801ppzl.sip.livekit.cloud")
+        # but handle cases where it might already include "sip:" prefix
+        domain = LIVEKIT_SIP_DOMAIN.strip()
+        if domain.startswith("sip:"):
+            domain = domain[4:].strip()
+        
         # Simple URI format for Individual dispatch
         # LiveKit will create room based on dispatch rule's roomPrefix + caller + suffix
-        sip_uri = f"sip:{LIVEKIT_SIP_DOMAIN}"
+        sip_uri = f"sip:{domain}"
         logger.info(f"[SIP URI] Generated simple SIP URI: {sip_uri}")
         return sip_uri
 

@@ -138,6 +138,14 @@ services:
 
       # GCP Service Account (if used)
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
+
+      # VAD Performance Optimization (prevents thread contention)
+      # These must be set in Docker environment to ensure worker processes inherit them
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      VECLIB_MAXIMUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
     volumes:
       - ./.env:/app/.env:ro
     networks:
