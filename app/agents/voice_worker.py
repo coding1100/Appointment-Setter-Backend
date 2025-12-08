@@ -170,39 +170,58 @@ def extract_caller_from_room_name(room_name: str) -> Optional[str]:
     return None
 
 
-def extract_called_number_from_attributes(ctx: agents.JobContext) -> Optional[str]:
+async def extract_called_number_from_attributes(ctx: agents.JobContext, max_wait_seconds: float = 2.0) -> Optional[str]:
     """
     Extract called phone number (to_number) from SIP participant attributes.
     
     The backend passes to_number via SIP header X-LK-CalledNumber,
     which LiveKit maps to participant attribute lk_called_number.
+    
+    Waits for SIP participant to join if not immediately available.
     """
     try:
-        # Get SIP participant (the caller)
-        sip_participants = [p for p in ctx.room.remote_participants.values() if p.identity.startswith("sip_")]
-        if not sip_participants:
-            logger.warning("[ATTRIBUTES] No SIP participants found in room")
+        # Wait for SIP participant to join (with timeout)
+        wait_interval = 0.1
+        waited = 0.0
+        sip_participant = None
+        
+        while waited < max_wait_seconds:
+            # Get SIP participant (the caller)
+            sip_participants = [p for p in ctx.room.remote_participants.values() if p.identity.startswith("sip_")]
+            if sip_participants:
+                sip_participant = sip_participants[0]
+                break
+            
+            await asyncio.sleep(wait_interval)
+            waited += wait_interval
+        
+        if not sip_participant:
+            logger.warning(f"[ATTRIBUTES] No SIP participants found in room after waiting {waited:.1f}s")
+            logger.info(f"[ATTRIBUTES] Current participants: {[p.identity for p in ctx.room.remote_participants.values()]}")
             return None
         
-        sip_participant = sip_participants[0]
+        logger.info(f"[ATTRIBUTES] Found SIP participant: {sip_participant.identity}")
+        logger.info(f"[ATTRIBUTES] Participant attributes: {dict(sip_participant.attributes)}")
         
         # Try to get called number from participant attributes
         # LiveKit maps SIP header X-LK-CalledNumber to attribute lk_called_number
         from app.core.config import LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER
         called_number = sip_participant.attributes.get(LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER)
         if called_number:
-            logger.info(f"[ATTRIBUTES] Extracted called number '{called_number}' from SIP participant attributes")
+            logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{called_number}' from attribute '{LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER}'")
             return called_number
         
         # Fallback: try alternative attribute names
         from app.core.config import LIVEKIT_SIP_HEADER_CALLED_NUMBER
-        for attr_key in [LIVEKIT_SIP_HEADER_CALLED_NUMBER, "called_number", "to_number"]:
+        for attr_key in [LIVEKIT_SIP_HEADER_CALLED_NUMBER, "called_number", "to_number", "X-LK-CalledNumber"]:
             called_number = sip_participant.attributes.get(attr_key)
             if called_number:
-                logger.info(f"[ATTRIBUTES] Extracted called number '{called_number}' from attribute '{attr_key}'")
+                logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{called_number}' from attribute '{attr_key}'")
                 return called_number
         
-        logger.warning(f"[ATTRIBUTES] Could not find called number in participant attributes. Available: {list(sip_participant.attributes.keys())}")
+        logger.warning(f"[ATTRIBUTES] ✗ Could not find called number in participant attributes.")
+        logger.warning(f"[ATTRIBUTES] Available attributes: {list(sip_participant.attributes.keys())}")
+        logger.warning(f"[ATTRIBUTES] All attribute values: {dict(sip_participant.attributes)}")
         return None
         
     except Exception as e:
@@ -224,7 +243,7 @@ async def get_agent_config(room_name: str, ctx: Optional[agents.JobContext] = No
     try:
         # Step 1: Get called number from SIP participant attributes and look up config
         if ctx:
-            called_number = extract_called_number_from_attributes(ctx)
+            called_number = await extract_called_number_from_attributes(ctx)
             if called_number:
                 # Normalize the called number for consistent lookup
                 from app.utils.phone_number import normalize_phone_number_safe
@@ -336,7 +355,15 @@ async def entrypoint(ctx: agents.JobContext):
     # Pre-warm VAD model (lightweight if already loaded)
     prewarm_vad()
 
-    # Retrieve agent configuration from Redis
+    # Connect to the LiveKit room FIRST
+    # This ensures the SIP participant has joined before we try to read attributes
+    await ctx.connect()
+    logger.info(f"Connected to room: {room_name}")
+
+    # Wait a moment for SIP participant to join and attributes to be available
+    await asyncio.sleep(0.5)
+    
+    # Now retrieve agent configuration from Redis
     # Config is stored by called phone number (to_number), not caller number
     # We get to_number from SIP participant attributes (passed via SIP header)
     logger.info(f"[WORKER ENTRYPOINT] Step 1: Retrieving agent configuration...")
@@ -389,11 +416,7 @@ async def entrypoint(ctx: agents.JobContext):
         vad=get_cached_vad(),
     )
 
-    # Connect to the LiveKit room
-    await ctx.connect()
-    logger.info(f"Connected to room: {room_name}")
-
-    # Start the agent session
+    # Start the agent session (we already connected above)
     await session.start(
         room=ctx.room,
         agent=voice_agent,
