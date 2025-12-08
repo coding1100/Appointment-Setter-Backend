@@ -292,7 +292,10 @@ async def debug_redis_caller_configs():
     from app.core.async_redis import async_redis_client
     
     try:
-        # Get all keys matching the called number config pattern (CORRECT approach)
+        # PRIMARY: Trunk config keys (most reliable approach)
+        trunk_keys = await async_redis_client.keys("livekit:trunk_config:*")
+        
+        # FALLBACK: Called number config keys
         called_number_keys = await async_redis_client.keys("livekit:called_number_config:*")
         
         # Legacy: caller config keys (old approach, should be migrated)
@@ -302,6 +305,10 @@ async def debug_redis_caller_configs():
         room_keys = await async_redis_client.keys("livekit:room_config:*")
         
         configs = {}
+        for key in trunk_keys:
+            value = await async_redis_client.get(key)
+            configs[key] = value
+        
         for key in called_number_keys:
             value = await async_redis_client.get(key)
             configs[key] = value
@@ -316,6 +323,7 @@ async def debug_redis_caller_configs():
         
         return {
             "status": "ok",
+            "total_trunk_configs": len(trunk_keys),
             "total_called_number_configs": len(called_number_keys),
             "total_caller_configs_legacy": len(caller_keys),
             "total_room_configs": len(room_keys),
