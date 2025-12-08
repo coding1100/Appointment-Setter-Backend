@@ -93,6 +93,14 @@ import multiprocessing
 import logging
 from dotenv import load_dotenv
 
+# CRITICAL: Optimize ONNX/PyTorch threading BEFORE importing any ML libraries
+# Without this, multiple threads compete for CPU and cause 20-30 second VAD delays
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1") 
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
 # Load environment variables before importing config
 load_dotenv()
 
@@ -109,6 +117,7 @@ if __name__ == "__main__":
     print(f"LiveKit URL: {LIVEKIT_URL}")
     print("Worker agent_name: '' (empty, allowed & intentional)")
     print("num_idle_processes: 1 (prevents duplicate workers)")
+    print("OMP_NUM_THREADS: 1 (prevents VAD thread contention)")
     print("=" * 70)
 
     # Windows IPC warning suppressor
