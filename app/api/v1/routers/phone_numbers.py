@@ -286,29 +286,38 @@ async def unassign_phone_from_agent(agent_id: str, current_user: Dict = Depends(
 @router.get("/debug/redis-caller-configs")
 async def debug_redis_caller_configs():
     """
-    Debug endpoint to list all caller configs stored in Redis.
+    Debug endpoint to list all configs stored in Redis.
     This helps diagnose if configs are being stored correctly.
     """
     from app.core.async_redis import async_redis_client
     
     try:
-        # Get all keys matching the caller config pattern
-        keys = await async_redis_client.keys("livekit:caller_config:*")
+        # Get all keys matching the called number config pattern (CORRECT approach)
+        called_number_keys = await async_redis_client.keys("livekit:called_number_config:*")
+        
+        # Legacy: caller config keys (old approach, should be migrated)
+        caller_keys = await async_redis_client.keys("livekit:caller_config:*")
+        
+        # Room config keys (for Direct dispatch)
+        room_keys = await async_redis_client.keys("livekit:room_config:*")
         
         configs = {}
-        for key in keys:
+        for key in called_number_keys:
             value = await async_redis_client.get(key)
             configs[key] = value
         
-        # Also check room config keys
-        room_keys = await async_redis_client.keys("livekit:room_config:*")
+        for key in caller_keys:
+            value = await async_redis_client.get(key)
+            configs[key] = value
+        
         for key in room_keys:
             value = await async_redis_client.get(key)
             configs[key] = value
         
         return {
             "status": "ok",
-            "total_caller_configs": len(keys),
+            "total_called_number_configs": len(called_number_keys),
+            "total_caller_configs_legacy": len(caller_keys),
             "total_room_configs": len(room_keys),
             "configs": configs
         }

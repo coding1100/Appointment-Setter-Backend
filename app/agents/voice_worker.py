@@ -170,35 +170,87 @@ def extract_caller_from_room_name(room_name: str) -> Optional[str]:
     return None
 
 
-async def get_agent_config(room_name: str) -> Optional[Dict[str, Any]]:
+def extract_called_number_from_attributes(ctx: agents.JobContext) -> Optional[str]:
+    """
+    Extract called phone number (to_number) from SIP participant attributes.
+    
+    The backend passes to_number via SIP header X-LK-CalledNumber,
+    which LiveKit maps to participant attribute lk_called_number.
+    """
+    try:
+        # Get SIP participant (the caller)
+        sip_participants = [p for p in ctx.room.remote_participants.values() if p.identity.startswith("sip_")]
+        if not sip_participants:
+            logger.warning("[ATTRIBUTES] No SIP participants found in room")
+            return None
+        
+        sip_participant = sip_participants[0]
+        
+        # Try to get called number from participant attributes
+        # LiveKit maps SIP header X-LK-CalledNumber to attribute lk_called_number
+        from app.core.config import LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER
+        called_number = sip_participant.attributes.get(LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER)
+        if called_number:
+            logger.info(f"[ATTRIBUTES] Extracted called number '{called_number}' from SIP participant attributes")
+            return called_number
+        
+        # Fallback: try alternative attribute names
+        from app.core.config import LIVEKIT_SIP_HEADER_CALLED_NUMBER
+        for attr_key in [LIVEKIT_SIP_HEADER_CALLED_NUMBER, "called_number", "to_number"]:
+            called_number = sip_participant.attributes.get(attr_key)
+            if called_number:
+                logger.info(f"[ATTRIBUTES] Extracted called number '{called_number}' from attribute '{attr_key}'")
+                return called_number
+        
+        logger.warning(f"[ATTRIBUTES] Could not find called number in participant attributes. Available: {list(sip_participant.attributes.keys())}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"[ATTRIBUTES] Error extracting called number from attributes: {e}", exc_info=True)
+        return None
+
+
+async def get_agent_config(room_name: str, ctx: Optional[agents.JobContext] = None) -> Optional[Dict[str, Any]]:
     """
     Retrieve agent configuration from Redis.
     
+    CORRECT APPROACH: Look up config by called number (to_number), not caller number.
+    The agent config is tied to the Twilio phone number that was called, not the caller.
+    
     Lookup order:
-    1. By caller number (extracted from room name) - for Individual dispatch
+    1. By called number (from SIP participant attributes) - CORRECT approach
     2. By room name - for backward compatibility with Direct dispatch
     """
     try:
-        # Step 1: Try to extract caller from room name and look up by caller
-        caller = extract_caller_from_room_name(room_name)
-        if caller:
-            caller_config_key = f"livekit:caller_config:{caller}"
-            logger.info(f"[WORKER REDIS] Trying caller-based lookup with key: {caller_config_key}")
-            
-            config_data = await async_redis_client.get(caller_config_key)
-            if config_data:
-                config = json.loads(config_data)
-                logger.info(f"[WORKER REDIS] ✓ Found config by caller number: {caller}")
-                logger.info(f"[WORKER REDIS] Config details:")
-                logger.info(f"  - agent_id: {config.get('agent_id')}")
-                logger.info(f"  - voice_id: {config.get('voice_id')}")
-                logger.info(f"  - service_type: {config.get('service_type')}")
-                logger.info(f"  - agent_data keys: {list(config.get('agent_data', {}).keys())}")
-                return config
+        # Step 1: Get called number from SIP participant attributes and look up config
+        if ctx:
+            called_number = extract_called_number_from_attributes(ctx)
+            if called_number:
+                # Normalize the called number for consistent lookup
+                from app.utils.phone_number import normalize_phone_number_safe
+                normalized_called = normalize_phone_number_safe(called_number)
+                if normalized_called:
+                    called_config_key = f"livekit:called_number_config:{normalized_called}"
+                    logger.info(f"[WORKER REDIS] Trying called-number-based lookup with key: {called_config_key}")
+                    
+                    config_data = await async_redis_client.get(called_config_key)
+                    if config_data:
+                        config = json.loads(config_data)
+                        logger.info(f"[WORKER REDIS] ✓ Found config by called number: {normalized_called}")
+                        logger.info(f"[WORKER REDIS] Config details:")
+                        logger.info(f"  - agent_id: {config.get('agent_id')}")
+                        logger.info(f"  - voice_id: {config.get('voice_id')}")
+                        logger.info(f"  - service_type: {config.get('service_type')}")
+                        logger.info(f"  - agent_data keys: {list(config.get('agent_data', {}).keys())}")
+                        return config
+                    else:
+                        logger.warning(f"[WORKER REDIS] No config found for called number {normalized_called}, trying room-based lookup...")
+                else:
+                    logger.warning(f"[WORKER REDIS] Could not normalize called number: {called_number}")
             else:
-                logger.info(f"[WORKER REDIS] No config found for caller {caller}, trying room-based lookup...")
+                logger.warning(f"[WORKER REDIS] Could not extract called number from attributes, trying room-based lookup...")
 
-        # Step 2: Fall back to room name lookup (backward compatibility)
+        # Step 2: Fall back to room name lookup (backward compatibility with Direct dispatch)
         room_config_key = f"livekit:room_config:{room_name}"
         logger.info(f"[WORKER REDIS] Trying room-based lookup with key: {room_config_key}")
         
@@ -212,7 +264,7 @@ async def get_agent_config(room_name: str) -> Optional[Dict[str, Any]]:
             logger.info(f"  - service_type: {config.get('service_type')}")
             return config
 
-        logger.warning(f"[WORKER REDIS] ✗ No agent configuration found (tried caller and room lookups)")
+        logger.warning(f"[WORKER REDIS] ✗ No agent configuration found (tried called number and room lookups)")
         return None
         
     except Exception as e:
@@ -285,9 +337,10 @@ async def entrypoint(ctx: agents.JobContext):
     prewarm_vad()
 
     # Retrieve agent configuration from Redis
-    # Config is stored by caller phone number (extracted from room name)
+    # Config is stored by called phone number (to_number), not caller number
+    # We get to_number from SIP participant attributes (passed via SIP header)
     logger.info(f"[WORKER ENTRYPOINT] Step 1: Retrieving agent configuration...")
-    config = await get_agent_config(room_name)
+    config = await get_agent_config(room_name, ctx)
 
     if config:
         logger.info(f"[WORKER ENTRYPOINT] ✓ Configuration retrieved successfully")
