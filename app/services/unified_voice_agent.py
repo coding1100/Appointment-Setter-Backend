@@ -55,6 +55,7 @@ class UnifiedVoiceAgentService:
         self.tenant_agents = {}  # tenant_id:service_type -> agent_instance
         self.active_sessions = {}  # session_id -> session_data
         self._livekit_api = None
+        self._vad = None  # Shared Silero VAD instance (lazy-loaded)
 
         # Validate LiveKit configuration at startup
         self._validate_livekit_config()
@@ -131,6 +132,11 @@ class UnifiedVoiceAgentService:
             # Using Gemini for LLM, Deepgram for STT, ElevenLabs for TTS
             system_prompt = self._get_system_prompt(tenant_config, service_type, agent_config)
 
+            # Lazily load and reuse a single Silero VAD instance to avoid repeated
+            # model loads and to match telephony sample rate (8 kHz).
+            if self._vad is None:
+                self._vad = silero.VAD.load(sample_rate=8000)
+
             # Configure ElevenLabs TTS with voice_id if provided
             # Version 1.2.15 signature: TTS(voice_id: str, model: str, language: str, ...)
             if voice_id:
@@ -160,7 +166,7 @@ class UnifiedVoiceAgentService:
 
             # Create the agent with instructions parameter (LiveKit 1.0 API)
             agent = Agent(
-                vad=silero.VAD.load(),
+                vad=self._vad,
                 stt=deepgram.STT(),
                 llm=google.LLM(model="gemini-2.0-flash"),
                 tts=tts_service,
