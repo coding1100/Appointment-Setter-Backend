@@ -105,7 +105,7 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 load_dotenv()
 
 from livekit import agents
-from app.agents.voice_worker import entrypoint
+from app.agents.voice_worker import entrypoint, prewarm_vad
 from app.core.config import LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
 
 
@@ -137,6 +137,7 @@ if __name__ == "__main__":
         agents.cli.run_app(
             agents.WorkerOptions(
                 entrypoint_fnc=entrypoint,
+                prewarm_fnc=prewarm_vad,
                 api_key=LIVEKIT_API_KEY,
                 api_secret=LIVEKIT_API_SECRET,
                 ws_url=LIVEKIT_URL,

@@ -43,6 +43,9 @@ MAX_HISTORY_LOG_LINES = 40
 # Lower thresholds = more responsive but may trigger on noise
 # Higher thresholds = more stable but may miss quiet speech
 VAD_SETTINGS = {
+    # Telephony audio is 8 kHz; using 8k avoids resampling overhead and keeps
+    # Silero inference closer to realtime. (LiveKit plugin only supports 8k/16k)
+    "sample_rate": 8000,
     "min_speech_duration": 0.05,     # 50ms - faster detection
     "min_silence_duration": 0.3,     # 300ms - quicker turn-taking
     "prefix_padding_duration": 0.1,  # 100ms padding
@@ -63,15 +66,22 @@ def get_cached_vad():
     return _CACHED_VAD
 
 
-def prewarm_vad():
-    """Pre-warm VAD model to prevent cold start delays."""
+def prewarm_vad(proc: Optional[agents.JobProcess] = None):
+    """
+    Pre-warm VAD model to prevent cold start delays.
+    If a JobProcess is provided (LiveKit prewarm hook), store the VAD instance
+    on proc.userdata so every session in the same worker reuses it.
+    """
     try:
         logger.info("Pre-warming VAD model...")
-        # Use the cached VAD getter to ensure model is loaded once
-        get_cached_vad()
+        vad = get_cached_vad()
+        if proc is not None:
+            proc.userdata["vad"] = vad
         logger.info("VAD model pre-warmed successfully")
+        return vad
     except Exception as e:
         logger.warning(f"Failed to pre-warm VAD model: {e}")
+        return None
 
 
 def get_tts_service(voice_id: Optional[str], language_code: str) -> elevenlabs.TTS:
@@ -498,13 +508,21 @@ async def entrypoint(ctx: agents.JobContext):
     tts = get_tts_service(voice_id, language_code)
 
     # Create the agent session with all components
-    # OPTIMIZATION: Use cached VAD and faster models to prevent timeouts
-    # Using cached VAD prevents model reload per call (major source of slowness)
+    # OPTIMIZATION: Reuse pre-warmed VAD stored on the worker process (preferred),
+    # falling back to the global cache if not available.
+    vad = None
+    try:
+        vad = ctx.proc.userdata.get("vad")
+    except Exception:
+        vad = None
+    if vad is None:
+        vad = get_cached_vad()
+
     session = AgentSession(
         stt=deepgram.STT(model="nova-2-general", language="en-US"),
         llm=google.LLM(model="gemini-2.0-flash"),
         tts=tts,
-        vad=get_cached_vad(),
+        vad=vad,
     )
 
     # Start the agent session (we already connected above)
@@ -570,5 +588,6 @@ if __name__ == "__main__":
             api_key=LIVEKIT_API_KEY,
             api_secret=LIVEKIT_API_SECRET,
             ws_url=LIVEKIT_URL,
+            prewarm_fnc=prewarm_vad,
         )
     )
