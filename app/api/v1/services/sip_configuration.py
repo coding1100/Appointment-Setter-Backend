@@ -158,17 +158,16 @@ class SIPConfigurationService:
                     api.CreateSIPInboundTrunkRequest(
                         trunk=api.SIPInboundTrunkInfo(
                             name=f"Trunk for {normalized_phone}",
-                            numbers=[normalized_phone],
                             allowed_addresses=["0.0.0.0/0"],
-                            # Metadata for internal use (NOT accessible to worker)
-                            metadata=f"phone_number={normalized_phone}",
-                            # IMPORTANT: Map custom SIP headers to participant attributes
-                            # This allows Twilio to pass custom data via X-* headers
-                            # which LiveKit exposes as participant attributes
+                            # CRITICAL: Include ALL SIP headers so custom X-* headers are forwarded
+                            # Without this, LiveKit will not receive X-LK-CallId, X-LK-TenantId, etc.
+                            include_headers="SIP_ALL_HEADERS",
+                            # Map custom SIP headers to participant attributes
+                            # Twilio sends X-LK-* headers → LiveKit exposes as lk_* attributes
                             headers_to_attributes={
-                                "X-LK-CallId": "lk_callid",
-                                "X-LK-TenantId": "lk_tenantid",
                                 "X-LK-CalledNumber": "lk_callednumber",
+                                "X-LK-TenantId": "lk_tenantid",
+                                "X-LK-CallId": "lk_callid",
                             },
                         )
                     )
