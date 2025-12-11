@@ -719,7 +719,7 @@ async def entrypoint(ctx: agents.JobContext):
     logger.info(f"[WORKER ENTRYPOINT] ✓ Configuration loaded successfully")
     logger.info(f"[WORKER ENTRYPOINT]   tenant_id: {tenant_id}")
     logger.info(f"[WORKER ENTRYPOINT]   call_id: {call_id}")
-    logger.info(f"[WORKER ENTRYPOINT]   twilio_call_sid: {twilio_call_sid}")
+    logger.info(f"[WORKER ENTRYPOINT]   original_call_sid: {original_call_sid}")
 
     # ========================================
     # STEP 3: Build agent instructions from config
