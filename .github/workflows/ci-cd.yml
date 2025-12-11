@@ -122,7 +122,7 @@ jobs:
           timeout: 30s
           command_timeout: 10m
           script: |
-            cd ${{ secrets.DEV_VPS_DEPLOY_PATH || '/root/appointment-setter-dev' }}
+            cd ${{ secrets.DEV_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
             git pull origin dev
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
             docker pull ${{ env.DOCKER_IMAGE }}:dev
