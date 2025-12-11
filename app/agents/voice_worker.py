@@ -424,15 +424,51 @@ async def extract_tenant_identity_from_sip(ctx: agents.JobContext, max_wait_seco
         return result
 
 
+async def get_config_by_twilio_callsid(twilio_call_sid: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve call configuration from Redis by Twilio CallSid.
+    
+    This is the PRIMARY lookup method because:
+    - sip.twilio.callSid is ALWAYS available in SIP participant attributes
+    - Custom SIP headers via query params are NOT forwarded by Twilio to LiveKit
+    
+    Config is stored under: call_config:<twilio_call_sid>
+    
+    Returns the full config including tenant_id, call_id, agent_data, etc.
+    Returns None if config not found (worker should FAIL, not use defaults).
+    """
+    try:
+        config_key = f"call_config:{twilio_call_sid}"
+        logger.info(f"[WORKER REDIS] Looking up config by Twilio CallSid: {config_key}")
+        
+        config_data = await async_redis_client.get(config_key)
+        if config_data:
+            config = json.loads(config_data)
+            logger.info(f"[WORKER REDIS] ✓ Found config by Twilio CallSid")
+            logger.info(f"[WORKER REDIS] Config details:")
+            logger.info(f"  - tenant_id: {config.get('tenant_id')}")
+            logger.info(f"  - call_id: {config.get('call_id')}")
+            logger.info(f"  - agent_id: {config.get('agent_id')}")
+            logger.info(f"  - voice_id: {config.get('voice_id')}")
+            logger.info(f"  - service_type: {config.get('service_type')}")
+            logger.info(f"  - agent_data keys: {list(config.get('agent_data', {}).keys())}")
+            return config
+        
+        logger.error(f"[WORKER REDIS] ✗ No config found for Twilio CallSid: {twilio_call_sid}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"[WORKER REDIS] ✗ Error retrieving config by Twilio CallSid: {e}", exc_info=True)
+        return None
+
+
 async def get_tenant_config(tenant_id: str, call_id: str) -> Optional[Dict[str, Any]]:
     """
-    Retrieve tenant configuration from Redis.
+    Retrieve tenant configuration from Redis (legacy/fallback method).
     
     Config is stored per-call under: tenant_config:<tenant_id>:<call_id>
-    This allows:
-    - Multiple tenants sharing same phone number
-    - Concurrent calls to same number with different configs
-    - Per-call customization
+    This is kept for backward compatibility but the primary method is now
+    get_config_by_twilio_callsid().
     
     Returns None if config not found (worker should FAIL, not use defaults).
     """
@@ -545,15 +581,15 @@ async def entrypoint(ctx: agents.JobContext):
     
     CANONICAL TELEPHONY FLOW:
     1. Twilio PSTN call → Backend webhook
-    2. Backend stores config under tenant_config:<tenant_id>:<call_id>
-    3. Backend returns TwiML <Dial><Sip> to LiveKit (no room name specified)
+    2. Backend stores config under call_config:<twilio_call_sid>
+    3. Backend returns TwiML <Dial><Sip> to LiveKit
     4. LiveKit dispatch rule creates room: call-{phoneNumber}_{randomSuffix}
     5. Dispatch rule launches this worker (agent_name="voice-agent")
-    6. Worker extracts tenant_id + call_id from SIP participant attributes
-    7. Worker loads config from Redis
+    6. Worker reads sip.twilio.callSid from SIP participant attributes
+    7. Worker loads config from Redis using Twilio CallSid
     8. Worker handles the call with tenant-specific config
     
-    IMPORTANT: Worker IGNORES room name for config lookup.
+    IMPORTANT: Worker uses sip.twilio.callSid for config lookup (NOT custom headers).
     """
     logger.info("=" * 80)
     logger.info(f"[WORKER ENTRYPOINT] Voice agent worker starting")
@@ -572,17 +608,37 @@ async def entrypoint(ctx: agents.JobContext):
     await asyncio.sleep(0.5)
     
     # ========================================
-    # STEP 1: Extract tenant identity from SIP metadata
+    # STEP 1: Extract Twilio CallSid from SIP participant
     # ========================================
-    logger.info(f"[WORKER ENTRYPOINT] Step 1: Extracting tenant identity from SIP metadata...")
-    identity = await extract_tenant_identity_from_sip(ctx)
+    logger.info(f"[WORKER ENTRYPOINT] Step 1: Extracting Twilio CallSid from SIP participant...")
     
-    tenant_id = identity.get("tenant_id")
-    call_id = identity.get("call_id")
+    # Find the SIP participant and get their attributes
+    twilio_call_sid = None
+    sip_participant = None
     
-    if not tenant_id:
-        logger.error(f"[WORKER ENTRYPOINT] ✗ CRITICAL: Could not extract tenant_id from SIP metadata")
-        logger.error(f"[WORKER ENTRYPOINT] This call cannot proceed without tenant identification")
+    all_participants = list(ctx.room.remote_participants.values())
+    logger.info(f"[WORKER ENTRYPOINT] Found {len(all_participants)} remote participants")
+    
+    for p in all_participants:
+        if is_sip_participant(p):
+            sip_participant = p
+            attrs = getattr(p, "attributes", {}) or {}
+            
+            # Log ALL attributes for debugging
+            logger.info(f"[WORKER ENTRYPOINT] === SIP PARTICIPANT ATTRIBUTES ===")
+            for key, value in sorted(attrs.items()):
+                logger.info(f"[WORKER ENTRYPOINT]   {key} = {value}")
+            logger.info(f"[WORKER ENTRYPOINT] ==================================")
+            
+            # Extract sip.twilio.callSid - this is ALWAYS available
+            twilio_call_sid = attrs.get("sip.twilio.callSid")
+            if twilio_call_sid:
+                logger.info(f"[WORKER ENTRYPOINT] ✓ Found Twilio CallSid: {twilio_call_sid}")
+                break
+    
+    if not twilio_call_sid:
+        logger.error(f"[WORKER ENTRYPOINT] ✗ CRITICAL: Could not find sip.twilio.callSid")
+        logger.error(f"[WORKER ENTRYPOINT] This call cannot proceed without Twilio CallSid")
         
         # Create a minimal session just to say error message
         error_vad = get_cached_vad()
@@ -597,21 +653,14 @@ async def entrypoint(ctx: agents.JobContext):
         await handle_missing_config(error_session)
         return
     
-    if not call_id:
-        # Generate fallback call_id
-        call_id = str(uuid.uuid4())[:8]
-        logger.warning(f"[WORKER ENTRYPOINT] Generated fallback call_id: {call_id}")
-    
-    logger.info(f"[WORKER ENTRYPOINT] ✓ Tenant identity extracted: tenant_id={tenant_id}, call_id={call_id}")
-    
     # ========================================
-    # STEP 2: Load tenant configuration from Redis
+    # STEP 2: Load configuration from Redis using Twilio CallSid
     # ========================================
-    logger.info(f"[WORKER ENTRYPOINT] Step 2: Loading tenant configuration from Redis...")
-    config = await get_tenant_config(tenant_id, call_id)
+    logger.info(f"[WORKER ENTRYPOINT] Step 2: Loading config from Redis by Twilio CallSid...")
+    config = await get_config_by_twilio_callsid(twilio_call_sid)
 
     if not config:
-        logger.error(f"[WORKER ENTRYPOINT] ✗ CRITICAL: No configuration found for tenant {tenant_id}")
+        logger.error(f"[WORKER ENTRYPOINT] ✗ CRITICAL: No configuration found for Twilio CallSid: {twilio_call_sid}")
         logger.error(f"[WORKER ENTRYPOINT] Failing call - NO FALLBACK TO DEFAULTS")
         
         # Create a minimal session to say error message
@@ -627,7 +676,14 @@ async def entrypoint(ctx: agents.JobContext):
         await handle_missing_config(error_session)
         return
 
-    logger.info(f"[WORKER ENTRYPOINT] ✓ Configuration loaded successfully for tenant {tenant_id}")
+    # Extract tenant_id and call_id from config (stored by backend)
+    tenant_id = config.get("tenant_id")
+    call_id = config.get("call_id")
+    
+    logger.info(f"[WORKER ENTRYPOINT] ✓ Configuration loaded successfully")
+    logger.info(f"[WORKER ENTRYPOINT]   tenant_id: {tenant_id}")
+    logger.info(f"[WORKER ENTRYPOINT]   call_id: {call_id}")
+    logger.info(f"[WORKER ENTRYPOINT]   twilio_call_sid: {twilio_call_sid}")
 
     # ========================================
     # STEP 3: Build agent instructions from config

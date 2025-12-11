@@ -497,24 +497,28 @@ class UnifiedVoiceAgentService:
             }
 
             # Step 8: Store config in Redis for worker to retrieve
-            # Key: tenant_config:<tenant_id>:<call_id>
+            # IMPORTANT: Store by TWILIO CALL SID because that's what the worker can reliably read
+            # from sip.twilio.callSid attribute (custom SIP headers via query params don't work)
+            await self._store_config_by_twilio_callsid(call_sid, config_data)
+            
+            # Also store by tenant+call_id for backward compatibility and cleanup
             stored = await self._store_tenant_config(tenant_id, call_id, config_data)
             if not stored:
                 logger.error(f"[TWILIO WEBHOOK] Failed to store tenant config")
                 return self._error_response("Unable to initialize call. Please try again later.")
 
-            logger.info(f"[TWILIO WEBHOOK] ✓ Stored config: tenant_config:{tenant_id}:{call_id}")
+            logger.info(f"[TWILIO WEBHOOK] ✓ Stored config: call_config:{call_sid}")
 
-            # Step 9 & 10: Build complete SIP URI with headers as query params (Twilio official format)
-            # Format: sip:agent@domain?X-LK-TenantId=xxx&X-LK-CallId=yyy&X-LK-CalledNumber=zzz
-            sip_uri_with_headers = self._build_sip_uri_with_headers(tenant_id, call_id, normalized_to_number)
+            # Step 9 & 10: Build SIP URI (simple - no custom headers needed anymore)
+            # Worker will use sip.twilio.callSid to look up config
+            sip_uri_simple = self._build_sip_uri_simple()
             
-            logger.info(f"[TWILIO WEBHOOK] Complete SIP URI: {sip_uri_with_headers}")
+            logger.info(f"[TWILIO WEBHOOK] Complete SIP URI: {sip_uri_simple}")
 
             # Step 11: Build TwiML response
             response = VoiceResponse()
             dial = Dial()
-            dial.sip(sip_uri_with_headers)
+            dial.sip(sip_uri_simple)
             response.append(dial)
 
             # Step 12: Track session for status callbacks
@@ -557,16 +561,28 @@ class UnifiedVoiceAgentService:
                         session["status"] = "ended"
                         session["ended_at"] = get_current_timestamp()
                         
-                        # Cleanup: Delete tenant config from Redis
+                        # Cleanup: Delete configs from Redis
                         tenant_id = session.get("tenant_id")
                         call_id = session.get("call_id")
-                        if tenant_id and call_id:
-                            config_key = f"tenant_config:{tenant_id}:{call_id}"
+                        twilio_call_sid = session.get("twilio_call_sid")
+                        
+                        # Delete call_config (primary lookup key by Twilio CallSid)
+                        if twilio_call_sid:
                             try:
-                                await async_redis_client.delete(config_key)
-                                logger.info(f"[CLEANUP] Deleted config: {config_key}")
+                                call_config_key = f"call_config:{twilio_call_sid}"
+                                await async_redis_client.delete(call_config_key)
+                                logger.info(f"[CLEANUP] Deleted config: {call_config_key}")
                             except Exception as e:
-                                logger.warning(f"[CLEANUP] Failed to delete config: {e}")
+                                logger.warning(f"[CLEANUP] Failed to delete call_config: {e}")
+                        
+                        # Delete tenant_config (backup key)
+                        if tenant_id and call_id:
+                            try:
+                                tenant_config_key = f"tenant_config:{tenant_id}:{call_id}"
+                                await async_redis_client.delete(tenant_config_key)
+                                logger.info(f"[CLEANUP] Deleted config: {tenant_config_key}")
+                            except Exception as e:
+                                logger.warning(f"[CLEANUP] Failed to delete tenant_config: {e}")
                     break
 
         except Exception as e:
@@ -629,6 +645,55 @@ class UnifiedVoiceAgentService:
         except Exception as exc:
             logger.error(f"[REDIS STORE] ✗ Error storing config: {exc}", exc_info=True)
             return False
+
+    async def _store_config_by_twilio_callsid(
+        self, twilio_call_sid: str, config: Dict[str, Any], ttl: int = CALL_CONFIG_TTL_SECONDS
+    ) -> bool:
+        """
+        Store call configuration in Redis by Twilio CallSid.
+        
+        Key format: call_config:<twilio_call_sid>
+        
+        This is the PRIMARY lookup method for the worker because:
+        - sip.twilio.callSid is ALWAYS available in SIP participant attributes
+        - Custom SIP headers via query params are NOT forwarded by Twilio to LiveKit
+        
+        The worker will use this key to retrieve the full config including tenant_id.
+        """
+        try:
+            config_key = f"call_config:{twilio_call_sid}"
+            config_json = json.dumps(config)
+            
+            logger.info(f"[REDIS STORE] Storing config by Twilio CallSid: {config_key}")
+            await async_redis_client.set(config_key, config_json, ttl=ttl)
+            
+            # Verify storage
+            verify_data = await async_redis_client.get(config_key)
+            if verify_data:
+                logger.info(f"[REDIS STORE] ✓ Successfully stored config by Twilio CallSid")
+                return True
+            else:
+                logger.error(f"[REDIS STORE] ✗ Failed to verify config storage by Twilio CallSid")
+                return False
+                
+        except Exception as exc:
+            logger.error(f"[REDIS STORE] ✗ Error storing config by Twilio CallSid: {exc}", exc_info=True)
+            return False
+
+    def _build_sip_uri_simple(self) -> str:
+        """
+        Build a simple SIP URI without custom headers.
+        
+        Format: sip:lk@domain.sip.livekit.cloud
+        
+        The worker will use sip.twilio.callSid to look up the config
+        instead of relying on custom SIP headers (which Twilio doesn't forward).
+        """
+        domain = self._get_livekit_sip_domain()
+        sip_uri = f"sip:lk@{domain}"
+        
+        logger.info(f"[SIP URI] Built simple URI: {sip_uri}")
+        return sip_uri
 
     def _get_livekit_sip_domain(self) -> str:
         """
