@@ -201,10 +201,9 @@ async def assign_phone_to_agent(
             )
 
             # Step 3: Store SIP configuration in phone number record
-            # FIX ISSUE 5: Use dispatch_rule_validated (boolean) instead of fake dispatch_rule_id
             update_data = {
                 "sip_trunk_id": sip_config.get("trunk_id"),
-                "dispatch_rule_validated": sip_config.get("dispatch_rule_validated", False),
+                "sip_dispatch_rule_id": sip_config.get("dispatch_rule_id"),  # Real dispatch rule ID
                 "sip_configured": True,
                 "sip_configured_at": datetime.now(timezone.utc).isoformat(),
             }
