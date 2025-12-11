@@ -5,10 +5,11 @@ Handles SIP trunk, dispatch rules, and phone number webhook configuration.
 ARCHITECTURE:
 - Each phone number gets its own SIP inbound trunk
 - Each phone number gets its own dispatch rule (auto-created)
-- Each dispatch rule has a unique agentName: "voice-agent-{phone_number}"
+- ALL dispatch rules use single global agentName: "voice-agent"
+- One worker handles ALL phone numbers (multi-tenant design)
 - Dispatch rule uses Individual mode with roomPrefix="call-"
-- Tenant routing is handled via SIP headers, NOT trunk metadata
-- Multi-tenant SaaS: Multiple tenants can share same phone number via SIP headers
+- Tenant routing is handled via SIP headers (X-LK-TenantId, X-LK-CallId)
+- Worker extracts phone number from SIP headers (X-LK-CalledNumber)
 """
 
 import asyncio
@@ -35,20 +36,8 @@ logger = logging.getLogger(__name__)
 
 # Expected dispatch rule configuration
 EXPECTED_ROOM_PREFIX = "call-"
-
-
-def build_agent_name_for_number(phone_number: str) -> str:
-    """
-    Return a unique agentName for LiveKit based on the phone number.
-    
-    This ensures each phone number has its own worker persona.
-    
-    Example:
-        +18334005770 -> "voice-agent-18334005770"
-        +12145551234 -> "voice-agent-12145551234"
-    """
-    normalized = phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
-    return f"voice-agent-{normalized}"
+# Single global agent name - one worker handles all phone numbers
+GLOBAL_AGENT_NAME = "voice-agent"
 
 
 async def _run_twilio_sync(func: Callable) -> Any:
@@ -231,7 +220,8 @@ class SIPConfigurationService:
         Returns the dispatch_rule_id if successful, None otherwise.
         """
         try:
-            agent_name = build_agent_name_for_number(phone_number)
+            # Use single global agent name for all phone numbers
+            agent_name = GLOBAL_AGENT_NAME
             normalized_phone = phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
             rule_name = f"dispatch-rule-{normalized_phone}"
             
