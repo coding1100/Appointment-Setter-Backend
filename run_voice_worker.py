@@ -1,90 +1,32 @@
-# """
-# Run the LiveKit Voice Agent Worker
-# This script starts the LiveKit agent worker that handles voice interactions.
-# """
-# import os
-# import sys
-# import multiprocessing
-# from dotenv import load_dotenv
-
-# # Load environment variables BEFORE importing from app.core.config
-# load_dotenv()
-
-# from app.agents.voice_worker import entrypoint
-# from livekit import agents
-# from app.core.config import LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
-
-# if __name__ == "__main__":
-#     multiprocessing.freeze_support()
-    
-#     print("="  * 60)
-#     print("Starting LiveKit Voice Agent Worker...")
-#     print(f"LiveKit URL: {LIVEKIT_URL}")
-    
-#     # Check if running on Windows
-#     is_windows = sys.platform == "win32"
-#     if is_windows:
-#         print("Platform: Windows (IPC watcher may have limitations)")
-    
-#     print("=" * 60)
-    
-#     # On Windows, suppress IPC watcher errors (known limitation)
-#     # The error occurs in a background task and doesn't affect worker functionality
-#     import logging
-    
-#     # Suppress the specific IPC error on Windows
-#     if is_windows:
-#         # Filter out DuplexClosed errors from logs
-#         class WindowsIPCFilter(logging.Filter):
-#             def filter(self, record):
-#                 # Suppress DuplexClosed errors on Windows
-#                 if "DuplexClosed" in str(record.getMessage()) or "Error in _read_ipc_task" in str(record.getMessage()):
-#                     return False
-#                 return True
-        
-#         # Apply filter to livekit.agents logger
-#         agents_logger = logging.getLogger("livekit.agents")
-#         agents_logger.addFilter(WindowsIPCFilter())
-        
-#         print("Note: IPC watcher has known limitations on Windows.")
-#         print("Worker will function normally despite IPC warnings.\n")
-    
-#     try:
-#         # Use WorkerOptions with explicit configuration
-#         # This approach works without CLI commands (no "start" needed)
-#         agents.cli.run_app(
-#             agents.WorkerOptions(
-#                 entrypoint_fnc=entrypoint,
-#                 api_key=LIVEKIT_API_KEY,
-#                 api_secret=LIVEKIT_API_SECRET,
-#                 ws_url=LIVEKIT_URL,
-#             )
-#         )
-#     except KeyboardInterrupt:
-#         print("\n\n✓ Worker stopped by user")
-#         # OPTIMIZATION: Explicitly close Redis connection on shutdown
-#         import asyncio
-#         from app.core.async_redis import async_redis_client
-        
-#         loop = asyncio.get_event_loop()
-#         if loop.is_running():
-#             loop.create_task(async_redis_client.close())
-#         else:
-#             loop.run_until_complete(async_redis_client.close())
-            
-#         sys.exit(0)
-#     except Exception as e:
-#         print(f"\n❌ Fatal error: {e}")
-#         import traceback
-#         traceback.print_exc()
-#         sys.exit(1)
-
 """
-Run the LiveKit Voice Agent Worker
-Starts a single worker instance that handles all inbound SIP calls.
+LiveKit Voice Agent Worker
+==========================
+Starts the voice agent worker that handles inbound telephony calls.
 
-IMPORTANT: This worker uses num_idle_processes=1 to avoid spawning
-multiple competing processes that cause VAD slowness.
+ARCHITECTURE (LiveKit Official Telephony Flow):
+- Agent name MUST be "voice-agent" to match SIP dispatch rule
+- Worker receives jobs when LiveKit creates rooms via dispatch rule
+- Worker extracts tenant_id from SIP participant attributes
+- Worker loads config from Redis: tenant_config:<tenant_id>:<call_id>
+- Worker FAILS if config is missing (no fallback to defaults)
+
+DISPATCH RULE CONFIGURATION (in LiveKit Dashboard):
+{
+  "dispatch_rule": {
+    "rule": {
+      "dispatchRuleIndividual": {
+        "roomPrefix": "call-"
+      }
+    },
+    "roomConfig": {
+      "agents": [
+        { "agentName": "voice-agent" }
+      ]
+    }
+  }
+}
+
+This worker MUST be registered with agent_name="voice-agent" to match the dispatch rule.
 """
 
 import os
@@ -96,7 +38,7 @@ from dotenv import load_dotenv
 # CRITICAL: Optimize ONNX/PyTorch threading BEFORE importing any ML libraries
 # Without this, multiple threads compete for CPU and cause 20-30 second VAD delays
 os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1") 
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
@@ -108,16 +50,32 @@ from livekit import agents
 from app.agents.voice_worker import entrypoint, prewarm_vad
 from app.core.config import LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
 
+# Static agent name - MUST match dispatch rule configuration
+AGENT_NAME = "voice-agent"
+
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
 
     print("=" * 70)
-    print("Starting LiveKit Voice Agent Worker…")
+    print("Starting LiveKit Voice Agent Worker")
+    print("=" * 70)
     print(f"LiveKit URL: {LIVEKIT_URL}")
-    print("Worker agent_name: '' (empty, allowed & intentional)")
-    print("num_idle_processes: 1 (prevents duplicate workers)")
-    print("OMP_NUM_THREADS: 1 (prevents VAD thread contention)")
+    print(f"Agent Name: {AGENT_NAME}")
+    print(f"  ↳ MUST match dispatch rule's roomConfig.agents[].agentName")
+    print("")
+    print("ARCHITECTURE:")
+    print("  1. Twilio → Backend → stores tenant_config:<tenant_id>:<call_id>")
+    print("  2. Backend → TwiML <Dial><Sip> → LiveKit SIP domain")
+    print("  3. LiveKit dispatch rule creates room: call-{phone}_{suffix}")
+    print("  4. Dispatch rule launches this worker (agent_name='voice-agent')")
+    print("  5. Worker extracts tenant_id from SIP headers")
+    print("  6. Worker loads config from Redis")
+    print("  7. Worker FAILS if config missing (no fallback)")
+    print("")
+    print("Configuration:")
+    print(f"  num_idle_processes: 1 (prevents VAD thread contention)")
+    print(f"  OMP_NUM_THREADS: 1 (single-threaded ONNX inference)")
     print("=" * 70)
 
     # Windows IPC warning suppressor
@@ -132,8 +90,7 @@ if __name__ == "__main__":
 
     try:
         # Start the worker with limited processes to prevent VAD slowness
-        # - num_idle_processes=1: Only keep 1 idle process (prevents multiple workers competing for CPU)
-        # - This reduces "inference is slower than realtime" warnings
+        # num_idle_processes=1: Only keep 1 idle process (prevents CPU contention)
         agents.cli.run_app(
             agents.WorkerOptions(
                 entrypoint_fnc=entrypoint,
@@ -141,24 +98,27 @@ if __name__ == "__main__":
                 api_key=LIVEKIT_API_KEY,
                 api_secret=LIVEKIT_API_SECRET,
                 ws_url=LIVEKIT_URL,
-                agent_name="",
+                # IMPORTANT: agent_name MUST match dispatch rule's agentName
+                agent_name=AGENT_NAME,
                 # Limit to 1 idle process to prevent CPU contention
-                # Multiple processes cause Silero VAD to run 10-15+ seconds behind realtime
                 num_idle_processes=1,
             )
         )
 
     except KeyboardInterrupt:
-        print("\nWorker stopped by user.")
+        print("\n\n✓ Worker stopped by user.")
         # Graceful shutdown of Redis
         import asyncio
         from app.core.async_redis import async_redis_client
 
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(async_redis_client.close())
-        else:
-            loop.run_until_complete(async_redis_client.close())
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(async_redis_client.close())
+            else:
+                loop.run_until_complete(async_redis_client.close())
+        except Exception as e:
+            print(f"Warning: Redis cleanup failed: {e}")
 
         sys.exit(0)
 
@@ -167,4 +127,3 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
-

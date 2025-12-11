@@ -1,18 +1,29 @@
 """
 LiveKit Voice Agent Worker
-This worker connects to LiveKit and handles voice agent sessions.
-Based on the LiveKit agents framework pattern.
+===========================
+This worker connects to LiveKit and handles voice agent sessions for inbound telephony.
 
-Works with LiveKit Individual dispatch rule where room names are:
-  inbound_{callerNumber}_{randomSuffix}
+ARCHITECTURE (LiveKit Official Telephony Flow):
+1. Twilio PSTN → Backend webhook
+2. Backend stores tenant config under `tenant_config:<tenant_id>:<call_id>`
+3. Backend returns TwiML <Dial><Sip> to LiveKit SIP domain (NO room name)
+4. LiveKit SIP dispatch rule creates room automatically (e.g., call-+14438600638_x8Bg...)
+5. Dispatch rule launches this worker via agent_name="voice-agent"
+6. Worker extracts tenant_id + call_id from SIP participant attributes
+7. Worker loads config from Redis: `tenant_config:<tenant_id>:<call_id>`
+8. Worker applies tenant-specific greeting, persona, voice, etc.
 
-Config is stored in Redis by caller phone number and looked up when worker starts.
+KEY PRINCIPLES:
+- Worker NEVER depends on room name for config lookup
+- Worker MUST extract tenant_id from SIP metadata per call
+- Worker MUST fail with error if tenant config is missing (NO fallback)
+- Multiple tenants can share the same PSTN number (call_id provides isolation)
 """
 
 import asyncio
 import json
 import logging
-import re
+import uuid
 from typing import Any, Dict, Optional
 
 from livekit import agents
@@ -29,6 +40,12 @@ from app.core.config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
     LIVEKIT_URL,
+    LIVEKIT_SIP_ATTRIBUTE_TENANT_ID,
+    LIVEKIT_SIP_ATTRIBUTE_CALL_ID,
+    LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER,
+    LIVEKIT_SIP_HEADER_TENANT_ID,
+    LIVEKIT_SIP_HEADER_CALL_ID,
+    LIVEKIT_SIP_HEADER_CALLED_NUMBER,
 )
 from app.core.prompts import get_template
 
@@ -40,11 +57,8 @@ DEFAULT_TTS_CACHE_KEY = "__default__"
 MAX_HISTORY_LOG_LINES = 40
 
 # VAD settings optimized for telephony
-# Lower thresholds = more responsive but may trigger on noise
-# Higher thresholds = more stable but may miss quiet speech
 VAD_SETTINGS = {
-    # Telephony audio is 8 kHz; using 8k avoids resampling overhead and keeps
-    # Silero inference closer to realtime. (LiveKit plugin only supports 8k/16k)
+    # Telephony audio is 8 kHz; using 8k avoids resampling overhead
     "sample_rate": 8000,
     "min_speech_duration": 0.05,     # 50ms - faster detection
     "min_silence_duration": 0.3,     # 300ms - quicker turn-taking
@@ -145,51 +159,95 @@ class VoiceAgent(Agent):
         self._closing_task.add_done_callback(self._on_close_task_done)
 
 
-def extract_caller_from_room_name(room_name: str) -> Optional[str]:
+def is_sip_participant(p) -> bool:
     """
-    Extract caller phone number from LiveKit Individual dispatch room name.
+    Determine if a participant is a SIP/PSTN caller.
     
-    Room name format: inbound_+14438600638_w9TNRqtPr5A2
-                      {prefix}_{caller}_{suffix}
+    FIX ISSUE 6: Robust SIP participant detection using multiple signals.
     
-    Returns the caller number (e.g., "+14438600638") or None if parsing fails.
+    SIP participants can have various identity formats:
+    - "sip_xxx", "sip-xxx", "sip"
+    - "pstn_xxx", "pstn"
+    - "inbound_xxx"
+    - "tel:xxx"
+    - "trunk_xxx"
+    - "gateway_xxx"
+    
+    This function uses multiple detection methods:
+    1. Check metadata for SIP/PSTN indicators
+    2. Check attributes for SIP header keys (sip.*, sip.h.*, lk_*)
+    3. Check identity prefix as fallback
+    
+    Returns True if the participant is identified as a SIP caller.
     """
-    if not room_name:
-        return None
+    # Method 1: Check metadata for SIP/PSTN indicators
+    metadata = getattr(p, "metadata", None) or ""
+    if metadata:
+        metadata_lower = metadata.lower()
+        if "sip" in metadata_lower or "pstn" in metadata_lower or "telephony" in metadata_lower:
+            return True
     
-    # Handle both underscore (LiveKit) and dash (legacy) separators
-    if room_name.startswith("inbound_"):
-        # LiveKit Individual dispatch format: inbound_+14438600638_suffix
-        parts = room_name.split("_")
-        if len(parts) >= 2:
-            # parts[0] = "inbound", parts[1] = "+14438600638", parts[2] = suffix
-            caller = parts[1]
-            logger.info(f"[ROOM PARSE] Extracted caller '{caller}' from room '{room_name}'")
-            return caller
-    elif room_name.startswith("inbound-"):
-        # Legacy format: inbound-14438600638-suffix
-        parts = room_name.split("-")
-        if len(parts) >= 2:
-            caller = parts[1]
-            # Add + prefix if missing
-            if not caller.startswith("+"):
-                caller = f"+{caller}"
-            logger.info(f"[ROOM PARSE] Extracted caller '{caller}' from legacy room '{room_name}'")
-            return caller
+    # Method 2: Check attributes for SIP header keys (most reliable)
+    attrs = getattr(p, "attributes", {}) or {}
+    for key in attrs.keys():
+        # LiveKit SIP headers are prefixed with "sip." or "sip.h."
+        if key.startswith("sip.") or key.startswith("sip.h.") or key.startswith("lk_"):
+            return True
     
-    logger.warning(f"[ROOM PARSE] Could not extract caller from room name: {room_name}")
-    return None
+    # Method 3: Check identity prefix (fallback, non-authoritative but useful)
+    identity = getattr(p, "identity", "") or ""
+    identity_lower = identity.lower()
+    sip_prefixes = ("sip", "pstn", "inbound", "gateway", "tel", "trunk")
+    for prefix in sip_prefixes:
+        if identity_lower.startswith(prefix):
+            return True
+        if identity_lower.startswith(f"{prefix}_") or identity_lower.startswith(f"{prefix}-"):
+            return True
+    
+    return False
 
 
-async def extract_called_number_from_attributes(ctx: agents.JobContext, max_wait_seconds: float = 2.0) -> Optional[str]:
+def count_sip_attributes(p) -> int:
     """
-    Extract called phone number (to_number) from SIP participant attributes.
-    
-    The backend passes to_number via SIP header X-LK-CalledNumber,
-    which LiveKit maps to participant attribute lk_called_number.
-    
-    Waits for SIP participant to join if not immediately available.
+    Count the number of SIP-related attributes on a participant.
+    Used to select the best SIP participant when multiple are found.
     """
+    attrs = getattr(p, "attributes", {}) or {}
+    count = 0
+    for key in attrs.keys():
+        if key.startswith("sip.") or key.startswith("sip.h.") or key.startswith("lk_"):
+            count += 1
+    return count
+
+
+async def extract_tenant_identity_from_sip(ctx: agents.JobContext, max_wait_seconds: float = 3.0) -> Dict[str, Optional[str]]:
+    """
+    Extract tenant identity from SIP participant attributes.
+    
+    FIX ISSUE 6: Comprehensive SIP attribute validation with fallback mappings
+    and robust SIP participant detection.
+    
+    This is the PRIMARY method for multi-tenant routing.
+    
+    Returns a dict with:
+    - tenant_id: The tenant identifier (REQUIRED for config lookup)
+    - call_id: Unique per-call identifier (for concurrency isolation)
+    - caller_number: The phone number of the caller (for logging)
+    - called_number: The phone number that was called (for logging)
+    
+    SIP Header to Attribute Mapping:
+    - Twilio sends: X-LK-TenantId=abc
+    - LiveKit maps to: sip.h.x-lk-tenantid=abc (lowercase)
+    
+    The function checks multiple attribute names to handle different LiveKit SDK versions.
+    """
+    result = {
+        "tenant_id": None,
+        "call_id": None,
+        "caller_number": None,
+        "called_number": None,
+    }
+    
     try:
         # Wait for SIP participant to join (with timeout)
         wait_interval = 0.1
@@ -197,260 +255,309 @@ async def extract_called_number_from_attributes(ctx: agents.JobContext, max_wait
         sip_participant = None
         
         while waited < max_wait_seconds:
-            # Get SIP participant (the caller)
-            sip_participants = [p for p in ctx.room.remote_participants.values() if p.identity.startswith("sip_")]
+            # FIX ISSUE 6: Use robust SIP participant detection
+            # instead of relying on identity prefix alone
+            all_participants = list(ctx.room.remote_participants.values())
+            sip_participants = [p for p in all_participants if is_sip_participant(p)]
+            
             if sip_participants:
-                sip_participant = sip_participants[0]
+                # If multiple SIP participants found, select the one with most SIP attributes
+                if len(sip_participants) > 1:
+                    logger.info(f"[TENANT IDENTITY] Found {len(sip_participants)} SIP participants, selecting best match")
+                    sip_participant = max(sip_participants, key=count_sip_attributes)
+                else:
+                    sip_participant = sip_participants[0]
                 break
             
             await asyncio.sleep(wait_interval)
             waited += wait_interval
         
         if not sip_participant:
-            logger.warning(f"[ATTRIBUTES] No SIP participants found in room after waiting {waited:.1f}s")
-            logger.info(f"[ATTRIBUTES] Current participants: {[p.identity for p in ctx.room.remote_participants.values()]}")
-            return None
+            # FIX ISSUE 6: Enhanced defensive logging
+            logger.error(f"[TENANT IDENTITY] ✗ No SIP participants found in room after waiting {waited:.1f}s")
+            all_participants = list(ctx.room.remote_participants.values())
+            logger.error(f"[TENANT IDENTITY] ✗ Total participants in room: {len(all_participants)}")
+            for p in all_participants:
+                p_identity = getattr(p, "identity", "unknown")
+                p_metadata = getattr(p, "metadata", "")
+                p_attrs = list(getattr(p, "attributes", {}).keys())
+                logger.error(f"[TENANT IDENTITY] ✗   - identity='{p_identity}', metadata='{p_metadata}', attrs={p_attrs}")
+            logger.error(f"[TENANT IDENTITY] ✗ None of the participants matched SIP detection criteria")
+            return result
         
-        logger.info(f"[ATTRIBUTES] Found SIP participant: {sip_participant.identity}")
-        logger.info(f"[ATTRIBUTES] Participant attributes: {dict(sip_participant.attributes)}")
+        logger.info(f"[TENANT IDENTITY] ✓ Found SIP participant: {sip_participant.identity}")
         
-        # Try to get called number from participant attributes
-        # Priority 1: Custom header (if backend passes it via TwiML)
-        from app.core.config import LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER
-        called_number = sip_participant.attributes.get(LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER)
-        if called_number:
-            logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{called_number}' from attribute '{LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER}'")
-            return called_number
+        attrs = sip_participant.attributes
         
-        # Priority 2: Try alternative custom header names
-        from app.core.config import LIVEKIT_SIP_HEADER_CALLED_NUMBER
-        for attr_key in [LIVEKIT_SIP_HEADER_CALLED_NUMBER, "called_number", "to_number", "X-LK-CalledNumber"]:
-            called_number = sip_participant.attributes.get(attr_key)
-            if called_number:
-                logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{called_number}' from attribute '{attr_key}'")
-                return called_number
+        # Log ALL attributes for debugging (FIX ISSUE 6: better diagnostics)
+        logger.info(f"[TENANT IDENTITY] === ALL SIP PARTICIPANT ATTRIBUTES ===")
+        for key, value in sorted(attrs.items()):
+            logger.info(f"[TENANT IDENTITY]   {key} = {value}")
+        logger.info(f"[TENANT IDENTITY] =====================================")
         
-        # Priority 3: Extract from sip.trunkPhoneNumber (LiveKit provides this automatically)
-        trunk_phone = sip_participant.attributes.get("sip.trunkPhoneNumber")
-        if trunk_phone:
-            # Ensure it has + prefix
-            if not trunk_phone.startswith("+"):
-                trunk_phone = f"+{trunk_phone}"
-            logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{trunk_phone}' from 'sip.trunkPhoneNumber'")
-            return trunk_phone
+        # ========================================
+        # EXTRACT TENANT ID (REQUIRED)
+        # FIX ISSUE 6: Comprehensive fallback mapping
+        # ========================================
+        # LiveKit normalizes SIP headers to lowercase with sip.h. prefix
+        # Try multiple variations to handle different SDK versions
+        tenant_id_keys = [
+            # Configured attribute name
+            LIVEKIT_SIP_ATTRIBUTE_TENANT_ID,
+            # LiveKit's lowercase mapping of X-LK-TenantId
+            "sip.h.x-lk-tenantid",
+            # Direct header name (some SDK versions)
+            LIVEKIT_SIP_HEADER_TENANT_ID,
+            "X-LK-TenantId",
+            "x-lk-tenantid",
+            # Alternative names
+            "lk_tenant_id",
+            "tenant_id",
+            "tenantId",
+            "sip.tenant_id",
+        ]
         
-        # Priority 4: Extract from sip.h.to header (format: <sip:+18334005770@domain>)
-        to_header = sip_participant.attributes.get("sip.h.to")
-        if to_header:
-            import re
-            # Extract phone number from SIP URI: <sip:+18334005770@domain>
-            match = re.search(r'<sip:(\+?\d+)@', to_header)
-            if match:
-                called_number = match.group(1)
-                if not called_number.startswith("+"):
-                    called_number = f"+{called_number}"
-                logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{called_number}' from 'sip.h.to' header")
-                return called_number
+        tenant_id = None
+        for attr_key in tenant_id_keys:
+            value = attrs.get(attr_key)
+            if value:
+                tenant_id = value.strip()
+                logger.info(f"[TENANT IDENTITY] ✓ Found tenant_id via key '{attr_key}': {tenant_id}")
+                break
         
-        # Priority 5: Extract from sip.h.x-orig-cdpn (format: 18334005770;noa=4)
-        orig_cdpn = sip_participant.attributes.get("sip.h.x-orig-cdpn")
-        if orig_cdpn:
-            # Format: "18334005770;noa=4" - extract just the number
-            number_part = orig_cdpn.split(";")[0]
-            if number_part:
-                if not number_part.startswith("+"):
-                    number_part = f"+{number_part}"
-                logger.info(f"[ATTRIBUTES] ✓ Extracted called number '{number_part}' from 'sip.h.x-orig-cdpn'")
-                return number_part
+        if tenant_id:
+            result["tenant_id"] = tenant_id
+        else:
+            # FIX ISSUE 6: Log detailed error to help diagnose SIP header issues
+            logger.error(f"[TENANT IDENTITY] ✗ Could not find tenant_id in SIP attributes!")
+            logger.error(f"[TENANT IDENTITY] ✗ Checked keys: {tenant_id_keys}")
+            logger.error(f"[TENANT IDENTITY] ✗ This usually means Twilio SIP URI formatting is incorrect.")
+            logger.error(f"[TENANT IDENTITY] ✗ Expected format: sip:domain;X-LK-TenantId=xxx;X-LK-CallId=yyy")
         
-        logger.warning(f"[ATTRIBUTES] ✗ Could not find called number in participant attributes.")
-        logger.warning(f"[ATTRIBUTES] Available attributes: {list(sip_participant.attributes.keys())}")
-        return None
+        # ========================================
+        # EXTRACT CALL ID (FOR CONCURRENCY)
+        # FIX ISSUE 6: Comprehensive fallback mapping
+        # ========================================
+        call_id_keys = [
+            # Configured attribute name
+            LIVEKIT_SIP_ATTRIBUTE_CALL_ID,
+            # LiveKit's lowercase mapping of X-LK-CallId
+            "sip.h.x-lk-callid",
+            # Direct header name
+            LIVEKIT_SIP_HEADER_CALL_ID,
+            "X-LK-CallId",
+            "x-lk-callid",
+            # Alternative names
+            "lk_call_id",
+            "call_id",
+            "callId",
+            "sip.callID",
+            "sip.call_id",
+        ]
+        
+        call_id = None
+        for attr_key in call_id_keys:
+            value = attrs.get(attr_key)
+            if value:
+                call_id = value.strip()
+                logger.info(f"[TENANT IDENTITY] ✓ Found call_id via key '{attr_key}': {call_id}")
+                break
+        
+        if call_id:
+            result["call_id"] = call_id
+        else:
+            # Generate a fallback call_id from participant identity
+            # Remove common prefixes to get a cleaner identifier
+            fallback_id = sip_participant.identity
+            for prefix in ["sip_", "sip-", "pstn_", "pstn-", "inbound_", "inbound-", "tel:", "trunk_"]:
+                if fallback_id.lower().startswith(prefix):
+                    fallback_id = fallback_id[len(prefix):]
+                    break
+            result["call_id"] = fallback_id[:12]
+            logger.warning(f"[TENANT IDENTITY] Using fallback call_id from participant: {result['call_id']}")
+        
+        # ========================================
+        # EXTRACT PHONE NUMBERS (FOR LOGGING)
+        # ========================================
+        import re
+        
+        # Caller number (From)
+        caller_keys = ["sip.callerPhoneNumber", "sip.h.from", "sip.from"]
+        for key in caller_keys:
+            caller = attrs.get(key)
+            if caller:
+                if "sip:" in caller:
+                    match = re.search(r'sip:(\+?\d+)@', caller)
+                    if match:
+                        caller = match.group(1)
+                result["caller_number"] = caller
+                logger.info(f"[TENANT IDENTITY] Caller number: {result['caller_number']}")
+                break
+        
+        # Called number (To)
+        called_keys = [
+            # Configured attribute name
+            LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER,
+            # LiveKit's lowercase mapping
+            "sip.h.x-lk-callednumber",
+            LIVEKIT_SIP_HEADER_CALLED_NUMBER,
+            "lk_called_number",
+            "sip.trunkPhoneNumber",
+            "sip.h.to",
+            "sip.to",
+        ]
+        for key in called_keys:
+            called = attrs.get(key)
+            if called:
+                if "sip:" in called:
+                    match = re.search(r'sip:(\+?\d+)@', called)
+                    if match:
+                        called = match.group(1)
+                result["called_number"] = called
+                logger.info(f"[TENANT IDENTITY] Called number: {result['called_number']}")
+                break
+        
+        return result
         
     except Exception as e:
-        logger.error(f"[ATTRIBUTES] Error extracting called number from attributes: {e}", exc_info=True)
-        return None
+        logger.error(f"[TENANT IDENTITY] Error extracting tenant identity: {e}", exc_info=True)
+        return result
 
 
-def extract_trunk_id_from_attributes(ctx: agents.JobContext) -> Optional[str]:
+async def get_tenant_config(tenant_id: str, call_id: str) -> Optional[Dict[str, Any]]:
     """
-    Extract LiveKit SIP trunk ID from SIP participant attributes.
+    Retrieve tenant configuration from Redis.
     
-    Trunk ID is always available in sip.trunkID attribute and is the most reliable
-    identifier for looking up agent configuration.
+    Config is stored per-call under: tenant_config:<tenant_id>:<call_id>
+    This allows:
+    - Multiple tenants sharing same phone number
+    - Concurrent calls to same number with different configs
+    - Per-call customization
+    
+    Returns None if config not found (worker should FAIL, not use defaults).
     """
     try:
-        # Get SIP participant (the caller)
-        sip_participants = [p for p in ctx.room.remote_participants.values() if p.identity.startswith("sip_")]
-        if not sip_participants:
-            logger.warning(f"[ATTRIBUTES] No SIP participants found in room")
-            return None
+        # PRIMARY: Per-call config key (most specific)
+        config_key = f"tenant_config:{tenant_id}:{call_id}"
+        logger.info(f"[WORKER REDIS] Looking up config with key: {config_key}")
         
-        sip_participant = sip_participants[0]
-        logger.info(f"[ATTRIBUTES] Found SIP participant: {sip_participant.identity}")
-        
-        # Extract trunk ID from participant attributes
-        # LiveKit always provides sip.trunkID for SIP participants
-        trunk_id = sip_participant.attributes.get("sip.trunkID")
-        if trunk_id:
-            logger.info(f"[ATTRIBUTES] ✓ Extracted trunk ID '{trunk_id}' from attribute 'sip.trunkID'")
-            return trunk_id
-        
-        # Try alternative attribute names
-        for attr_key in ["trunkID", "sip_trunk_id", "trunk_id"]:
-            trunk_id = sip_participant.attributes.get(attr_key)
-            if trunk_id:
-                logger.info(f"[ATTRIBUTES] ✓ Extracted trunk ID '{trunk_id}' from attribute '{attr_key}'")
-                return trunk_id
-        
-        logger.warning(f"[ATTRIBUTES] ✗ Could not find trunk ID in participant attributes.")
-        logger.warning(f"[ATTRIBUTES] Available attributes: {list(sip_participant.attributes.keys())}")
-        return None
-        
-    except Exception as e:
-        logger.error(f"[ATTRIBUTES] Error extracting trunk ID from attributes: {e}", exc_info=True)
-        return None
-
-
-async def get_agent_config(room_name: str, ctx: Optional[agents.JobContext] = None) -> Optional[Dict[str, Any]]:
-    """
-    Retrieve agent configuration from Redis.
-    
-    PRIMARY APPROACH: Look up config by trunk ID (most reliable).
-    Trunk ID is always available in SIP participant attributes (sip.trunkID).
-    
-    Lookup order:
-    1. By trunk ID (from SIP participant attributes) - PRIMARY approach
-    2. By called number (from SIP participant attributes) - FALLBACK
-    3. By room name - for backward compatibility with Direct dispatch
-    """
-    try:
-        # Step 1: Get trunk ID from SIP participant attributes and look up config (PRIMARY)
-        if ctx:
-            trunk_id = extract_trunk_id_from_attributes(ctx)
-            if trunk_id:
-                trunk_config_key = f"livekit:trunk_config:{trunk_id}"
-                logger.info(f"[WORKER REDIS] Trying trunk-based lookup with key: {trunk_config_key}")
-                
-                config_data = await async_redis_client.get(trunk_config_key)
-                if config_data:
-                    config = json.loads(config_data)
-                    logger.info(f"[WORKER REDIS] ✓ Found config by trunk ID: {trunk_id}")
-                    logger.info(f"[WORKER REDIS] Config details:")
-                    logger.info(f"  - agent_id: {config.get('agent_id')}")
-                    logger.info(f"  - voice_id: {config.get('voice_id')}")
-                    logger.info(f"  - service_type: {config.get('service_type')}")
-                    logger.info(f"  - agent_data keys: {list(config.get('agent_data', {}).keys())}")
-                    return config
-                else:
-                    logger.warning(f"[WORKER REDIS] No config found for trunk ID {trunk_id}, trying called-number lookup...")
-            else:
-                logger.warning(f"[WORKER REDIS] Could not extract trunk ID from attributes, trying called-number lookup...")
-
-        # Step 2: Fallback to called number lookup (if trunk ID not available)
-        if ctx:
-            called_number = await extract_called_number_from_attributes(ctx)
-            if called_number:
-                # Normalize the called number for consistent lookup
-                from app.utils.phone_number import normalize_phone_number_safe
-                normalized_called = normalize_phone_number_safe(called_number)
-                if normalized_called:
-                    called_config_key = f"livekit:called_number_config:{normalized_called}"
-                    logger.info(f"[WORKER REDIS] Trying called-number-based lookup with key: {called_config_key}")
-                    
-                    config_data = await async_redis_client.get(called_config_key)
-                    if config_data:
-                        config = json.loads(config_data)
-                        logger.info(f"[WORKER REDIS] ✓ Found config by called number: {normalized_called}")
-                        logger.info(f"[WORKER REDIS] Config details:")
-                        logger.info(f"  - agent_id: {config.get('agent_id')}")
-                        logger.info(f"  - voice_id: {config.get('voice_id')}")
-                        logger.info(f"  - service_type: {config.get('service_type')}")
-                        return config
-                    else:
-                        logger.warning(f"[WORKER REDIS] No config found for called number {normalized_called}, trying room-based lookup...")
-
-        # Step 3: Fall back to room name lookup (backward compatibility with Direct dispatch)
-        room_config_key = f"livekit:room_config:{room_name}"
-        logger.info(f"[WORKER REDIS] Trying room-based lookup with key: {room_config_key}")
-        
-        config_data = await async_redis_client.get(room_config_key)
+        config_data = await async_redis_client.get(config_key)
         if config_data:
             config = json.loads(config_data)
-            logger.info(f"[WORKER REDIS] ✓ Found config by room name: {room_name}")
+            logger.info(f"[WORKER REDIS] ✓ Found per-call config for tenant {tenant_id}, call {call_id}")
             logger.info(f"[WORKER REDIS] Config details:")
             logger.info(f"  - agent_id: {config.get('agent_id')}")
             logger.info(f"  - voice_id: {config.get('voice_id')}")
             logger.info(f"  - service_type: {config.get('service_type')}")
+            logger.info(f"  - agent_data keys: {list(config.get('agent_data', {}).keys())}")
             return config
-
-        logger.warning(f"[WORKER REDIS] ✗ No agent configuration found (tried trunk ID, called number, and room lookups)")
+        
+        # FALLBACK: Tenant-level config (for backwards compatibility)
+        tenant_config_key = f"tenant_config:{tenant_id}"
+        logger.info(f"[WORKER REDIS] Per-call config not found, trying tenant key: {tenant_config_key}")
+        
+        config_data = await async_redis_client.get(tenant_config_key)
+        if config_data:
+            config = json.loads(config_data)
+            logger.info(f"[WORKER REDIS] ✓ Found tenant-level config for {tenant_id}")
+            return config
+        
+        logger.error(f"[WORKER REDIS] ✗ No tenant configuration found for tenant_id={tenant_id}, call_id={call_id}")
         return None
         
     except Exception as e:
-        logger.error(f"[WORKER REDIS] ✗ Error retrieving agent config from Redis: {e}", exc_info=True)
+        logger.error(f"[WORKER REDIS] ✗ Error retrieving tenant config from Redis: {e}", exc_info=True)
         return None
 
 
-def build_agent_instructions(config: Optional[Dict[str, Any]]) -> str:
+def build_agent_instructions(config: Dict[str, Any]) -> str:
     """
-    Build agent instructions from configuration using service-specific templates.
+    Build agent instructions from tenant configuration using service-specific templates.
     The templates from app/core/prompts.py contain comprehensive service-specific workflows.
+    
+    NOTE: This function requires a valid config. It should NEVER be called with None.
     """
-    # Extract agent data
-    if config and config.get("agent_data"):
-        agent_data = config.get("agent_data", {})
-        agent_name = agent_data.get("name", "Assistant")
-        service_type = config.get("service_type", "Home Services")
-        language = agent_data.get("language", "en-US")
+    agent_data = config.get("agent_data", {})
+    agent_name = agent_data.get("name", "Assistant")
+    service_type = config.get("service_type", "Home Services")
+    language = agent_data.get("language", "en-US")
 
-        logger.info(f"[INSTRUCTIONS] Building instructions from SERVICE TEMPLATE")
-        logger.info(f"[INSTRUCTIONS] Agent name: {agent_name}")
-        logger.info(f"[INSTRUCTIONS] Service type: {service_type}")
-        logger.info(f"[INSTRUCTIONS] Language: {language}")
+    logger.info(f"[INSTRUCTIONS] Building instructions from SERVICE TEMPLATE")
+    logger.info(f"[INSTRUCTIONS] Agent name: {agent_name}")
+    logger.info(f"[INSTRUCTIONS] Service type: {service_type}")
+    logger.info(f"[INSTRUCTIONS] Language: {language}")
 
-        # Use the service-specific template from app/core/prompts.py
-        instructions = get_template(service_type=service_type, agent_name=agent_name)
+    # Use the service-specific template from app/core/prompts.py
+    instructions = get_template(service_type=service_type, agent_name=agent_name)
 
-        logger.info(f"[INSTRUCTIONS] ✓ Using {service_type} template with agent name: {agent_name}")
-        return instructions
-    else:
-        # Fallback to default if no config
-        logger.warning("[INSTRUCTIONS] No config found, using default Home Services template")
-        return get_template(service_type="Home Services", agent_name="Assistant")
+    logger.info(f"[INSTRUCTIONS] ✓ Using {service_type} template with agent name: {agent_name}")
+    return instructions
 
 
-def extract_greeting_message(config: Optional[Dict[str, Any]]) -> Optional[str]:
+def extract_greeting_message(config: Dict[str, Any]) -> Optional[str]:
     """
-    Extract the custom greeting message from agent configuration.
+    Extract the custom greeting message from tenant configuration.
     This greeting will be used as the agent's initial spoken message.
+    
+    NOTE: This function requires a valid config. It should NEVER be called with None.
     """
-    if config and config.get("agent_data"):
-        agent_data = config.get("agent_data", {})
-        greeting = agent_data.get("greeting_message", "")
+    agent_data = config.get("agent_data", {})
+    greeting = agent_data.get("greeting_message", "")
 
-        if greeting and greeting.strip():
-            logger.info(f"[GREETING] Found custom greeting: {greeting[:100]}...")
-            return greeting.strip()
-        else:
-            logger.info("[GREETING] No custom greeting found, will use default")
-            return None
+    if greeting and greeting.strip():
+        logger.info(f"[GREETING] Found custom greeting: {greeting[:100]}...")
+        return greeting.strip()
     else:
-        logger.info("[GREETING] No config found, will use default greeting")
+        logger.info("[GREETING] No custom greeting found, will use default")
         return None
+
+
+async def handle_missing_config(session: AgentSession) -> None:
+    """
+    Handle the case where tenant config is missing.
+    
+    This MUST fail the call gracefully - NO fallback to defaults.
+    Per requirements: "Worker MUST NOT fall back to a generic agent."
+    """
+    error_message = (
+        "We are unable to connect this call at the moment. "
+        "Please try again later or contact support."
+    )
+    
+    try:
+        # Say error message to caller
+        await session.generate_reply(instructions=f"Say exactly: '{error_message}'")
+        
+        # Wait a moment for message to be spoken
+        await asyncio.sleep(3)
+        
+        # Close the session
+        await session.aclose()
+    except Exception as e:
+        logger.error(f"Error handling missing config: {e}")
 
 
 async def entrypoint(ctx: agents.JobContext):
     """
     Main entrypoint for the LiveKit voice agent worker.
-    This is called when a participant joins a room.
     
-    Room name format from Individual dispatch: inbound_+14438600638_randomSuffix
-    We extract the caller number and look up config from Redis.
+    This is called when LiveKit dispatches a job based on the dispatch rule.
+    
+    CANONICAL TELEPHONY FLOW:
+    1. Twilio PSTN call → Backend webhook
+    2. Backend stores config under tenant_config:<tenant_id>:<call_id>
+    3. Backend returns TwiML <Dial><Sip> to LiveKit (no room name specified)
+    4. LiveKit dispatch rule creates room: call-{phoneNumber}_{randomSuffix}
+    5. Dispatch rule launches this worker (agent_name="voice-agent")
+    6. Worker extracts tenant_id + call_id from SIP participant attributes
+    7. Worker loads config from Redis
+    8. Worker handles the call with tenant-specific config
+    
+    IMPORTANT: Worker IGNORES room name for config lookup.
     """
-    room_name = ctx.room.name
     logger.info("=" * 80)
-    logger.info(f"[WORKER ENTRYPOINT] Starting voice agent worker for room: {room_name}")
+    logger.info(f"[WORKER ENTRYPOINT] Voice agent worker starting")
+    logger.info(f"[WORKER ENTRYPOINT] Room name (for logging only, NOT for config): {ctx.room.name}")
     logger.info("=" * 80)
 
     # Pre-warm VAD model (lightweight if already loaded)
@@ -459,57 +566,110 @@ async def entrypoint(ctx: agents.JobContext):
     # Connect to the LiveKit room FIRST
     # This ensures the SIP participant has joined before we try to read attributes
     await ctx.connect()
-    logger.info(f"Connected to room: {room_name}")
+    logger.info(f"[WORKER ENTRYPOINT] Connected to room")
 
     # Wait a moment for SIP participant to join and attributes to be available
     await asyncio.sleep(0.5)
     
-    # Now retrieve agent configuration from Redis
-    # Config is stored by called phone number (to_number), not caller number
-    # We get to_number from SIP participant attributes (passed via SIP header)
-    logger.info(f"[WORKER ENTRYPOINT] Step 1: Retrieving agent configuration...")
-    config = await get_agent_config(room_name, ctx)
+    # ========================================
+    # STEP 1: Extract tenant identity from SIP metadata
+    # ========================================
+    logger.info(f"[WORKER ENTRYPOINT] Step 1: Extracting tenant identity from SIP metadata...")
+    identity = await extract_tenant_identity_from_sip(ctx)
+    
+    tenant_id = identity.get("tenant_id")
+    call_id = identity.get("call_id")
+    
+    if not tenant_id:
+        logger.error(f"[WORKER ENTRYPOINT] ✗ CRITICAL: Could not extract tenant_id from SIP metadata")
+        logger.error(f"[WORKER ENTRYPOINT] This call cannot proceed without tenant identification")
+        
+        # Create a minimal session just to say error message
+        error_vad = get_cached_vad()
+        error_session = AgentSession(
+            stt=deepgram.STT(model="nova-2-general", language="en-US"),
+            llm=google.LLM(model="gemini-2.0-flash"),
+            tts=elevenlabs.TTS(api_key=ELEVEN_API_KEY),
+            vad=error_vad,
+        )
+        error_agent = VoiceAgent(instructions="You are an error handler. Say the error message exactly as instructed.")
+        await error_session.start(room=ctx.room, agent=error_agent)
+        await handle_missing_config(error_session)
+        return
+    
+    if not call_id:
+        # Generate fallback call_id
+        call_id = str(uuid.uuid4())[:8]
+        logger.warning(f"[WORKER ENTRYPOINT] Generated fallback call_id: {call_id}")
+    
+    logger.info(f"[WORKER ENTRYPOINT] ✓ Tenant identity extracted: tenant_id={tenant_id}, call_id={call_id}")
+    
+    # ========================================
+    # STEP 2: Load tenant configuration from Redis
+    # ========================================
+    logger.info(f"[WORKER ENTRYPOINT] Step 2: Loading tenant configuration from Redis...")
+    config = await get_tenant_config(tenant_id, call_id)
 
-    if config:
-        logger.info(f"[WORKER ENTRYPOINT] ✓ Configuration retrieved successfully")
-    else:
-        logger.warning(f"[WORKER ENTRYPOINT] ✗ No configuration found, will use defaults")
+    if not config:
+        logger.error(f"[WORKER ENTRYPOINT] ✗ CRITICAL: No configuration found for tenant {tenant_id}")
+        logger.error(f"[WORKER ENTRYPOINT] Failing call - NO FALLBACK TO DEFAULTS")
+        
+        # Create a minimal session to say error message
+        error_vad = get_cached_vad()
+        error_session = AgentSession(
+            stt=deepgram.STT(model="nova-2-general", language="en-US"),
+            llm=google.LLM(model="gemini-2.0-flash"),
+            tts=elevenlabs.TTS(api_key=ELEVEN_API_KEY),
+            vad=error_vad,
+        )
+        error_agent = VoiceAgent(instructions="You are an error handler. Say the error message exactly as instructed.")
+        await error_session.start(room=ctx.room, agent=error_agent)
+        await handle_missing_config(error_session)
+        return
 
-    # Build agent instructions based on configuration (from service templates)
-    logger.info(f"[WORKER ENTRYPOINT] Step 2: Building agent instructions from templates...")
+    logger.info(f"[WORKER ENTRYPOINT] ✓ Configuration loaded successfully for tenant {tenant_id}")
+
+    # ========================================
+    # STEP 3: Build agent instructions from config
+    # ========================================
+    logger.info(f"[WORKER ENTRYPOINT] Step 3: Building agent instructions...")
     instructions = build_agent_instructions(config)
     logger.info(f"[WORKER ENTRYPOINT] Instructions preview (first 150 chars): {instructions[:150]}...")
 
-    # Extract custom greeting message (separate from system instructions)
-    logger.info(f"[WORKER ENTRYPOINT] Step 2b: Extracting custom greeting message...")
+    # ========================================
+    # STEP 4: Extract custom greeting
+    # ========================================
+    logger.info(f"[WORKER ENTRYPOINT] Step 4: Extracting custom greeting...")
     custom_greeting = extract_greeting_message(config)
 
-    # Create the voice agent
-    logger.info(f"[WORKER ENTRYPOINT] Step 3: Creating voice agent...")
+    # ========================================
+    # STEP 5: Create voice agent with tenant config
+    # ========================================
+    logger.info(f"[WORKER ENTRYPOINT] Step 5: Creating voice agent...")
     voice_agent = VoiceAgent(instructions=instructions)
     logger.info(f"[WORKER ENTRYPOINT] ✓ Voice agent created")
 
-    # Configure TTS based on agent voice_id
-    logger.info(f"[WORKER ENTRYPOINT] Step 4: Configuring TTS...")
-    voice_id = None
+    # ========================================
+    # STEP 6: Configure TTS with tenant's voice
+    # ========================================
+    logger.info(f"[WORKER ENTRYPOINT] Step 6: Configuring TTS...")
+    voice_id = config.get("voice_id")
     language_code = "en"
 
-    if config and config.get("voice_id"):
-        voice_id = config.get("voice_id")
-        logger.info(f"[WORKER TTS] Found voice_id in config: {voice_id}")
-
-        # Extract language code
-        if config.get("agent_data") and config["agent_data"].get("language"):
-            language_code = config["agent_data"].get("language", "en-US").split("-")[0]
+    if voice_id:
+        logger.info(f"[WORKER TTS] Using voice_id from config: {voice_id}")
+        agent_data = config.get("agent_data", {})
+        if agent_data.get("language"):
+            language_code = agent_data.get("language", "en-US").split("-")[0]
             logger.info(f"[WORKER TTS] Language code: {language_code}")
     else:
-        logger.warning("[WORKER TTS] No voice_id in config, will use default")
+        logger.warning("[WORKER TTS] No voice_id in config, using default voice")
 
     tts = get_tts_service(voice_id, language_code)
 
-    # Create the agent session with all components
-    # OPTIMIZATION: Reuse pre-warmed VAD stored on the worker process (preferred),
-    # falling back to the global cache if not available.
+    # ========================================
+    # STEP 7: Create and start agent session
+    # ========================================
     vad = None
     try:
         vad = ctx.proc.userdata.get("vad")
@@ -525,14 +685,13 @@ async def entrypoint(ctx: agents.JobContext):
         vad=vad,
     )
 
-    # Start the agent session (we already connected above)
     await session.start(
         room=ctx.room,
         agent=voice_agent,
     )
-    logger.info("Agent session started")
+    logger.info("[WORKER ENTRYPOINT] ✓ Agent session started")
 
-    # Wait until the session is closed
+    # Setup session close handler
     closed_event = asyncio.Event()
 
     @session.on("close")
@@ -556,24 +715,36 @@ async def entrypoint(ctx: agents.JobContext):
                 f"... truncated {total_items - MAX_HISTORY_LOG_LINES} additional message(s) to prevent log blocking ..."
             )
         logger.info("=" * 20)
+        
+        # Cleanup: Delete per-call config from Redis after call ends
+        async def cleanup_config():
+            try:
+                config_key = f"tenant_config:{tenant_id}:{call_id}"
+                await async_redis_client.delete(config_key)
+                logger.info(f"[CLEANUP] Deleted per-call config: {config_key}")
+            except Exception as e:
+                logger.warning(f"[CLEANUP] Failed to delete config: {e}")
+        
+        asyncio.create_task(cleanup_config())
         closed_event.set()
 
-    # Send initial greeting
-    logger.info("[WORKER ENTRYPOINT] Step 6: Sending initial greeting...")
+    # ========================================
+    # STEP 8: Send initial greeting
+    # ========================================
+    logger.info("[WORKER ENTRYPOINT] Step 8: Sending initial greeting...")
     if custom_greeting:
-        # Use custom greeting from agent configuration
         logger.info(f"[GREETING] Using CUSTOM greeting: {custom_greeting[:100]}...")
         await session.generate_reply(instructions=f"Greet the user by saying exactly: '{custom_greeting}'")
     else:
-        # Use default greeting (agent will generate based on its instructions)
         logger.info("[GREETING] Using DEFAULT greeting (generated from instructions)")
         await session.generate_reply()
 
     logger.info("[WORKER ENTRYPOINT] ✓ Initial greeting sent successfully")
+    logger.info(f"[WORKER ENTRYPOINT] ✓ Call active for tenant {tenant_id}")
 
     # Wait for the session to close
     await closed_event.wait()
-    logger.info("Voice agent worker completed")
+    logger.info(f"[WORKER ENTRYPOINT] Voice agent worker completed for tenant {tenant_id}")
 
 
 if __name__ == "__main__":
@@ -582,6 +753,7 @@ if __name__ == "__main__":
 
     multiprocessing.freeze_support()
 
+    # IMPORTANT: agent_name MUST match the dispatch rule configuration
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
@@ -589,5 +761,6 @@ if __name__ == "__main__":
             api_secret=LIVEKIT_API_SECRET,
             ws_url=LIVEKIT_URL,
             prewarm_fnc=prewarm_vad,
+            agent_name="voice-agent",  # MUST match dispatch rule's roomConfig.agents[].agentName
         )
     )
