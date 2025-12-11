@@ -84,9 +84,13 @@ jobs:
           command_timeout: 10m
           script: |
             cd ${{ secrets.PROD_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
-            git pull origin main
+            git fetch origin main
+            git checkout main || git checkout -b main
+            git reset --hard origin/main
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
             docker pull ${{ env.DOCKER_IMAGE }}:latest
+            export DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}
+            export IMAGE_TAG=latest
             docker-compose down
             docker-compose up -d
             docker image prune -f
@@ -123,9 +127,13 @@ jobs:
           command_timeout: 10m
           script: |
             cd ${{ secrets.DEV_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
-            git pull origin dev
+            git fetch origin dev
+            git checkout dev || git checkout -b dev
+            git reset --hard origin/dev
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
             docker pull ${{ env.DOCKER_IMAGE }}:dev
+            export DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}
+            export IMAGE_TAG=dev
             docker-compose down
             docker-compose up -d
             docker image prune -f
