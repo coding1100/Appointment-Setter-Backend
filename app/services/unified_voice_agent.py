@@ -703,10 +703,11 @@ class UnifiedVoiceAgentService:
         domain = self._get_livekit_sip_domain()
         
         # Build query parameters with our metadata
+        # These become X-LK-* SIP headers that are mapped via headers_to_attributes
         query_params = urlencode({
-            "x-lk-callid": twilio_call_sid,
-            "x-lk-tenantid": tenant_id,
-            "x-lk-callednumber": called_number,
+            "X-LK-CallId": twilio_call_sid,
+            "X-LK-TenantId": tenant_id,
+            "X-LK-CalledNumber": called_number,
         })
         
         sip_uri = f"sip:lk@{domain}?{query_params}"

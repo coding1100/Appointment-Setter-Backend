@@ -644,23 +644,32 @@ async def entrypoint(ctx: agents.JobContext):
                 logger.info(f"[WORKER ENTRYPOINT]   {key} = {value}")
             logger.info(f"[WORKER ENTRYPOINT] ==================================")
             
-            # PRIORITY 1: Extract from our custom header x-lk-callid (passed via SIP URI query params)
+            # PRIORITY 1: Extract from our custom mapped attribute (via headers_to_attributes)
+            # The SIP trunk maps X-LK-CallId header → lk_callid attribute
             # This is the ORIGINAL Twilio CallSid from the inbound webhook
-            original_call_sid = attrs.get("sip.h.x-lk-callid")
+            original_call_sid = attrs.get("lk_callid")
             if original_call_sid:
-                logger.info(f"[WORKER ENTRYPOINT] ✓ Found original CallSid from x-lk-callid: {original_call_sid}")
+                logger.info(f"[WORKER ENTRYPOINT] ✓ Found original CallSid from lk_callid: {original_call_sid}")
                 break
             
-            # FALLBACK: Try sip.twilio.callSid (this is the SIP leg CallSid, NOT the original!)
+            # FALLBACK 1: Try sip.h.x-lk-callid (if headers weren't mapped)
+            if not original_call_sid:
+                original_call_sid = attrs.get("sip.h.x-lk-callid")
+                if original_call_sid:
+                    logger.info(f"[WORKER ENTRYPOINT] ✓ Found CallSid from sip.h.x-lk-callid: {original_call_sid}")
+                    break
+            
+            # FALLBACK 2: Try sip.twilio.callSid (this is the SIP leg CallSid, NOT the original!)
             # This won't match Redis but log it for debugging
-            sip_leg_callsid = attrs.get("sip.twilio.callSid")
-            if sip_leg_callsid:
-                logger.warning(f"[WORKER ENTRYPOINT] ⚠ x-lk-callid not found, found sip.twilio.callSid: {sip_leg_callsid}")
-                logger.warning(f"[WORKER ENTRYPOINT] ⚠ This is the SIP leg CallSid, NOT the original webhook CallSid!")
-                logger.warning(f"[WORKER ENTRYPOINT] ⚠ This usually means SIP URI query params weren't forwarded")
-                # Use it as fallback anyway
-                original_call_sid = sip_leg_callsid
-                break
+            if not original_call_sid:
+                sip_leg_callsid = attrs.get("sip.twilio.callSid")
+                if sip_leg_callsid:
+                    logger.warning(f"[WORKER ENTRYPOINT] ⚠ lk_callid not found, found sip.twilio.callSid: {sip_leg_callsid}")
+                    logger.warning(f"[WORKER ENTRYPOINT] ⚠ This is the SIP leg CallSid, NOT the original webhook CallSid!")
+                    logger.warning(f"[WORKER ENTRYPOINT] ⚠ headers_to_attributes may not be configured on the trunk")
+                    # Use it as fallback anyway
+                    original_call_sid = sip_leg_callsid
+                    break
     
     if not original_call_sid:
         logger.error(f"[WORKER ENTRYPOINT] ✗ CRITICAL: Could not find CallSid in SIP attributes")
