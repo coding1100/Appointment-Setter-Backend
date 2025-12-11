@@ -424,7 +424,7 @@ async def extract_tenant_identity_from_sip(ctx: agents.JobContext, max_wait_seco
         return result
 
 
-async def get_config_by_twilio_callsid(twilio_call_sid: str) -> Optional[Dict[str, Any]]:
+async def get_config_by_twilio_callsid(twilio_call_sid: str, max_retries: int = 5, retry_delay: float = 0.5) -> Optional[Dict[str, Any]]:
     """
     Retrieve call configuration from Redis by Twilio CallSid.
     
@@ -434,32 +434,46 @@ async def get_config_by_twilio_callsid(twilio_call_sid: str) -> Optional[Dict[st
     
     Config is stored under: call_config:<twilio_call_sid>
     
+    TIMING FIX: The worker may start BEFORE the backend finishes storing the config.
+    This function retries the lookup with exponential backoff to handle this race condition.
+    
     Returns the full config including tenant_id, call_id, agent_data, etc.
-    Returns None if config not found (worker should FAIL, not use defaults).
+    Returns None if config not found after all retries.
     """
-    try:
-        config_key = f"call_config:{twilio_call_sid}"
-        logger.info(f"[WORKER REDIS] Looking up config by Twilio CallSid: {config_key}")
-        
-        config_data = await async_redis_client.get(config_key)
-        if config_data:
-            config = json.loads(config_data)
-            logger.info(f"[WORKER REDIS] ✓ Found config by Twilio CallSid")
-            logger.info(f"[WORKER REDIS] Config details:")
-            logger.info(f"  - tenant_id: {config.get('tenant_id')}")
-            logger.info(f"  - call_id: {config.get('call_id')}")
-            logger.info(f"  - agent_id: {config.get('agent_id')}")
-            logger.info(f"  - voice_id: {config.get('voice_id')}")
-            logger.info(f"  - service_type: {config.get('service_type')}")
-            logger.info(f"  - agent_data keys: {list(config.get('agent_data', {}).keys())}")
-            return config
-        
-        logger.error(f"[WORKER REDIS] ✗ No config found for Twilio CallSid: {twilio_call_sid}")
-        return None
-        
-    except Exception as e:
-        logger.error(f"[WORKER REDIS] ✗ Error retrieving config by Twilio CallSid: {e}", exc_info=True)
-        return None
+    config_key = f"call_config:{twilio_call_sid}"
+    
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                wait_time = retry_delay * (2 ** (attempt - 1))  # Exponential backoff: 0.5, 1, 2, 4 seconds
+                logger.info(f"[WORKER REDIS] Retry {attempt}/{max_retries} - waiting {wait_time}s before next attempt...")
+                await asyncio.sleep(wait_time)
+            
+            logger.info(f"[WORKER REDIS] Looking up config: {config_key} (attempt {attempt + 1}/{max_retries})")
+            
+            config_data = await async_redis_client.get(config_key)
+            if config_data:
+                config = json.loads(config_data)
+                logger.info(f"[WORKER REDIS] ✓ Found config by Twilio CallSid (attempt {attempt + 1})")
+                logger.info(f"[WORKER REDIS] Config details:")
+                logger.info(f"  - tenant_id: {config.get('tenant_id')}")
+                logger.info(f"  - call_id: {config.get('call_id')}")
+                logger.info(f"  - agent_id: {config.get('agent_id')}")
+                logger.info(f"  - voice_id: {config.get('voice_id')}")
+                logger.info(f"  - service_type: {config.get('service_type')}")
+                logger.info(f"  - agent_data keys: {list(config.get('agent_data', {}).keys())}")
+                return config
+            
+            if attempt < max_retries - 1:
+                logger.warning(f"[WORKER REDIS] Config not found yet, will retry...")
+            
+        except Exception as e:
+            logger.error(f"[WORKER REDIS] ✗ Error on attempt {attempt + 1}: {e}")
+            if attempt == max_retries - 1:
+                logger.error(f"[WORKER REDIS] ✗ All retries exhausted", exc_info=True)
+    
+    logger.error(f"[WORKER REDIS] ✗ No config found for Twilio CallSid after {max_retries} attempts: {twilio_call_sid}")
+    return None
 
 
 async def get_tenant_config(tenant_id: str, call_id: str) -> Optional[Dict[str, Any]]:
