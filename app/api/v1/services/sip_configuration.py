@@ -4,9 +4,11 @@ Handles SIP trunk, dispatch rules, and phone number webhook configuration.
 
 ARCHITECTURE:
 - Each phone number gets its own SIP inbound trunk
-- All trunks are attached to the shared dispatch rule
-- Dispatch rule uses Individual mode with roomPrefix="call-" and agentName="voice-agent"
+- Each phone number gets its own dispatch rule (auto-created)
+- Each dispatch rule has a unique agentName: "voice-agent-{phone_number}"
+- Dispatch rule uses Individual mode with roomPrefix="call-"
 - Tenant routing is handled via SIP headers, NOT trunk metadata
+- Multi-tenant SaaS: Multiple tenants can share same phone number via SIP headers
 """
 
 import asyncio
@@ -33,7 +35,20 @@ logger = logging.getLogger(__name__)
 
 # Expected dispatch rule configuration
 EXPECTED_ROOM_PREFIX = "call-"
-EXPECTED_AGENT_NAME = "voice-agent"
+
+
+def build_agent_name_for_number(phone_number: str) -> str:
+    """
+    Return a unique agentName for LiveKit based on the phone number.
+    
+    This ensures each phone number has its own worker persona.
+    
+    Example:
+        +18334005770 -> "voice-agent-18334005770"
+        +12145551234 -> "voice-agent-12145551234"
+    """
+    normalized = phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+    return f"voice-agent-{normalized}"
 
 
 async def _run_twilio_sync(func: Callable) -> Any:
@@ -204,153 +219,222 @@ class SIPConfigurationService:
                     return existing_trunk_id
             raise Exception(f"Failed to setup SIP trunk: {str(e)}")
 
-    async def _find_voice_agent_dispatch_rule(self, livekit_api: api.LiveKitAPI) -> Optional[Dict[str, Any]]:
+    async def _attach_trunk_to_dispatch_rule(
+        self, livekit_api: api.LiveKitAPI, trunk_id: str, phone_number: str
+    ) -> Optional[str]:
         """
-        Find the dispatch rule configured for voice-agent.
+        Ensure a dispatch rule exists for this phone number.
         
-        Looks for a rule with:
-        - dispatchRuleIndividual with roomPrefix="call-"
-        - agentName="voice-agent" in roomConfig.agents
+        If none exists, automatically create one.
+        If one exists, update it with trunk assignment + agentName.
         
-        Returns dict with rule_id and trunk_ids if found, None otherwise.
+        Returns the dispatch_rule_id if successful, None otherwise.
         """
         try:
+            agent_name = build_agent_name_for_number(phone_number)
+            normalized_phone = phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+            rule_name = f"dispatch-rule-{normalized_phone}"
+            
+            logger.info(f"[DISPATCH] Ensuring dispatch rule for phone={phone_number}, agent={agent_name}, trunk={trunk_id}")
+            
+            # 1️⃣ Fetch all dispatch rules
             if not hasattr(livekit_api.sip, "list_sip_dispatch_rule"):
-                logger.warning("[DISPATCH] LiveKit SDK missing list_sip_dispatch_rule method")
+                logger.error("[DISPATCH] LiveKit SDK missing list_sip_dispatch_rule method")
                 return None
-
+            
             response = await livekit_api.sip.list_sip_dispatch_rule(api.ListSIPDispatchRuleRequest())
             rules = response.items if hasattr(response, "items") else response or []
-
-            logger.info(f"[DISPATCH] Found {len(rules)} dispatch rules")
-
+            
+            logger.info(f"[DISPATCH] Found {len(rules)} existing dispatch rules")
+            
+            # 2️⃣ Find rule by name
+            target_rule = None
             for rule in rules:
-                rule_id = (
-                    getattr(rule, "sip_dispatch_rule_id", None)
-                    or getattr(rule, "dispatch_rule_id", None)
-                    or getattr(rule, "id", None)
-                )
-                
-                # Check for dispatchRuleIndividual
-                rule_obj = getattr(rule, "rule", None)
-                if not rule_obj:
-                    continue
-                
-                # Check for individual dispatch rule
-                individual_rule = getattr(rule_obj, "dispatch_rule_individual", None)
-                if not individual_rule:
-                    # Try alternative attribute names
-                    individual_rule = getattr(rule_obj, "dispatchRuleIndividual", None)
-                
-                if not individual_rule:
-                    continue
-                
-                # Check room prefix
-                room_prefix = getattr(individual_rule, "room_prefix", None)
-                if room_prefix is None:
-                    room_prefix = getattr(individual_rule, "roomPrefix", "")
-                
-                if room_prefix != EXPECTED_ROOM_PREFIX:
-                    logger.debug(f"[DISPATCH] Rule {rule_id} has roomPrefix='{room_prefix}', expected '{EXPECTED_ROOM_PREFIX}'")
-                    continue
-                
-                # Check agent name in room config
-                room_config = getattr(rule, "room_config", None)
-                if not room_config:
-                    room_config = getattr(rule, "roomConfig", None)
-                
-                agent_name_matches = False
-                if room_config:
-                    agents = getattr(room_config, "agents", []) or []
-                    for agent in agents:
-                        agent_name = getattr(agent, "agent_name", None)
-                        if agent_name is None:
-                            agent_name = getattr(agent, "agentName", "")
-                        if agent_name == EXPECTED_AGENT_NAME:
-                            agent_name_matches = True
-                            break
-                
-                if not agent_name_matches:
-                    logger.debug(f"[DISPATCH] Rule {rule_id} does not have agentName='{EXPECTED_AGENT_NAME}'")
-                    continue
-                
-                # Found matching rule
-                trunk_ids = list(getattr(rule, "trunk_ids", []) or [])
-                
-                logger.info(f"[DISPATCH] ✓ Found matching dispatch rule: {rule_id}")
-                logger.info(f"[DISPATCH] Current trunk_ids: {trunk_ids}")
-                
-                return {
-                    "rule_id": rule_id,
-                    "trunk_ids": trunk_ids,
-                }
+                rule_name_attr = getattr(rule, "name", None)
+                if rule_name_attr == rule_name:
+                    target_rule = rule
+                    break
             
-            logger.warning(f"[DISPATCH] No dispatch rule found with roomPrefix='{EXPECTED_ROOM_PREFIX}' and agentName='{EXPECTED_AGENT_NAME}'")
-            return None
-
-        except Exception as e:
-            logger.error(f"[DISPATCH] Error finding dispatch rule: {e}", exc_info=True)
-            return None
-
-    async def _attach_trunk_to_dispatch_rule(self, trunk_id: str) -> bool:
-        """
-        Attach a trunk to the voice-agent dispatch rule.
-        
-        This ensures the trunk is associated with the correct dispatch rule
-        that launches the voice-agent worker.
-        
-        Returns True if successful, False otherwise.
-        """
-        try:
-            livekit_api = self._get_livekit_api()
+            # 3️⃣ Create rule if not found
+            if target_rule is None:
+                logger.info(f"[DISPATCH] Creating new dispatch rule for {phone_number}...")
+                
+                if not hasattr(livekit_api.sip, "create_sip_dispatch_rule"):
+                    logger.error("[DISPATCH] LiveKit SDK missing create_sip_dispatch_rule method")
+                    return None
+                
+                # Build dispatch rule request
+                # Try multiple API structures to handle different SDK versions
+                create_success = False
+                rule_id = None
+                
+                # Attempt 1: Using API objects
+                try:
+                    # Check what API objects are available
+                    if hasattr(api, "SIPDispatchRuleIndividual"):
+                        individual_rule = api.SIPDispatchRuleIndividual(room_prefix=EXPECTED_ROOM_PREFIX)
+                    elif hasattr(api, "SIPDispatchRule"):
+                        # Try constructing with dict
+                        individual_rule = {"dispatchRuleIndividual": {"roomPrefix": EXPECTED_ROOM_PREFIX}}
+                    else:
+                        individual_rule = {"dispatchRuleIndividual": {"roomPrefix": EXPECTED_ROOM_PREFIX}}
+                    
+                    # Build agents list
+                    if hasattr(api, "AgentInfo"):
+                        agents_list = [api.AgentInfo(agent_name=agent_name)]
+                    else:
+                        agents_list = [{"agentName": agent_name}]
+                    
+                    # Build room config
+                    if hasattr(api, "RoomConfiguration"):
+                        room_config = api.RoomConfiguration(agents=agents_list)
+                    else:
+                        room_config = {"agents": agents_list}
+                    
+                    # Build rule object
+                    if hasattr(api, "SIPDispatchRule"):
+                        rule_obj = api.SIPDispatchRule(dispatch_rule_individual=individual_rule)
+                    else:
+                        rule_obj = {"rule": individual_rule}
+                    
+                    # Create request
+                    create_req = api.CreateSIPDispatchRuleRequest(
+                        name=rule_name,
+                        rule=rule_obj,
+                        room_config=room_config,
+                        trunk_ids=[trunk_id]
+                    )
+                    
+                    created = await livekit_api.sip.create_sip_dispatch_rule(create_req)
+                    rule_id = (
+                        getattr(created, "sip_dispatch_rule_id", None)
+                        or getattr(created, "dispatch_rule_id", None)
+                        or getattr(created, "id", None)
+                    )
+                    create_success = True
+                    
+                except (TypeError, AttributeError) as e:
+                    logger.debug(f"[DISPATCH] API object approach failed: {e}, trying dict format...")
+                    
+                    # Attempt 2: Using dict format (more flexible)
+                    try:
+                        create_req_dict = {
+                            "name": rule_name,
+                            "rule": {
+                                "dispatchRuleIndividual": {
+                                    "roomPrefix": EXPECTED_ROOM_PREFIX
+                                }
+                            },
+                            "roomConfig": {
+                                "agents": [
+                                    {"agentName": agent_name}
+                                ]
+                            },
+                            "trunkIds": [trunk_id]
+                        }
+                        
+                        # Try with CreateSIPDispatchRuleRequest
+                        create_req = api.CreateSIPDispatchRuleRequest(**create_req_dict)
+                        created = await livekit_api.sip.create_sip_dispatch_rule(create_req)
+                        rule_id = (
+                            getattr(created, "sip_dispatch_rule_id", None)
+                            or getattr(created, "dispatch_rule_id", None)
+                            or getattr(created, "id", None)
+                        )
+                        create_success = True
+                    except Exception as dict_error:
+                        logger.error(f"[DISPATCH] Dict format also failed: {dict_error}", exc_info=True)
+                
+                if create_success and rule_id:
+                    logger.info(f"[DISPATCH] ✓ Created dispatch rule {rule_id} for phone={phone_number}")
+                    logger.info(f"[DISPATCH] Rule ready: phone={phone_number}, agent={agent_name}, trunk={trunk_id}")
+                    return rule_id
+                else:
+                    logger.error(f"[DISPATCH] Failed to create dispatch rule or extract rule_id")
+                    return None
             
-            # Find the voice-agent dispatch rule
-            rule_info = await self._find_voice_agent_dispatch_rule(livekit_api)
-            
-            if not rule_info:
-                logger.error(
-                    f"[DISPATCH] ✗ CRITICAL: No dispatch rule found with roomPrefix='{EXPECTED_ROOM_PREFIX}' "
-                    f"and agentName='{EXPECTED_AGENT_NAME}'. "
-                    f"Please create the dispatch rule in the LiveKit dashboard first."
-                )
-                return False
-            
-            rule_id = rule_info["rule_id"]
-            current_trunk_ids = rule_info["trunk_ids"]
-            
-            # Check if trunk is already attached
-            if trunk_id in current_trunk_ids:
-                logger.info(f"[DISPATCH] Trunk {trunk_id} is already attached to dispatch rule {rule_id}")
-                return True
-            
-            # Add trunk to the rule
-            new_trunk_ids = current_trunk_ids + [trunk_id]
-            
-            logger.info(f"[DISPATCH] Adding trunk {trunk_id} to dispatch rule {rule_id}")
-            logger.info(f"[DISPATCH] New trunk_ids: {new_trunk_ids}")
-            
-            if not hasattr(livekit_api.sip, "update_sip_dispatch_rule"):
-                logger.error("[DISPATCH] LiveKit SDK missing update_sip_dispatch_rule method")
-                return False
-            
-            # Update the dispatch rule
-            await livekit_api.sip.update_sip_dispatch_rule(
-                api.UpdateSIPDispatchRuleRequest(
-                    sip_dispatch_rule_id=rule_id,
-                    trunk_ids=new_trunk_ids,
-                )
+            # 4️⃣ Update rule if it already exists
+            rule_id = (
+                getattr(target_rule, "sip_dispatch_rule_id", None)
+                or getattr(target_rule, "dispatch_rule_id", None)
+                or getattr(target_rule, "id", None)
             )
             
-            logger.info(f"[DISPATCH] ✓ Successfully attached trunk {trunk_id} to dispatch rule {rule_id}")
-            return True
+            if not rule_id:
+                logger.error(f"[DISPATCH] Found rule but could not extract rule_id")
+                return None
+            
+            # Get current trunk IDs
+            current_trunk_ids = list(getattr(target_rule, "trunk_ids", []) or [])
+            updated_trunk_ids = set(current_trunk_ids)
+            updated_trunk_ids.add(trunk_id)
+            
+            # Get current agents and room config
+            room_config = getattr(target_rule, "room_config", None) or getattr(target_rule, "roomConfig", None)
+            existing_agents = []
+            if room_config:
+                agents_list = getattr(room_config, "agents", []) or []
+                for agent in agents_list:
+                    agent_name_attr = getattr(agent, "agent_name", None) or getattr(agent, "agentName", None)
+                    if agent_name_attr:
+                        existing_agents.append(agent_name_attr)
+            
+            # Add agent if not present
+            if agent_name not in existing_agents:
+                existing_agents.append(agent_name)
+                logger.info(f"[DISPATCH] Adding agent {agent_name} to existing rule")
+            
+            # Update the rule
+            if not hasattr(livekit_api.sip, "update_sip_dispatch_rule"):
+                logger.error("[DISPATCH] LiveKit SDK missing update_sip_dispatch_rule method")
+                return rule_id  # Return existing rule_id even if update fails
+            
+            # Build update request - try to include room_config
+            try:
+                # Try building with room_config using API objects
+                if hasattr(api, "AgentInfo") and hasattr(api, "RoomConfiguration"):
+                    agents_list = [api.AgentInfo(agent_name=name) for name in existing_agents]
+                    room_config_obj = api.RoomConfiguration(agents=agents_list)
+                    update_req = api.UpdateSIPDispatchRuleRequest(
+                        sip_dispatch_rule_id=rule_id,
+                        trunk_ids=list(updated_trunk_ids),
+                        room_config=room_config_obj,
+                    )
+                else:
+                    # Fallback to dict format
+                    update_req = api.UpdateSIPDispatchRuleRequest(
+                        sip_dispatch_rule_id=rule_id,
+                        trunk_ids=list(updated_trunk_ids),
+                    )
+                    # Try to set room_config as attribute if supported
+                    try:
+                        setattr(update_req, "room_config", {
+                            "agents": [{"agentName": name} for name in existing_agents]
+                        })
+                    except Exception:
+                        logger.warning(f"[DISPATCH] Could not set room_config attribute, updating trunk_ids only")
+                
+                updated = await livekit_api.sip.update_sip_dispatch_rule(update_req)
+            except Exception as update_error:
+                # If room_config update fails, at least update trunk_ids
+                logger.warning(f"[DISPATCH] Room config update failed: {update_error}, updating trunk_ids only")
+                update_req = api.UpdateSIPDispatchRuleRequest(
+                    sip_dispatch_rule_id=rule_id,
+                    trunk_ids=list(updated_trunk_ids),
+                )
+                updated = await livekit_api.sip.update_sip_dispatch_rule(update_req)
+            
+            logger.info(f"[DISPATCH] ✓ Updated existing dispatch rule {rule_id}")
+            logger.info(f"[DISPATCH] Rule ready: phone={phone_number}, agent={agent_name}, trunk={trunk_id}")
+            return rule_id
 
         except Exception as e:
             logger.error(f"[DISPATCH] Failed to attach trunk to dispatch rule: {e}", exc_info=True)
-            return False
+            return None
 
-    async def _detach_trunk_from_dispatch_rule(self, trunk_id: str) -> bool:
+    async def _detach_trunk_from_dispatch_rule(self, trunk_id: str, phone_number: str) -> bool:
         """
-        Detach a trunk from the voice-agent dispatch rule.
+        Detach a trunk from the phone-number-specific dispatch rule.
         
         This is used during cleanup when unassigning a phone number.
         
@@ -358,29 +442,52 @@ class SIPConfigurationService:
         """
         try:
             livekit_api = self._get_livekit_api()
+            normalized_phone = phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+            rule_name = f"dispatch-rule-{normalized_phone}"
             
-            # Find the voice-agent dispatch rule
-            rule_info = await self._find_voice_agent_dispatch_rule(livekit_api)
+            # Find the rule by name
+            if not hasattr(livekit_api.sip, "list_sip_dispatch_rule"):
+                logger.warning(f"[CLEANUP] Cannot list dispatch rules")
+                return True
             
-            if not rule_info:
-                logger.warning(f"[DISPATCH] No dispatch rule found during cleanup")
+            response = await livekit_api.sip.list_sip_dispatch_rule(api.ListSIPDispatchRuleRequest())
+            rules = response.items if hasattr(response, "items") else response or []
+            
+            target_rule = None
+            for rule in rules:
+                rule_name_attr = getattr(rule, "name", None)
+                if rule_name_attr == rule_name:
+                    target_rule = rule
+                    break
+            
+            if not target_rule:
+                logger.info(f"[CLEANUP] No dispatch rule found for {phone_number} during cleanup")
                 return True  # Nothing to detach from
             
-            rule_id = rule_info["rule_id"]
-            current_trunk_ids = rule_info["trunk_ids"]
+            rule_id = (
+                getattr(target_rule, "sip_dispatch_rule_id", None)
+                or getattr(target_rule, "dispatch_rule_id", None)
+                or getattr(target_rule, "id", None)
+            )
+            
+            if not rule_id:
+                logger.warning(f"[CLEANUP] Found rule but could not extract rule_id")
+                return True
+            
+            current_trunk_ids = list(getattr(target_rule, "trunk_ids", []) or [])
             
             # Check if trunk is attached
             if trunk_id not in current_trunk_ids:
-                logger.info(f"[DISPATCH] Trunk {trunk_id} is not attached to dispatch rule {rule_id}")
+                logger.info(f"[CLEANUP] Trunk {trunk_id} is not attached to dispatch rule {rule_id}")
                 return True
             
             # Remove trunk from the rule
             new_trunk_ids = [t for t in current_trunk_ids if t != trunk_id]
             
-            logger.info(f"[DISPATCH] Removing trunk {trunk_id} from dispatch rule {rule_id}")
+            logger.info(f"[CLEANUP] Removing trunk {trunk_id} from dispatch rule {rule_id}")
             
             if not hasattr(livekit_api.sip, "update_sip_dispatch_rule"):
-                logger.error("[DISPATCH] LiveKit SDK missing update_sip_dispatch_rule method")
+                logger.error("[CLEANUP] LiveKit SDK missing update_sip_dispatch_rule method")
                 return False
             
             # Update the dispatch rule
@@ -391,11 +498,11 @@ class SIPConfigurationService:
                 )
             )
             
-            logger.info(f"[DISPATCH] ✓ Successfully detached trunk {trunk_id} from dispatch rule")
+            logger.info(f"[CLEANUP] ✓ Successfully detached trunk {trunk_id} from dispatch rule")
             return True
 
         except Exception as e:
-            logger.error(f"[DISPATCH] Failed to detach trunk from dispatch rule: {e}", exc_info=True)
+            logger.error(f"[CLEANUP] Failed to detach trunk from dispatch rule: {e}", exc_info=True)
             return False
 
     async def _configure_twilio_phone_webhook(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
@@ -501,25 +608,29 @@ class SIPConfigurationService:
                 trunk_id = f"trunk-{phone_clean}"
                 logger.warning(f"[SIP SETUP] Could not verify/create SIP trunk: {trunk_error}. Using fallback: {trunk_id}")
 
-            # Step 2: Attach trunk to dispatch rule (FIX ISSUE 1)
-            dispatch_rule_validated = False
+            # Step 2: Attach trunk to dispatch rule (auto-create if needed)
+            normalized_phone = normalize_phone_number_safe(phone_number) or phone_number
+            dispatch_rule_id = None
             try:
-                dispatch_rule_validated = await self._attach_trunk_to_dispatch_rule(trunk_id)
-                if dispatch_rule_validated:
-                    logger.info(f"[SIP SETUP] ✓ Trunk attached to dispatch rule")
+                livekit_api = self._get_livekit_api()
+                dispatch_rule_id = await self._attach_trunk_to_dispatch_rule(
+                    livekit_api, trunk_id=trunk_id, phone_number=normalized_phone
+                )
+                if dispatch_rule_id:
+                    logger.info(f"[SIP SETUP] ✓ Trunk attached to dispatch rule {dispatch_rule_id}")
                 else:
                     logger.warning(f"[SIP SETUP] ✗ Failed to attach trunk to dispatch rule")
             except Exception as dispatch_error:
-                logger.warning(f"[SIP SETUP] Failed to validate dispatch rule: {dispatch_error}")
+                logger.warning(f"[SIP SETUP] Failed to setup dispatch rule: {dispatch_error}")
 
             # Step 3: Configure Twilio phone number webhook
             phone_config = await self._configure_twilio_phone_webhook(tenant_id, phone_number)
             logger.info(f"[SIP SETUP] ✓ Twilio webhook configured: {phone_config['phone_sid']}")
 
-            # FIX ISSUE 5: Return dispatch_rule_validated instead of fake dispatch_rule_id
+            # Return dispatch_rule_id (real ID, not boolean)
             return {
                 "trunk_id": trunk_id,
-                "dispatch_rule_validated": dispatch_rule_validated,  # Boolean, not fake ID
+                "dispatch_rule_id": dispatch_rule_id,  # Real dispatch rule ID
                 "phone_config": phone_config,
                 "sip_domain": LIVEKIT_SIP_DOMAIN,
                 "status": "configured",
@@ -553,7 +664,7 @@ class SIPConfigurationService:
                 logger.warning(f"[CLEANUP] Could not find trunk for {phone_number}, using fallback: {trunk_id}")
             
             # Detach trunk from dispatch rule
-            await self._detach_trunk_from_dispatch_rule(trunk_id)
+            await self._detach_trunk_from_dispatch_rule(trunk_id, phone_number)
             
             logger.info(f"[CLEANUP] ✓ Completed cleanup for {phone_number}")
             return True
