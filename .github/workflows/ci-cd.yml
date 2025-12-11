@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev]
   pull_request:
-    branches: [main, develop]
+    branches: [main, dev]
 
 env:
   DOCKER_IMAGE: umairmalick/appointment-setter-backend
@@ -45,7 +45,7 @@ jobs:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
     needs: [security]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
 
     steps:
       - name: Checkout code
@@ -60,18 +60,16 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.DOCKER_IMAGE }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Determine Docker tag
+        id: tag
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "tag=latest" >> $GITHUB_OUTPUT
+            echo "env=production" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/dev" ]; then
+            echo "tag=dev" >> $GITHUB_OUTPUT
+            echo "env=development" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -79,14 +77,20 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:${{ steps.tag.outputs.tag }}
+            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=Appointment Setter Backend
+            org.opencontainers.image.description=Backend API for AI Appointment Setter
+            org.opencontainers.image.version=${{ github.sha }}
+            org.opencontainers.image.environment=${{ steps.tag.outputs.env }}
           cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
 
-  # Job 3: Deploy to VPS (only on main branch)
-  deploy:
-    name: Deploy to VPS
+  # Job 3: Deploy to Production VPS (only on main branch)
+  deploy-production:
+    name: Deploy to Production
     runs-on: ubuntu-latest
     needs: [build-and-push]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -97,7 +101,7 @@ jobs:
 
       - name: Set up SSH key
         env:
-          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          SSH_KEY: ${{ secrets.PROD_VPS_SSH_KEY }}
         run: |
           mkdir -p ${{ github.workspace }}/.ssh
           # Write the SSH key using printf to preserve newlines
@@ -106,19 +110,19 @@ jobs:
           # Verify the key file was created and has content
           echo "Key file size: $(wc -c < ${{ github.workspace }}/.ssh/deploy_key) bytes"
           echo "First line of key: $(head -1 ${{ github.workspace }}/.ssh/deploy_key)"
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.PROD_VPS_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Deploy to VPS
+      - name: Deploy to Production VPS
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USERNAME }}
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USERNAME }}
           key_path: ${{ github.workspace }}/.ssh/deploy_key
-          port: ${{ secrets.VPS_PORT || 22 }}
+          port: ${{ secrets.PROD_VPS_PORT || 22 }}
           timeout: 30s
           command_timeout: 10m
           script: |
-            cd ${{ secrets.VPS_DEPLOY_PATH || '/root/appointment-setter' }}
+            cd ${{ secrets.PROD_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
 
             # Pull latest code
             git pull origin main
@@ -126,7 +130,7 @@ jobs:
             # Log in to Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-            # Pull latest Docker image
+            # Pull latest Docker image (production tag)
             docker pull ${{ env.DOCKER_IMAGE }}:latest
 
             # Restart services using docker-compose
@@ -139,3 +143,61 @@ jobs:
             # Verify deployment
             sleep 10
             docker-compose ps
+            echo "✅ Production deployment complete"
+
+  # Job 4: Deploy to Development VPS (only on dev branch)
+  deploy-development:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        env:
+          SSH_KEY: ${{ secrets.DEV_VPS_SSH_KEY }}
+        run: |
+          mkdir -p ${{ github.workspace }}/.ssh
+          # Write the SSH key using printf to preserve newlines
+          printf '%s\n' "$SSH_KEY" > ${{ github.workspace }}/.ssh/deploy_key
+          chmod 600 ${{ github.workspace }}/.ssh/deploy_key
+          # Verify the key file was created and has content
+          echo "Key file size: $(wc -c < ${{ github.workspace }}/.ssh/deploy_key) bytes"
+          echo "First line of key: $(head -1 ${{ github.workspace }}/.ssh/deploy_key)"
+          ssh-keyscan -H ${{ secrets.DEV_VPS_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Deploy to Development VPS
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.DEV_VPS_HOST }}
+          username: ${{ secrets.DEV_VPS_USERNAME }}
+          key_path: ${{ github.workspace }}/.ssh/deploy_key
+          port: ${{ secrets.DEV_VPS_PORT || 22 }}
+          timeout: 30s
+          command_timeout: 10m
+          script: |
+            cd ${{ secrets.DEV_VPS_DEPLOY_PATH || '/root/appointment-setter-dev' }}
+
+            # Pull latest code from dev branch
+            git pull origin dev
+
+            # Log in to Docker Hub
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+            # Pull latest Docker image (dev tag)
+            docker pull ${{ env.DOCKER_IMAGE }}:dev
+
+            # Restart services using docker-compose
+            docker-compose down
+            docker-compose up -d
+
+            # Clean up old images
+            docker image prune -f
+
+            # Verify deployment
+            sleep 10
+            docker-compose ps
+            echo "✅ Development deployment complete"

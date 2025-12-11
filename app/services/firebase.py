@@ -203,6 +203,19 @@ class FirebaseService:
 
         return await self._run_in_executor(_list)
 
+    async def get_tenant_by_name_and_timezone(self, name: str, timezone: str) -> Optional[Dict[str, Any]]:
+        """Fetch a tenant that matches both name and timezone (case-sensitive match)."""
+
+        def _query():
+            tenants_ref = self.db.collection("tenants")
+            query = tenants_ref.where("name", "==", name).where("timezone", "==", timezone).limit(1)
+            docs = list(query.stream())
+            for doc in docs:
+                return doc.to_dict()
+            return None
+
+        return await self._run_in_executor(_query)
+
     # Appointment operations
     async def create_appointment(self, appointment_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new appointment."""
