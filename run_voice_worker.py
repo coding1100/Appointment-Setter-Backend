@@ -3,20 +3,20 @@ LiveKit Voice Agent Worker
 ==========================
 Starts the voice agent worker that handles inbound telephony calls.
 
-ARCHITECTURE (LiveKit Official Telephony Flow):
-- Each phone number has its own dispatch rule with unique agentName
-- Agent name format: "voice-agent-{phone_number}" (e.g., "voice-agent-18334005770")
+ARCHITECTURE (LiveKit Official Telephony Flow - Multi-Tenant Design):
+- ONE worker with agent_name="voice-agent" handles ALL phone numbers
+- Each phone number has its own dispatch rule pointing to "voice-agent"
 - Worker receives jobs when LiveKit creates rooms via dispatch rule
-- Worker extracts tenant_id from SIP participant attributes
+- Worker extracts tenant_id, call_id, and called_number from SIP headers
 - Worker loads config from Redis: tenant_config:<tenant_id>:<call_id>
 - Worker FAILS if config is missing (no fallback to defaults)
 
-DYNAMIC AGENT NAME:
-- Set LIVEKIT_CALLED_NUMBER environment variable to enable phone-number-specific agent
-- If LIVEKIT_CALLED_NUMBER is set, agent_name = "voice-agent-{normalized_number}"
-- If not set, falls back to "voice-agent" for backward compatibility
+SIP HEADERS (set by Twilio webhook):
+- X-LK-TenantId: tenant identifier for multi-tenant routing
+- X-LK-CallId: unique call identifier for config lookup
+- X-LK-CalledNumber: the phone number that was called
 
-DISPATCH RULE CONFIGURATION (auto-created by backend):
+DISPATCH RULE CONFIGURATION (auto-created by backend per phone number):
 {
   "name": "dispatch-rule-{phone_number}",
   "rule": {
@@ -26,11 +26,16 @@ DISPATCH RULE CONFIGURATION (auto-created by backend):
   },
   "roomConfig": {
     "agents": [
-      { "agentName": "voice-agent-{phone_number}" }
+      { "agentName": "voice-agent" }  // Same for ALL phone numbers
     ]
   },
   "trunkIds": [trunk_id]
 }
+
+MULTI-TENANT ROUTING:
+- Worker identifies tenant via SIP header X-LK-TenantId (not agent name)
+- Worker identifies phone number via SIP header X-LK-CalledNumber
+- One worker = unlimited phone numbers = unlimited tenants
 """
 
 import os
@@ -55,40 +60,9 @@ from app.agents.voice_worker import entrypoint, prewarm_vad
 from app.core.config import LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
 
 
-def build_agent_name_for_number(phone_number: str) -> str:
-    """
-    Return a unique agentName for LiveKit based on the phone number.
-    
-    This ensures each phone number has its own worker persona.
-    
-    Example:
-        +18334005770 -> "voice-agent-18334005770"
-        +12145551234 -> "voice-agent-12145551234"
-    """
-    normalized = phone_number.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
-    return f"voice-agent-{normalized}"
-
-
-def get_agent_name() -> str:
-    """
-    Get the agent name for this worker instance.
-    
-    If LIVEKIT_CALLED_NUMBER is set, use phone-number-specific agent name.
-    Otherwise, fall back to static "voice-agent" for backward compatibility.
-    """
-    called_number = os.getenv("LIVEKIT_CALLED_NUMBER")
-    if called_number:
-        agent_name = build_agent_name_for_number(called_number)
-        print(f"[WORKER] Using phone-number-specific agent: {agent_name} (for {called_number})")
-        return agent_name
-    else:
-        agent_name = "voice-agent"
-        print(f"[WORKER] Using default agent name: {agent_name} (set LIVEKIT_CALLED_NUMBER for phone-specific agent)")
-        return agent_name
-
-
-# Dynamic agent name based on environment variable
-AGENT_NAME = get_agent_name()
+# Single global agent name - one worker handles ALL phone numbers
+# Multi-tenant routing is done via SIP headers, not agent names
+AGENT_NAME = "voice-agent"
 
 
 if __name__ == "__main__":
@@ -99,21 +73,23 @@ if __name__ == "__main__":
     print("=" * 70)
     print(f"LiveKit URL: {LIVEKIT_URL}")
     print(f"Agent Name: {AGENT_NAME}")
-    print(f"  ↳ MUST match dispatch rule's roomConfig.agents[].agentName")
-    if os.getenv("LIVEKIT_CALLED_NUMBER"):
-        print(f"  ↳ Phone-specific agent for: {os.getenv('LIVEKIT_CALLED_NUMBER')}")
-    else:
-        print(f"  ↳ Default agent (set LIVEKIT_CALLED_NUMBER for phone-specific)")
+    print(f"  ↳ Single global agent handles ALL phone numbers")
+    print(f"  ↳ Multi-tenant routing via SIP headers (X-LK-TenantId)")
     print("")
-    print("ARCHITECTURE:")
+    print("ARCHITECTURE (Multi-Tenant Design):")
     print("  1. Twilio → Backend → stores tenant_config:<tenant_id>:<call_id>")
-    print("  2. Backend → TwiML <Dial><Sip> → LiveKit SIP domain")
+    print("  2. Backend → TwiML <Dial><Sip> with SIP headers")
     print("  3. Backend auto-creates dispatch rule per phone number")
-    print("  4. LiveKit dispatch rule creates room: call-{phone}_{suffix}")
-    print("  5. Dispatch rule launches worker with phone-specific agent_name")
-    print("  6. Worker extracts tenant_id from SIP headers")
+    print("  4. ALL dispatch rules use agentName='voice-agent'")
+    print("  5. LiveKit dispatch rule creates room: call-{phone}_{suffix}")
+    print("  6. Worker extracts tenant_id + call_id from SIP headers")
     print("  7. Worker loads config from Redis")
     print("  8. Worker FAILS if config missing (no fallback)")
+    print("")
+    print("SIP Headers (set by Twilio webhook):")
+    print("  X-LK-TenantId: tenant identifier")
+    print("  X-LK-CallId: unique call identifier")
+    print("  X-LK-CalledNumber: phone number that was called")
     print("")
     print("Configuration:")
     print(f"  num_idle_processes: 1 (prevents VAD thread contention)")
