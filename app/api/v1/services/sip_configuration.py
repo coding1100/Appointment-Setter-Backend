@@ -259,34 +259,38 @@ class SIPConfigurationService:
                 rule_id = None
                 last_error = None
                 
-                # Attempt 1: Using RoomAgentDispatch (correct LiveKit SDK class)
+                # Attempt 1: Using standard LiveKit Python SDK (snake_case)
                 try:
                     # Build individual dispatch rule
                     individual_rule = api.SIPDispatchRuleIndividual(room_prefix=EXPECTED_ROOM_PREFIX)
-                    
-                    # Build agents list using RoomAgentDispatch (not AgentInfo)
-                    # The class is RoomAgentDispatch with agent_name field (snake_case)
-                    if hasattr(api, "RoomAgentDispatch"):
-                        agents_list = [api.RoomAgentDispatch(agent_name=agent_name)]
-                    else:
-                        # Fallback if class name differs
-                        agents_list = [{"agent_name": agent_name}]
-                    
-                    # Build room config
-                    room_config = api.RoomConfiguration(agents=agents_list)
-                    
-                    # Build rule object
                     rule_obj = api.SIPDispatchRule(dispatch_rule_individual=individual_rule)
                     
-                    # Create request
-                    create_req = api.CreateSIPDispatchRuleRequest(
-                        name=rule_name,
-                        rule=rule_obj,
-                        room_config=room_config,
-                        trunk_ids=[trunk_id]
-                    )
+                    # Try to build room config with agent
+                    room_config_obj = None
+                    if hasattr(api, "RoomAgentDispatch"):
+                        try:
+                            agents_list = [api.RoomAgentDispatch(agent_name=agent_name)]
+                            room_config_obj = api.RoomConfiguration(agents=agents_list)
+                        except Exception as rc_error:
+                            logger.debug(f"[DISPATCH] RoomConfiguration with RoomAgentDispatch failed: {rc_error}")
                     
-                    logger.debug(f"[DISPATCH] Creating with RoomAgentDispatch: agent_name={agent_name}")
+                    # Create request - try with room_config first
+                    if room_config_obj:
+                        create_req = api.CreateSIPDispatchRuleRequest(
+                            name=rule_name,
+                            rule=rule_obj,
+                            room_config=room_config_obj,
+                            trunk_ids=[trunk_id]
+                        )
+                    else:
+                        # Create without room_config
+                        create_req = api.CreateSIPDispatchRuleRequest(
+                            name=rule_name,
+                            rule=rule_obj,
+                            trunk_ids=[trunk_id]
+                        )
+                    
+                    logger.debug(f"[DISPATCH] Creating dispatch rule with snake_case API")
                     created = await livekit_api.sip.create_sip_dispatch_rule(create_req)
                     rule_id = (
                         getattr(created, "sip_dispatch_rule_id", None)
@@ -295,11 +299,17 @@ class SIPConfigurationService:
                     )
                     create_success = True
                     
+                    if not room_config_obj:
+                        logger.warning(
+                            f"[DISPATCH] Created rule {rule_id} without agent config. "
+                            f"Agent '{agent_name}' should be added via LiveKit dashboard."
+                        )
+                    
                 except (TypeError, AttributeError, ValueError) as e:
                     last_error = e
-                    logger.debug(f"[DISPATCH] RoomAgentDispatch approach failed: {e}")
+                    logger.debug(f"[DISPATCH] Standard API approach failed: {e}, trying minimal creation...")
                     
-                    # Attempt 2: Try without room_config (let LiveKit use defaults)
+                    # Attempt 2: Minimal creation without room_config
                     try:
                         individual_rule = api.SIPDispatchRuleIndividual(room_prefix=EXPECTED_ROOM_PREFIX)
                         rule_obj = api.SIPDispatchRule(dispatch_rule_individual=individual_rule)
@@ -310,7 +320,7 @@ class SIPConfigurationService:
                             trunk_ids=[trunk_id]
                         )
                         
-                        logger.debug(f"[DISPATCH] Creating without room_config (will update later)")
+                        logger.debug(f"[DISPATCH] Creating minimal dispatch rule")
                         created = await livekit_api.sip.create_sip_dispatch_rule(create_req)
                         rule_id = (
                             getattr(created, "sip_dispatch_rule_id", None)
@@ -319,10 +329,9 @@ class SIPConfigurationService:
                         )
                         create_success = True
                         
-                        # Log that we need to manually add agent in LiveKit dashboard
                         logger.warning(
                             f"[DISPATCH] Created rule {rule_id} without agent config. "
-                            f"Agent '{agent_name}' must be added via LiveKit dashboard or API update."
+                            f"Agent '{agent_name}' must be added via LiveKit dashboard."
                         )
                         
                     except Exception as fallback_error:
@@ -373,34 +382,22 @@ class SIPConfigurationService:
                 logger.error("[DISPATCH] LiveKit SDK missing update_sip_dispatch_rule method")
                 return rule_id  # Return existing rule_id even if update fails
             
-            # Build update request - try to include room_config
+            # Build update request - trunk_ids only (most reliable approach)
+            # Note: LiveKit SDK uses snake_case (trunk_ids, room_config) in Python
+            # The agent config is set during rule creation; updates focus on trunk binding
             try:
-                # Try building with room_config using RoomAgentDispatch (correct class)
-                if hasattr(api, "RoomAgentDispatch") and hasattr(api, "RoomConfiguration"):
-                    agents_list = [api.RoomAgentDispatch(agent_name=name) for name in existing_agents]
-                    room_config_obj = api.RoomConfiguration(agents=agents_list)
-                    update_req = api.UpdateSIPDispatchRuleRequest(
-                        sip_dispatch_rule_id=rule_id,
-                        trunk_ids=list(updated_trunk_ids),
-                        room_config=room_config_obj,
-                    )
-                else:
-                    # Fallback: update trunk_ids only
-                    logger.debug("[DISPATCH] RoomAgentDispatch not available, updating trunk_ids only")
-                    update_req = api.UpdateSIPDispatchRuleRequest(
-                        sip_dispatch_rule_id=rule_id,
-                        trunk_ids=list(updated_trunk_ids),
-                    )
-                
-                updated = await livekit_api.sip.update_sip_dispatch_rule(update_req)
-            except Exception as update_error:
-                # If room_config update fails, at least update trunk_ids
-                logger.warning(f"[DISPATCH] Room config update failed: {update_error}, updating trunk_ids only")
                 update_req = api.UpdateSIPDispatchRuleRequest(
                     sip_dispatch_rule_id=rule_id,
                     trunk_ids=list(updated_trunk_ids),
                 )
+                
+                logger.debug(f"[DISPATCH] Updating rule {rule_id} with trunk_ids={list(updated_trunk_ids)}")
                 updated = await livekit_api.sip.update_sip_dispatch_rule(update_req)
+                
+            except Exception as update_error:
+                logger.error(f"[DISPATCH] Failed to update dispatch rule: {update_error}", exc_info=True)
+                # Return the rule_id anyway - the rule exists, just couldn't update trunk binding
+                return rule_id
             
             logger.info(f"[DISPATCH] ✓ Updated existing dispatch rule {rule_id}")
             logger.info(f"[DISPATCH] Rule ready: phone={phone_number}, agent={agent_name}, trunk={trunk_id}")
@@ -468,15 +465,18 @@ class SIPConfigurationService:
                 logger.error("[CLEANUP] LiveKit SDK missing update_sip_dispatch_rule method")
                 return False
             
-            # Update the dispatch rule
-            await livekit_api.sip.update_sip_dispatch_rule(
-                api.UpdateSIPDispatchRuleRequest(
+            # Update the dispatch rule to remove this trunk
+            try:
+                update_req = api.UpdateSIPDispatchRuleRequest(
                     sip_dispatch_rule_id=rule_id,
                     trunk_ids=new_trunk_ids,
                 )
-            )
+                await livekit_api.sip.update_sip_dispatch_rule(update_req)
+                logger.info(f"[CLEANUP] ✓ Successfully detached trunk {trunk_id} from dispatch rule")
+            except Exception as update_error:
+                logger.warning(f"[CLEANUP] Could not update dispatch rule: {update_error}")
+                # Continue anyway - trunk removal from rule is non-critical
             
-            logger.info(f"[CLEANUP] ✓ Successfully detached trunk {trunk_id} from dispatch rule")
             return True
 
         except Exception as e:
