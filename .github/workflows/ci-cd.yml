@@ -3,16 +3,17 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
 
 env:
   DOCKER_IMAGE: umairmalick/appointment-setter-backend
   PYTHON_VERSION: "3.11"
 
-  # Job 1: Build and Push Docker Image
+jobs:
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -54,13 +55,11 @@ env:
           cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
 
-  # Job 2: Deploy to Production VPS (only on main branch)
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
     needs: [build-and-push]
-    if: github.ref == 'refs/heads/main'
-
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,12 +69,8 @@ env:
           SSH_KEY: ${{ secrets.PROD_VPS_SSH_KEY }}
         run: |
           mkdir -p ${{ github.workspace }}/.ssh
-          # Write the SSH key using printf to preserve newlines
           printf '%s\n' "$SSH_KEY" > ${{ github.workspace }}/.ssh/deploy_key
           chmod 600 ${{ github.workspace }}/.ssh/deploy_key
-          # Verify the key file was created and has content
-          echo "Key file size: $(wc -c < ${{ github.workspace }}/.ssh/deploy_key) bytes"
-          echo "First line of key: $(head -1 ${{ github.workspace }}/.ssh/deploy_key)"
           ssh-keyscan -H ${{ secrets.PROD_VPS_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts 2>/dev/null || true
 
       - name: Deploy to Production VPS
@@ -89,35 +84,21 @@ env:
           command_timeout: 10m
           script: |
             cd ${{ secrets.PROD_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
-
-            # Pull latest code
             git pull origin main
-
-            # Log in to Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-            # Pull latest Docker image (production tag)
             docker pull ${{ env.DOCKER_IMAGE }}:latest
-
-            # Restart services using docker-compose
             docker-compose down
             docker-compose up -d
-
-            # Clean up old images
             docker image prune -f
-
-            # Verify deployment
             sleep 10
             docker-compose ps
             echo "✅ Production deployment complete"
 
-  # Job 3: Deploy to Development VPS (only on dev branch)
   deploy-development:
     name: Deploy to Development
     runs-on: ubuntu-latest
     needs: [build-and-push]
     if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -127,12 +108,8 @@ env:
           SSH_KEY: ${{ secrets.DEV_VPS_SSH_KEY }}
         run: |
           mkdir -p ${{ github.workspace }}/.ssh
-          # Write the SSH key using printf to preserve newlines
           printf '%s\n' "$SSH_KEY" > ${{ github.workspace }}/.ssh/deploy_key
           chmod 600 ${{ github.workspace }}/.ssh/deploy_key
-          # Verify the key file was created and has content
-          echo "Key file size: $(wc -c < ${{ github.workspace }}/.ssh/deploy_key) bytes"
-          echo "First line of key: $(head -1 ${{ github.workspace }}/.ssh/deploy_key)"
           ssh-keyscan -H ${{ secrets.DEV_VPS_HOST }} >> ${{ github.workspace }}/.ssh/known_hosts 2>/dev/null || true
 
       - name: Deploy to Development VPS
@@ -146,24 +123,12 @@ env:
           command_timeout: 10m
           script: |
             cd ${{ secrets.DEV_VPS_DEPLOY_PATH || '/root/appointment-setter-dev' }}
-
-            # Pull latest code from dev branch
             git pull origin dev
-
-            # Log in to Docker Hub
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-            # Pull latest Docker image (dev tag)
             docker pull ${{ env.DOCKER_IMAGE }}:dev
-
-            # Restart services using docker-compose
             docker-compose down
             docker-compose up -d
-
-            # Clean up old images
             docker image prune -f
-
-            # Verify deployment
             sleep 10
             docker-compose ps
             echo "✅ Development deployment complete"
