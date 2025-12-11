@@ -28,6 +28,13 @@ class TenantService:
 
     async def create_tenant(self, tenant_data: TenantCreate) -> Dict[str, Any]:
         """Create a new tenant."""
+        # Prevent duplicate tenants with same name and timezone
+        existing = await firebase_service.get_tenant_by_name_and_timezone(tenant_data.name, tenant_data.timezone)
+        if existing:
+            raise ValueError(
+                f"Tenant already exists with name '{tenant_data.name}' and timezone '{tenant_data.timezone}'"
+            )
+
         tenant_dict = {
             "id": str(uuid.uuid4()),
             "name": tenant_data.name,
