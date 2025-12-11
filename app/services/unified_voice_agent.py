@@ -509,16 +509,17 @@ class UnifiedVoiceAgentService:
 
             logger.info(f"[TWILIO WEBHOOK] ✓ Stored config: call_config:{call_sid}")
 
-            # Step 9 & 10: Build SIP URI (simple - no custom headers needed anymore)
-            # Worker will use sip.twilio.callSid to look up config
-            sip_uri_simple = self._build_sip_uri_simple()
+            # Step 9 & 10: Build SIP URI WITH original Twilio CallSid
+            # CRITICAL: Twilio creates a NEW CallSid when dialing LiveKit via SIP
+            # We must pass our original CallSid as x-lk-callid query param
+            sip_uri = self._build_sip_uri_with_callsid(call_sid, tenant_id, normalized_to_number)
             
-            logger.info(f"[TWILIO WEBHOOK] Complete SIP URI: {sip_uri_simple}")
+            logger.info(f"[TWILIO WEBHOOK] Complete SIP URI: {sip_uri}")
 
             # Step 11: Build TwiML response
             response = VoiceResponse()
             dial = Dial()
-            dial.sip(sip_uri_simple)
+            dial.sip(sip_uri)
             response.append(dial)
 
             # Step 12: Track session for status callbacks
@@ -680,19 +681,38 @@ class UnifiedVoiceAgentService:
             logger.error(f"[REDIS STORE] ✗ Error storing config by Twilio CallSid: {exc}", exc_info=True)
             return False
 
-    def _build_sip_uri_simple(self) -> str:
+    def _build_sip_uri_with_callsid(self, twilio_call_sid: str, tenant_id: str, called_number: str) -> str:
         """
-        Build a simple SIP URI without custom headers.
+        Build SIP URI with the original Twilio CallSid as query parameter.
         
-        Format: sip:lk@domain.sip.livekit.cloud
+        CRITICAL: Twilio creates a NEW CallSid when it dials LiveKit via SIP.
+        So sip.twilio.callSid in the worker is DIFFERENT from the webhook CallSid!
         
-        The worker will use sip.twilio.callSid to look up the config
-        instead of relying on custom SIP headers (which Twilio doesn't forward).
+        We must pass our original CallSid via x-lk-callid query param so the worker
+        can read it from sip.h.x-lk-callid and match it with Redis.
+        
+        Format: sip:lk@domain?x-lk-callid=CA123&x-lk-tenantid=...&x-lk-callednumber=...
+        
+        LiveKit will expose these as participant attributes:
+        - sip.h.x-lk-callid
+        - sip.h.x-lk-tenantid
+        - sip.h.x-lk-callednumber
         """
+        from urllib.parse import urlencode
+        
         domain = self._get_livekit_sip_domain()
-        sip_uri = f"sip:lk@{domain}"
         
-        logger.info(f"[SIP URI] Built simple URI: {sip_uri}")
+        # Build query parameters with our metadata
+        query_params = urlencode({
+            "x-lk-callid": twilio_call_sid,
+            "x-lk-tenantid": tenant_id,
+            "x-lk-callednumber": called_number,
+        })
+        
+        sip_uri = f"sip:lk@{domain}?{query_params}"
+        
+        logger.info(f"[SIP URI] Built URI with CallSid: {sip_uri}")
+        logger.info(f"[SIP URI] Included metadata: callid={twilio_call_sid}, tenant={tenant_id}, number={called_number}")
         return sip_uri
 
     def _get_livekit_sip_domain(self) -> str:
