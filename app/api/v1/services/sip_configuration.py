@@ -151,16 +151,25 @@ class SIPConfigurationService:
                 raise AttributeError("LiveKit SIP service does not have 'create_sip_inbound_trunk' method.")
 
             try:
-                # Create SIP inbound trunk
-                # NOTE: metadata does NOT include tenant_id - tenant routing via SIP headers only
+                # Create SIP inbound trunk with custom header mapping
+                # CRITICAL: Configure headers_to_attributes to map custom SIP headers
+                # to LiveKit participant attributes so the worker can read them
                 inbound_trunk_info = await sip_service.create_sip_inbound_trunk(
                     api.CreateSIPInboundTrunkRequest(
                         trunk=api.SIPInboundTrunkInfo(
                             name=f"Trunk for {normalized_phone}",
                             numbers=[normalized_phone],
                             allowed_addresses=["0.0.0.0/0"],
-                            # FIX ISSUE 4: No tenant_id in metadata - tenant routing via SIP headers
+                            # Metadata for internal use (NOT accessible to worker)
                             metadata=f"phone_number={normalized_phone}",
+                            # IMPORTANT: Map custom SIP headers to participant attributes
+                            # This allows Twilio to pass custom data via X-* headers
+                            # which LiveKit exposes as participant attributes
+                            headers_to_attributes={
+                                "X-LK-CallId": "lk_callid",
+                                "X-LK-TenantId": "lk_tenantid",
+                                "X-LK-CalledNumber": "lk_callednumber",
+                            },
                         )
                     )
                 )
