@@ -346,7 +346,7 @@ class SIPConfigurationService:
                     logger.error(f"[DISPATCH] Failed to create dispatch rule: {last_error}")
                     return None
             
-            # 4️⃣ Update rule if it already exists
+            # 4️⃣ Rule already exists - verify trunk is attached
             rule_id = (
                 getattr(target_rule, "sip_dispatch_rule_id", None)
                 or getattr(target_rule, "dispatch_rule_id", None)
@@ -357,63 +357,42 @@ class SIPConfigurationService:
                 logger.error(f"[DISPATCH] Found rule but could not extract rule_id")
                 return None
             
-            # Get current trunk IDs
+            # Check if trunk is already attached
             current_trunk_ids = list(getattr(target_rule, "trunk_ids", []) or [])
-            updated_trunk_ids = set(current_trunk_ids)
-            updated_trunk_ids.add(trunk_id)
             
-            # Get current agents and room config
-            room_config = getattr(target_rule, "room_config", None) or getattr(target_rule, "roomConfig", None)
-            existing_agents = []
-            if room_config:
-                agents_list = getattr(room_config, "agents", []) or []
-                for agent in agents_list:
-                    agent_name_attr = getattr(agent, "agent_name", None) or getattr(agent, "agentName", None)
-                    if agent_name_attr:
-                        existing_agents.append(agent_name_attr)
-            
-            # Add agent if not present
-            if agent_name not in existing_agents:
-                existing_agents.append(agent_name)
-                logger.info(f"[DISPATCH] Adding agent {agent_name} to existing rule")
-            
-            # Update the rule
-            if not hasattr(livekit_api.sip, "update_sip_dispatch_rule"):
-                logger.error("[DISPATCH] LiveKit SDK missing update_sip_dispatch_rule method")
-                return rule_id  # Return existing rule_id even if update fails
-            
-            # Build update request - trunk_ids only (most reliable approach)
-            # Note: LiveKit SDK uses snake_case (trunk_ids, room_config) in Python
-            # The agent config is set during rule creation; updates focus on trunk binding
-            try:
-                update_req = api.UpdateSIPDispatchRuleRequest(
-                    sip_dispatch_rule_id=rule_id,
-                    trunk_ids=list(updated_trunk_ids),
-                )
-                
-                logger.debug(f"[DISPATCH] Updating rule {rule_id} with trunk_ids={list(updated_trunk_ids)}")
-                updated = await livekit_api.sip.update_sip_dispatch_rule(update_req)
-                
-            except Exception as update_error:
-                logger.error(f"[DISPATCH] Failed to update dispatch rule: {update_error}", exc_info=True)
-                # Return the rule_id anyway - the rule exists, just couldn't update trunk binding
+            if trunk_id in current_trunk_ids:
+                logger.info(f"[DISPATCH] ✓ Trunk {trunk_id} already attached to rule {rule_id}")
+                logger.info(f"[DISPATCH] Rule ready: phone={phone_number}, agent={agent_name}, trunk={trunk_id}")
                 return rule_id
             
-            logger.info(f"[DISPATCH] ✓ Updated existing dispatch rule {rule_id}")
-            logger.info(f"[DISPATCH] Rule ready: phone={phone_number}, agent={agent_name}, trunk={trunk_id}")
+            # Trunk not attached - LiveKit API doesn't support updating trunk_ids via UpdateSIPDispatchRuleRequest
+            # The only option is to delete and recreate the rule, or accept that trunk isn't bound
+            # For now, log warning and return the rule_id - the rule exists and may still work
+            logger.warning(
+                f"[DISPATCH] Rule {rule_id} exists but trunk {trunk_id} is not attached. "
+                f"Current trunks: {current_trunk_ids}. "
+                f"LiveKit API doesn't support adding trunks to existing rules. "
+                f"Consider deleting and recreating the rule if calls don't work."
+            )
+            
+            # Return rule_id - the rule exists, calls may still route correctly
+            # If issues occur, user should unassign/reassign the phone number
+            logger.info(f"[DISPATCH] Using existing rule {rule_id} for phone={phone_number}")
             return rule_id
 
         except Exception as e:
             logger.error(f"[DISPATCH] Failed to attach trunk to dispatch rule: {e}", exc_info=True)
             return None
 
-    async def _detach_trunk_from_dispatch_rule(self, trunk_id: str, phone_number: str) -> bool:
+    async def _delete_dispatch_rule_for_phone(self, phone_number: str) -> bool:
         """
-        Detach a trunk from the phone-number-specific dispatch rule.
+        Delete the dispatch rule for a phone number during cleanup.
         
-        This is used during cleanup when unassigning a phone number.
+        Since we have one dispatch rule per phone number, when unassigning
+        we delete the entire rule rather than trying to update trunk_ids
+        (which the LiveKit API doesn't support).
         
-        Returns True if successful, False otherwise.
+        Returns True if successful or rule doesn't exist, False on error.
         """
         try:
             livekit_api = self._get_livekit_api()
@@ -437,7 +416,7 @@ class SIPConfigurationService:
             
             if not target_rule:
                 logger.info(f"[CLEANUP] No dispatch rule found for {phone_number} during cleanup")
-                return True  # Nothing to detach from
+                return True  # Nothing to delete
             
             rule_id = (
                 getattr(target_rule, "sip_dispatch_rule_id", None)
@@ -449,38 +428,25 @@ class SIPConfigurationService:
                 logger.warning(f"[CLEANUP] Found rule but could not extract rule_id")
                 return True
             
-            current_trunk_ids = list(getattr(target_rule, "trunk_ids", []) or [])
+            # Delete the dispatch rule
+            logger.info(f"[CLEANUP] Deleting dispatch rule {rule_id} for {phone_number}")
             
-            # Check if trunk is attached
-            if trunk_id not in current_trunk_ids:
-                logger.info(f"[CLEANUP] Trunk {trunk_id} is not attached to dispatch rule {rule_id}")
-                return True
-            
-            # Remove trunk from the rule
-            new_trunk_ids = [t for t in current_trunk_ids if t != trunk_id]
-            
-            logger.info(f"[CLEANUP] Removing trunk {trunk_id} from dispatch rule {rule_id}")
-            
-            if not hasattr(livekit_api.sip, "update_sip_dispatch_rule"):
-                logger.error("[CLEANUP] LiveKit SDK missing update_sip_dispatch_rule method")
-                return False
-            
-            # Update the dispatch rule to remove this trunk
-            try:
-                update_req = api.UpdateSIPDispatchRuleRequest(
-                    sip_dispatch_rule_id=rule_id,
-                    trunk_ids=new_trunk_ids,
-                )
-                await livekit_api.sip.update_sip_dispatch_rule(update_req)
-                logger.info(f"[CLEANUP] ✓ Successfully detached trunk {trunk_id} from dispatch rule")
-            except Exception as update_error:
-                logger.warning(f"[CLEANUP] Could not update dispatch rule: {update_error}")
-                # Continue anyway - trunk removal from rule is non-critical
+            if hasattr(livekit_api.sip, "delete_sip_dispatch_rule"):
+                try:
+                    await livekit_api.sip.delete_sip_dispatch_rule(
+                        api.DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=rule_id)
+                    )
+                    logger.info(f"[CLEANUP] ✓ Deleted dispatch rule {rule_id}")
+                except Exception as delete_error:
+                    logger.warning(f"[CLEANUP] Could not delete dispatch rule: {delete_error}")
+                    # Non-critical - continue cleanup
+            else:
+                logger.warning(f"[CLEANUP] delete_sip_dispatch_rule not available, rule {rule_id} remains")
             
             return True
 
         except Exception as e:
-            logger.error(f"[CLEANUP] Failed to detach trunk from dispatch rule: {e}", exc_info=True)
+            logger.error(f"[CLEANUP] Failed to delete dispatch rule: {e}", exc_info=True)
             return False
 
     async def _configure_twilio_phone_webhook(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
@@ -633,16 +599,9 @@ class SIPConfigurationService:
                 normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
             )
             
-            # Try to find the actual trunk ID first
-            livekit_api = self._get_livekit_api()
-            trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
-            
-            if not trunk_id:
-                trunk_id = f"trunk-{phone_clean}"
-                logger.warning(f"[CLEANUP] Could not find trunk for {phone_number}, using fallback: {trunk_id}")
-            
-            # Detach trunk from dispatch rule
-            await self._detach_trunk_from_dispatch_rule(trunk_id, phone_number)
+            # Delete dispatch rule for this phone number
+            # (LiveKit API doesn't support updating trunk_ids, so we delete the whole rule)
+            await self._delete_dispatch_rule_for_phone(phone_number)
             
             logger.info(f"[CLEANUP] ✓ Completed cleanup for {phone_number}")
             return True
