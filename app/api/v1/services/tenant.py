@@ -28,9 +28,20 @@ class TenantService:
 
     async def create_tenant(self, tenant_data: TenantCreate) -> Dict[str, Any]:
         """Create a new tenant."""
+        # Normalize name for case-insensitive uniqueness
+        normalized_name = tenant_data.name.strip()
+        normalized_name_lower = normalized_name.lower()
+
+        # Prevent duplicates by name (case-insensitive) AND by exact name+timezone
+        existing_by_lower = await firebase_service.get_tenant_by_name_lower(normalized_name_lower)
+        existing_by_name_tz = await firebase_service.get_tenant_by_name_and_timezone(normalized_name, tenant_data.timezone)
+        if existing_by_lower or existing_by_name_tz:
+            raise ValueError(f"Tenant already exists with name '{normalized_name}'")
+
         tenant_dict = {
             "id": str(uuid.uuid4()),
-            "name": tenant_data.name,
+            "name": normalized_name,
+            "name_lower": normalized_name_lower,
             "timezone": tenant_data.timezone,
             "status": "draft",
         }

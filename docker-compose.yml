@@ -1,8 +1,7 @@
 services:
   backend:
-    # Use image from Docker Hub for production
-    # Comment out 'build: .' line when deploying on VPS
-    image: umairmalick/appointment-setter-backend:latest
+    # Use image from Docker Hub (tag controlled via IMAGE_TAG env)
+    image: ${DOCKER_IMAGE:-umaimalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
     # build: .  # Uncomment this for local development
     container_name: appointment-setter-backend
     restart: unless-stopped
@@ -90,8 +89,8 @@ services:
       start_period: 10s
 
   voice-worker:
-    # Use image from Docker Hub
-    image: umairmalick/appointment-setter-backend:latest
+    # Use image from Docker Hub (tag controlled via IMAGE_TAG env)
+    image: ${DOCKER_IMAGE:-umaimalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
     # build: .  # Uncomment for local development
     container_name: appointment-setter-voice-worker
     restart: unless-stopped
