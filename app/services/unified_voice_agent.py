@@ -505,8 +505,8 @@ class UnifiedVoiceAgentService:
 
             logger.info(f"[TWILIO WEBHOOK] ✓ Stored config: tenant_config:{tenant_id}:{call_id}")
 
-            # Step 9 & 10: Build complete SIP URI with headers
-            # Format: sip:domain;X-LK-TenantId=xxx;X-LK-CallId=yyy;X-LK-CalledNumber=zzz
+            # Step 9 & 10: Build complete SIP URI with headers as query params (Twilio official format)
+            # Format: sip:agent@domain?X-LK-TenantId=xxx&X-LK-CallId=yyy&X-LK-CalledNumber=zzz
             sip_uri_with_headers = self._build_sip_uri_with_headers(tenant_id, call_id, normalized_to_number)
             
             logger.info(f"[TWILIO WEBHOOK] Complete SIP URI: {sip_uri_with_headers}")
@@ -645,50 +645,58 @@ class UnifiedVoiceAgentService:
         
         return domain
 
-    def _build_sip_headers(self, tenant_id: str, call_id: str, called_number: str) -> str:
+    def _build_sip_query_params(self, tenant_id: str, call_id: str, called_number: str) -> str:
         """
-        Build SIP headers string for Twilio to LiveKit routing.
+        Build SIP query parameters string for Twilio to LiveKit routing.
         
-        FIX ISSUE 2 & 3: Twilio requires SIP headers in semicolon-separated format:
-        Format: ;header1=value1;header2=value2
+        TWILIO OFFICIAL FORMAT: Custom SIP headers must be passed as query parameters.
+        Format: ?header1=value1&header2=value2
         
-        These headers are passed to LiveKit which maps them to participant attributes:
+        Twilio forwards these as SIP headers in the INVITE, and LiveKit maps them
+        to participant attributes:
         - X-LK-TenantId -> sip.h.x-lk-tenantid (LiveKit normalizes to lowercase)
         - X-LK-CallId -> sip.h.x-lk-callid
         - X-LK-CalledNumber -> sip.h.x-lk-callednumber
         
         The worker reads these from sip_participant.attributes.
         
-        IMPORTANT: Do NOT use ? query params - use ; semicolon format only.
+        Reference: https://www.twilio.com/docs/voice/twiml/sip
         """
-        headers = [
-            f"{LIVEKIT_SIP_HEADER_TENANT_ID}={tenant_id}",
-            f"{LIVEKIT_SIP_HEADER_CALL_ID}={call_id}",
-            f"{LIVEKIT_SIP_HEADER_CALLED_NUMBER}={called_number}",
+        from urllib.parse import quote
+        
+        # URL encode values to handle special characters (like + in phone numbers)
+        params = [
+            f"{LIVEKIT_SIP_HEADER_TENANT_ID}={quote(tenant_id, safe='')}",
+            f"{LIVEKIT_SIP_HEADER_CALL_ID}={quote(call_id, safe='')}",
+            f"{LIVEKIT_SIP_HEADER_CALLED_NUMBER}={quote(called_number, safe='')}",
         ]
         
-        # Join with semicolons, prepend with semicolon
-        header_string = ";" + ";".join(headers)
+        # Join with & and prepend with ?
+        query_string = "?" + "&".join(params)
         
-        logger.info(f"[SIP HEADERS] Built header string: {header_string}")
-        return header_string
+        logger.info(f"[SIP HEADERS] Built query params: {query_string}")
+        return query_string
 
     def _build_sip_uri_with_headers(self, tenant_id: str, call_id: str, called_number: str) -> str:
         """
         Build complete SIP URI with headers for inbound calls.
         
-        FIX ISSUE 2 & 3: Creates properly formatted SIP URI:
-        sip:domain.sip.livekit.cloud;X-LK-TenantId=abc;X-LK-CallId=123;X-LK-CalledNumber=+1234567890
+        TWILIO OFFICIAL FORMAT: Custom SIP headers as query parameters.
+        sip:agent@domain.sip.livekit.cloud?X-LK-TenantId=abc&X-LK-CallId=123&X-LK-CalledNumber=%2B1234567890
         
         This ensures:
-        - Headers are passed to LiveKit via Twilio
-        - LiveKit maps headers to participant attributes
-        - Worker can extract tenant_id and call_id reliably
+        - Twilio forwards headers to LiveKit via SIP INVITE
+        - LiveKit maps headers to participant attributes (sip.h.x-lk-*)
+        - Worker can extract tenant_id, call_id, and called_number reliably
+        
+        Reference: https://www.twilio.com/docs/voice/twiml/sip
         """
         domain = self._get_livekit_sip_domain()
-        headers = self._build_sip_headers(tenant_id, call_id, called_number)
+        query_params = self._build_sip_query_params(tenant_id, call_id, called_number)
         
-        sip_uri = f"sip:{domain}{headers}"
+        # Use "agent" as the user portion of the SIP URI
+        # Format: sip:agent@domain?params
+        sip_uri = f"sip:agent@{domain}{query_params}"
         
         logger.info(f"[SIP URI] Built complete URI: {sip_uri}")
         return sip_uri

@@ -332,7 +332,7 @@ async def extract_tenant_identity_from_sip(ctx: agents.JobContext, max_wait_seco
             logger.error(f"[TENANT IDENTITY] ✗ Could not find tenant_id in SIP attributes!")
             logger.error(f"[TENANT IDENTITY] ✗ Checked keys: {tenant_id_keys}")
             logger.error(f"[TENANT IDENTITY] ✗ This usually means Twilio SIP URI formatting is incorrect.")
-            logger.error(f"[TENANT IDENTITY] ✗ Expected format: sip:domain;X-LK-TenantId=xxx;X-LK-CallId=yyy")
+            logger.error(f"[TENANT IDENTITY] ✗ Expected format: sip:agent@domain?X-LK-TenantId=xxx&X-LK-CallId=yyy")
         
         # ========================================
         # EXTRACT CALL ID (FOR CONCURRENCY)
