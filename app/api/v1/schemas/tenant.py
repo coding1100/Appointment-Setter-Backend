@@ -37,7 +37,6 @@ class TenantResponse(BaseModel):
 
     id: UUID
     name: str
-    status: str
     timezone: str
     created_at: datetime
     updated_at: datetime

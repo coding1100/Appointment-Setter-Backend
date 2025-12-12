@@ -96,7 +96,6 @@ async def update_tenant(tenant_id: str, tenant_data: TenantUpdate, current_user:
             id=tenant["id"],
             name=tenant["name"],
             timezone=tenant["timezone"],
-            status=tenant["status"],
             created_at=tenant["created_at"],
             updated_at=tenant["updated_at"],
         )
@@ -227,33 +226,4 @@ async def update_agent_settings(
 # Use the dedicated twilio_integration router for all Twilio operations
 
 
-@router.post("/{tenant_id}/activate")
-async def activate_tenant(tenant_id: str):
-    """Activate a tenant."""
-    try:
-        success = await tenant_service.activate_tenant(tenant_id)
-        if not success:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to activate tenant")
 
-        return {"message": "Tenant activated successfully"}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to activate tenant: {str(e)}")
-
-
-@router.post("/{tenant_id}/deactivate")
-async def deactivate_tenant(tenant_id: str):
-    """Deactivate a tenant."""
-    try:
-        success = await tenant_service.deactivate_tenant(tenant_id)
-        if not success:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to deactivate tenant")
-
-        return {"message": "Tenant deactivated successfully"}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to deactivate tenant: {str(e)}")
