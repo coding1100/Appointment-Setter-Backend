@@ -43,7 +43,6 @@ class TenantService:
             "name": normalized_name,
             "name_lower": normalized_name_lower,
             "timezone": tenant_data.timezone,
-            "status": "draft",
         }
         add_timestamps(tenant_dict)
 
@@ -243,22 +242,6 @@ class TenantService:
         add_updated_timestamp(update_data)
 
         return await firebase_service.update_twilio_integration(tenant_id, update_data)
-
-    async def activate_tenant(self, tenant_id: str) -> bool:
-        """Activate a tenant."""
-        update_data = {"status": "active"}
-        add_updated_timestamp(update_data)
-
-        result = await firebase_service.update_tenant(tenant_id, update_data)
-        return result is not None
-
-    async def deactivate_tenant(self, tenant_id: str) -> bool:
-        """Deactivate a tenant."""
-        update_data = {"status": "inactive"}
-        add_updated_timestamp(update_data)
-
-        result = await firebase_service.update_tenant(tenant_id, update_data)
-        return result is not None
 
     def get_prompt_for_service_type(self, service_type: str) -> str:
         """Get the appropriate prompt for a service type."""
