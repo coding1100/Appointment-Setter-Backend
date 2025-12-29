@@ -158,6 +158,53 @@ class VoiceAgent(Agent):
         self._closing_task = asyncio.create_task(self.session.aclose())
         self._closing_task.add_done_callback(self._on_close_task_done)
 
+    @function_tool
+    async def send_appointment_confirmation_email(
+        self, 
+        customer_email: str, 
+        customer_name: str, 
+        appointment_time: str,
+        service_type: str,
+        service_address: str
+    ):
+        """
+        Send an appointment confirmation email to the user.
+        Call this ONLY when the user explicitly confirms the booking.
+        
+        Args:
+            customer_email: The user's email address.
+            customer_name: The user's name.
+            appointment_time: The confirmed date and time in ISO format (e.g., 2023-12-25T14:30:00).
+            service_type: The type of service booked (e.g., Plumbing, Consultation).
+            service_address: The address where the service will be provided.
+        """
+        logger.info(f"Tool 'send_appointment_confirmation_email' called for {customer_email}")
+        
+        try:
+            from app.services.email.service import EmailService
+            from datetime import datetime
+            
+            # Parse datetime
+            # Trying ISO format first, LLM should provide ISO
+            dt = datetime.fromisoformat(appointment_time.replace("Z", "+00:00"))
+            
+            email_service = EmailService()
+            success = await email_service.send_appointment_confirmation(
+                customer_email=customer_email,
+                customer_name=customer_name,
+                appointment_datetime=dt,
+                service_type=service_type,
+                service_address=service_address
+            )
+            
+            if success:
+                return "Appointment confirmation email sent successfully."
+            else:
+                return "Failed to send appointment confirmation email."
+        except Exception as e:
+            logger.error(f"Error in send_appointment_confirmation_email tool: {e}")
+            return f"Error sending email: {str(e)}"
+
 
 def is_sip_participant(p) -> bool:
     """

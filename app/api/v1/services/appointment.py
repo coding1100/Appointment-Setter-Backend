@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from app.api.v1.services.scheduling import SchedulingService
 from app.core.response_mappers import parse_iso_timestamp
-from app.services.email import EmailService
+from app.services.email.service import EmailService
 from app.services.firebase import firebase_service
 
 # Configure logging
