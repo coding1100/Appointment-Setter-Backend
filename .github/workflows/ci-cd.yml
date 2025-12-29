@@ -5,7 +5,7 @@ on:
     branches: [main, dev]
 
 env:
-  DOCKER_IMAGE: umairmalick/appointment-setter-backend
+  DOCKER_IMAGE: umairmalick/appointment-setter-backend:latest
   PYTHON_VERSION: "3.11"
 
 jobs:
