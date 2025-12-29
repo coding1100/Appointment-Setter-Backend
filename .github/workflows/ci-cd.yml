@@ -25,31 +25,39 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Determine Docker tag
-        id: tag
-        run: |
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            echo "tag=latest" >> $GITHUB_OUTPUT
-            echo "env=production" >> $GITHUB_OUTPUT
-          elif [ "${{ github.ref }}" == "refs/heads/dev" ]; then
-            echo "tag=dev" >> $GITHUB_OUTPUT
-            echo "env=development" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build and push Docker image
+      - name: Build and push Docker image (main)
+        if: github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.DOCKER_IMAGE }}:${{ steps.tag.outputs.tag }}
+            ${{ env.DOCKER_IMAGE }}:latest
             ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.title=Appointment Setter Backend
             org.opencontainers.image.description=Backend API for AI Appointment Setter
             org.opencontainers.image.version=${{ github.sha }}
-            org.opencontainers.image.environment=${{ steps.tag.outputs.env }}
+            org.opencontainers.image.environment=production
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
+
+      - name: Build and push Docker image (dev)
+        if: github.ref == 'refs/heads/dev'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:dev
+            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=Appointment Setter Backend
+            org.opencontainers.image.description=Backend API for AI Appointment Setter
+            org.opencontainers.image.version=${{ github.sha }}
+            org.opencontainers.image.environment=development
           cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
 
