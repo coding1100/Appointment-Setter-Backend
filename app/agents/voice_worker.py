@@ -114,12 +114,13 @@ def get_tts_service(voice_id: Optional[str], language_code: str) -> elevenlabs.T
 class VoiceAgent(Agent):
     """Voice agent for handling customer interactions."""
 
-    def __init__(self, instructions: str) -> None:
+    def __init__(self, instructions: str, tenant_id: Optional[str] = None) -> None:
         super().__init__(
             tools=[],  # Add your tools here if needed
             instructions=instructions,
         )
         self._closing_task: Optional[asyncio.Task] = None
+        self.tenant_id = tenant_id
 
     def _on_close_task_done(self, task: asyncio.Task) -> None:
         """Ensure close task exceptions are surfaced."""
@@ -180,6 +181,34 @@ class VoiceAgent(Agent):
                 service_type=service_type,
                 service_address=service_address
             )
+
+            owner_email = None
+            if self.tenant_id:
+                try:
+                    from app.services.firebase import firebase_service
+
+                    tenant = await firebase_service.get_tenant(self.tenant_id)
+                    if tenant:
+                        owner_email = tenant.get("owner_email")
+                        if owner_email:
+                            owner_email = owner_email.strip()
+                except Exception as exc:
+                    logger.warning(f"Failed to load owner email for tenant {self.tenant_id}: {exc}")
+
+            if owner_email:
+                if owner_email.lower() == customer_email.lower():
+                    logger.info("Owner email matches customer email; skipping owner notification")
+                else:
+                    owner_success = await email_service.send_appointment_owner_notification(
+                        owner_email=owner_email,
+                        customer_name=customer_name,
+                        customer_email=customer_email,
+                        appointment_datetime=dt,
+                        service_type=service_type,
+                        service_address=service_address,
+                    )
+                    if not owner_success:
+                        logger.warning(f"Failed to send owner notification to {owner_email}")
             
             if success:
                 return "Appointment confirmation email sent successfully."
@@ -769,7 +798,7 @@ async def entrypoint(ctx: agents.JobContext):
     # STEP 5: Create voice agent with tenant config
     # ========================================
     logger.info(f"[WORKER ENTRYPOINT] Step 5: Creating voice agent...")
-    voice_agent = VoiceAgent(instructions=instructions)
+    voice_agent = VoiceAgent(instructions=instructions, tenant_id=tenant_id)
     logger.info(f"[WORKER ENTRYPOINT] ✓ Voice agent created")
 
     # ========================================

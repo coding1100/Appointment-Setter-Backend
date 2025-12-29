@@ -18,7 +18,6 @@ from app.core.prompts import prompt_map
 from app.core.utils import add_timestamps, add_updated_timestamp
 from app.services.firebase import firebase_service
 
-
 class TenantService:
     """Service class for tenant operations using Firebase."""
 
@@ -32,17 +31,16 @@ class TenantService:
         normalized_name = tenant_data.name.strip()
         normalized_name_lower = normalized_name.lower()
 
-        # Prevent duplicates by name (case-insensitive) AND by exact name+timezone
+        # Prevent duplicates by name (case-insensitive)
         existing_by_lower = await firebase_service.get_tenant_by_name_lower(normalized_name_lower)
-        existing_by_name_tz = await firebase_service.get_tenant_by_name_and_timezone(normalized_name, tenant_data.timezone)
-        if existing_by_lower or existing_by_name_tz:
+        if existing_by_lower:
             raise ValueError(f"Tenant already exists with name '{normalized_name}'")
 
         tenant_dict = {
             "id": str(uuid.uuid4()),
             "name": normalized_name,
             "name_lower": normalized_name_lower,
-            "timezone": tenant_data.timezone,
+            "owner_email": tenant_data.owner_email.strip(),
         }
         add_timestamps(tenant_dict)
 
@@ -76,10 +74,8 @@ class TenantService:
         update_data = {}
         add_updated_timestamp(update_data)
 
-        if tenant_data.name:
-            update_data["name"] = tenant_data.name
-        if tenant_data.timezone:
-            update_data["timezone"] = tenant_data.timezone
+        update_data["name"] = tenant_data.name
+        update_data["owner_email"] = tenant_data.owner_email.strip()
 
         result = await firebase_service.update_tenant(tenant_id, update_data)
 
