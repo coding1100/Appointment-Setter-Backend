@@ -97,7 +97,7 @@ def to_tenant_response(tenant_dict: Dict[str, Any]) -> TenantResponse:
         return TenantResponse(
             id=tenant_id,
             name=tenant_dict.get("name", ""),
-            timezone=tenant_dict.get("timezone", "UTC"),
+            owner_email=tenant_dict.get("owner_email"),
             created_at=created_at or datetime.now(timezone.utc),
             updated_at=updated_at or datetime.now(timezone.utc),
         )
