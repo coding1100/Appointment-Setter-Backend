@@ -56,9 +56,20 @@ DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
 ELEVEN_API_KEY = os.environ.get("ELEVEN_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
-# SendGrid settings
-SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
-SENDGRID_FROM_EMAIL = os.environ.get("SENDGRID_FROM_EMAIL", "")
+
+# Email Settings (FastAPI-Mail)
+class EmailSettings:
+    MAIL_USERNAME = os.environ.get("MAIL_USERNAME", "")
+    MAIL_PASSWORD = os.environ.get("MAIL_PASSWORD", "")
+    MAIL_FROM = os.environ.get("MAIL_FROM", "")
+    MAIL_PORT = int(os.environ.get("MAIL_PORT", "587"))
+    MAIL_SERVER = os.environ.get("MAIL_SERVER", "")
+    MAIL_STARTTLS = os.environ.get("MAIL_STARTTLS", "True").lower() == "true"
+    MAIL_SSL_TLS = os.environ.get("MAIL_SSL_TLS", "False").lower() == "true"
+    USE_CREDENTIALS = os.environ.get("USE_CREDENTIALS", "True").lower() == "true"
+    VALIDATE_CERTS = os.environ.get("VALIDATE_CERTS", "True").lower() == "true"
+
+email_settings = EmailSettings()
 
 # AWS settings
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")
