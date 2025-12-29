@@ -11,7 +11,7 @@ A production-ready SaaS platform for AI-powered phone appointment scheduling usi
 - **Appointment Management**: Full CRUD operations with scheduling and slot management
 - **Real-time Communication**: WebSocket-based voice interactions via LiveKit
 - **Phone Integration**: Twilio SIP trunk integration for real phone calls
-- **Email Notifications**: SendGrid integration for appointment confirmations
+- **Email Notifications**: SMTP integration for appointment confirmations
 
 ### Security & Production Features
 - **🔒 Encryption**: AES-128 encryption for sensitive data (Twilio auth tokens)
@@ -49,7 +49,7 @@ A production-ready SaaS platform for AI-powered phone appointment scheduling usi
 - **Text-to-Speech**: ElevenLabs
 - **LLM**: Google Gemini 2.0 Flash
 - **Telephony**: Twilio SIP Trunks
-- **Email**: SendGrid
+- **Email**: SMTP (FastAPI-Mail)
 - **Frontend**: React.js with Tailwind CSS
 
 ### System Components
@@ -109,7 +109,7 @@ A production-ready SaaS platform for AI-powered phone appointment scheduling usi
    - **Google AI (Gemini)**: [Get API Key](https://makersuite.google.com/app/apikey)
    - **Deepgram**: [Sign up](https://deepgram.com/)
    - **ElevenLabs**: [Get API Key](https://elevenlabs.io/)
-   - **SendGrid**: [Sign up](https://sendgrid.com/)
+   - **SMTP Server**: Get credentials from your email provider
 
 ### System Requirements
 - Python 3.11 or higher
@@ -191,9 +191,16 @@ DEEPGRAM_API_KEY=your-deepgram-api-key
 ELEVEN_API_KEY=your-elevenlabs-api-key
 OPENAI_API_KEY=your-openai-api-key
 
-# Email Service
-SENDGRID_API_KEY=your-sendgrid-api-key
-SENDGRID_FROM_EMAIL=noreply@yourdomain.com
+# Email Service (SMTP)
+MAIL_USERNAME=your-email@example.com
+MAIL_PASSWORD=your-email-password
+MAIL_FROM=no-reply@yourdomain.com
+MAIL_PORT=587
+MAIL_SERVER=smtp.gmail.com
+MAIL_STARTTLS=True
+MAIL_SSL_TLS=False
+USE_CREDENTIALS=True
+VALIDATE_CERTS=True
 
 # AWS (Optional - for secrets management)
 AWS_ACCESS_KEY_ID=your-aws-access-key
@@ -612,7 +619,7 @@ All services use real API integrations:
 - ✅ **Firebase/Firestore** - Real database operations
 - ✅ **Twilio** - Real phone/SIP integration
 - ✅ **LiveKit** - Real voice agent infrastructure
-- ✅ **SendGrid** - Real email service
+- ✅ **Email Service** - Real SMTP integration
 - ✅ **Redis** - Real caching/session management
 - ✅ **Encryption** - Real AES-128 cryptography
 - ✅ **Authentication** - Real JWT/bcrypt

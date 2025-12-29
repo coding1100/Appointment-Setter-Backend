@@ -20,8 +20,7 @@ from app.core.config import (  # Firebase; Redis; LiveKit; AI Services; SendGrid
     LIVEKIT_URL,
     REDIS_URL,
     SECRET_KEY,
-    SENDGRID_API_KEY,
-    SENDGRID_FROM_EMAIL,
+    email_settings,
 )
 
 # Configure logging
@@ -45,8 +44,9 @@ OPTIONAL_ENV_VARS = {
     "GOOGLE_API_KEY": GOOGLE_API_KEY,
     "DEEPGRAM_API_KEY": DEEPGRAM_API_KEY,
     "ELEVEN_API_KEY": ELEVEN_API_KEY,
-    "SENDGRID_API_KEY": SENDGRID_API_KEY,
-    "SENDGRID_FROM_EMAIL": SENDGRID_FROM_EMAIL,
+    "MAIL_USERNAME": email_settings.MAIL_USERNAME,
+    "MAIL_PASSWORD": email_settings.MAIL_PASSWORD,
+    "MAIL_SERVER": email_settings.MAIL_SERVER,
 }
 
 
@@ -123,7 +123,7 @@ def get_environment_info() -> Dict[str, any]:
         "google_ai_configured": bool(GOOGLE_API_KEY),
         "deepgram_configured": bool(DEEPGRAM_API_KEY),
         "elevenlabs_configured": bool(ELEVEN_API_KEY),
-        "sendgrid_configured": bool(SENDGRID_API_KEY and SENDGRID_FROM_EMAIL),
+        "email_configured": bool(email_settings.MAIL_USERNAME and email_settings.MAIL_SERVER),
         "secret_key_configured": bool(SECRET_KEY),
     }
 
@@ -142,6 +142,6 @@ def print_environment_summary():
     logger.info(f"Google AI (Gemini): {'✅' if info['google_ai_configured'] else '❌'}")
     logger.info(f"Deepgram (STT): {'✅' if info['deepgram_configured'] else '❌'}")
     logger.info(f"ElevenLabs (TTS): {'✅' if info['elevenlabs_configured'] else '❌'}")
-    logger.info(f"SendGrid (Email): {'✅' if info['sendgrid_configured'] else '❌'}")
+    logger.info(f"Email Service: {'✅' if info['email_configured'] else '❌'}")
     logger.info(f"Secret Key: {'✅' if info['secret_key_configured'] else '❌'}")
     logger.info("=" * 80)
