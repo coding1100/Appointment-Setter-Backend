@@ -160,10 +160,6 @@ class RetryConfig:
     FIREBASE_DELAY = 0.5
     FIREBASE_BACKOFF = 1.5
 
-    # SendGrid retry configuration
-    SENDGRID_MAX_ATTEMPTS = 2
-    SENDGRID_DELAY = 1.0
-    SENDGRID_BACKOFF = 2.0
 
 
 # Convenience decorators with pre-configured settings
