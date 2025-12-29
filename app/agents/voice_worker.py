@@ -2,22 +2,6 @@
 LiveKit Voice Agent Worker
 ===========================
 This worker connects to LiveKit and handles voice agent sessions for inbound telephony.
-
-ARCHITECTURE (LiveKit Official Telephony Flow):
-1. Twilio PSTN → Backend webhook
-2. Backend stores tenant config under `tenant_config:<tenant_id>:<call_id>`
-3. Backend returns TwiML <Dial><Sip> to LiveKit SIP domain (NO room name)
-4. LiveKit SIP dispatch rule creates room automatically (e.g., call-+14438600638_x8Bg...)
-5. Dispatch rule launches this worker via agent_name="voice-agent"
-6. Worker extracts tenant_id + call_id from SIP participant attributes
-7. Worker loads config from Redis: `tenant_config:<tenant_id>:<call_id>`
-8. Worker applies tenant-specific greeting, persona, voice, etc.
-
-KEY PRINCIPLES:
-- Worker NEVER depends on room name for config lookup
-- Worker MUST extract tenant_id from SIP metadata per call
-- Worker MUST fail with error if tenant config is missing (NO fallback)
-- Multiple tenants can share the same PSTN number (call_id provides isolation)
 """
 
 import asyncio
