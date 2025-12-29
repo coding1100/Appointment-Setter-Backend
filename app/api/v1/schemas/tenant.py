@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, EmailStr, Field, validator
 
 
 # Base schemas
@@ -22,14 +22,14 @@ class TenantCreate(BaseModel):
     """Schema for creating a new tenant."""
 
     name: str = Field(..., min_length=1, max_length=255, description="Tenant name")
-    timezone: str = Field(default="UTC", description="Tenant timezone")
+    owner_email: EmailStr = Field(..., description="Business owner email")
 
 
 class TenantUpdate(BaseModel):
     """Schema for updating tenant basic info."""
 
-    name: Optional[str] = Field(None, min_length=1, max_length=255)
-    timezone: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: str = Field(..., min_length=1, max_length=255)
+    owner_email: EmailStr = Field(...)
 
 
 class TenantResponse(BaseModel):
@@ -37,7 +37,7 @@ class TenantResponse(BaseModel):
 
     id: UUID
     name: str
-    timezone: str
+    owner_email: EmailStr
     created_at: datetime
     updated_at: datetime
 

@@ -78,6 +78,36 @@ class EmailService:
             logging.error(f"Error sending appointment confirmation email: {e}", exc_info=True)
             return False
 
+    async def send_appointment_owner_notification(
+        self,
+        owner_email: str,
+        customer_name: str,
+        customer_email: str,
+        appointment_datetime: datetime,
+        service_type: str,
+        service_address: str,
+        appointment_id: Optional[str] = None,
+        service_details: Optional[str] = None,
+        business_name: Optional[str] = None,
+    ) -> bool:
+        try:
+            data = {
+                "customer_name": customer_name,
+                "customer_email": customer_email,
+                "service_type": service_type,
+                "appointment_datetime": appointment_datetime.strftime("%B %d, %Y at %I:%M %p"),
+                "service_address": service_address,
+                "appointment_id": appointment_id or "N/A",
+                "service_details": service_details,
+                "business_name": business_name or "AI Phone Scheduler",
+            }
+            subject, html = EmailTemplates.appointment_owner_notification(data)
+            await self._send(subject, [owner_email], html)
+            return True
+        except Exception as e:
+            logging.error(f"Error sending appointment owner email: {e}", exc_info=True)
+            return False
+
     async def send_appointment_cancellation(
         self,
         customer_email: str,

@@ -73,6 +73,28 @@ class EmailTemplates:
         return subject, EmailTemplates._create_html_wrapper("Appointment Confirmed!", content)
 
     @staticmethod
+    def appointment_owner_notification(data: Dict[str, Any]) -> tuple[str, str]:
+        subject = f"New Appointment Confirmed - {data.get('service_type', 'Service')}"
+        content = f"""
+            <p>Hello,</p>
+            <p>A new appointment has been confirmed. Here are the details:</p>
+            
+            <div class="details-box">
+                <h3>Appointment Details</h3>
+                <p><strong>Customer Name:</strong> {data.get('customer_name', 'N/A')}</p>
+                <p><strong>Customer Email:</strong> {data.get('customer_email', 'N/A')}</p>
+                <p><strong>Service:</strong> {data.get('service_type', 'N/A')}</p>
+                <p><strong>Date & Time:</strong> {data.get('appointment_datetime', 'N/A')}</p>
+                <p><strong>Address:</strong> {data.get('service_address', 'N/A')}</p>
+                {f"<p><strong>Details:</strong> {data.get('service_details', '')}</p>" if data.get('service_details') else ""}
+                <p><strong>Appointment ID:</strong> {data.get('appointment_id', 'N/A')}</p>
+            </div>
+            
+            <p>This is an automated message for your records.</p>
+        """
+        return subject, EmailTemplates._create_html_wrapper("New Appointment Confirmed", content, header_color="#1976D2")
+
+    @staticmethod
     def appointment_status_update(data: Dict[str, Any]) -> tuple[str, str]:
         subject = f"Appointment Status Update - {data.get('service_type', 'Service')}"
         content = f"""
