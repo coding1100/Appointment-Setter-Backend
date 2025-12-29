@@ -38,7 +38,7 @@ async def create_tenant(tenant_data: TenantCreate, current_user: Dict = Depends(
         return to_tenant_response(tenant)
 
     except ValueError as e:
-        # Duplicate tenant (same name + timezone)
+        # Duplicate tenant (same name)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create tenant: {str(e)}")
@@ -95,7 +95,7 @@ async def update_tenant(tenant_id: str, tenant_data: TenantUpdate, current_user:
         return TenantResponse(
             id=tenant["id"],
             name=tenant["name"],
-            timezone=tenant["timezone"],
+            owner_email=tenant.get("owner_email"),
             created_at=tenant["created_at"],
             updated_at=tenant["updated_at"],
         )
