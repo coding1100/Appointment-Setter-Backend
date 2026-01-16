@@ -183,6 +183,55 @@ class SIPConfigurationService:
             logger.error(f"[TRUNK] Failed to verify trunk existence: {e}")
             return False
 
+    async def _delete_sip_trunk(self, livekit_api: api.LiveKitAPI, trunk_id: str) -> bool:
+        """
+        Delete a SIP inbound trunk by ID.
+        
+        Returns True if successful, False otherwise.
+        """
+        if not trunk_id or not trunk_id.startswith(("ST_", "IT_", "TR_")):
+            logger.warning(f"[TRUNK] Invalid trunk ID format for deletion: {trunk_id}")
+            return False
+        
+        try:
+            sip_service = livekit_api.sip
+            
+            if not hasattr(sip_service, "delete_sip_inbound_trunk"):
+                logger.warning("[TRUNK] SDK missing delete_sip_inbound_trunk method")
+                return False
+            
+            # Try different request formats
+            try:
+                # Try with sip_trunk_id parameter
+                await sip_service.delete_sip_inbound_trunk(
+                    api.DeleteSIPInboundTrunkRequest(sip_trunk_id=trunk_id)
+                )
+                logger.info(f"[TRUNK] ✓ Deleted trunk {trunk_id}")
+                return True
+            except (TypeError, AttributeError):
+                # Try alternative format
+                try:
+                    await sip_service.delete_sip_inbound_trunk(
+                        api.DeleteSIPInboundTrunkRequest(inbound_trunk_id=trunk_id)
+                    )
+                    logger.info(f"[TRUNK] ✓ Deleted trunk {trunk_id}")
+                    return True
+                except (TypeError, AttributeError):
+                    # Try with trunk_id parameter
+                    try:
+                        await sip_service.delete_sip_inbound_trunk(
+                            api.DeleteSIPInboundTrunkRequest(trunk_id=trunk_id)
+                        )
+                        logger.info(f"[TRUNK] ✓ Deleted trunk {trunk_id}")
+                        return True
+                    except Exception as e:
+                        logger.error(f"[TRUNK] Failed to delete trunk {trunk_id}: {e}")
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"[TRUNK] Failed to delete trunk {trunk_id}: {e}")
+            return False
+
     async def _get_or_create_sip_trunk(self, phone_number: str) -> str:
         """
         Get existing SIP trunk or create new one for phone number.
@@ -204,12 +253,15 @@ class SIPConfigurationService:
             normalized_phone = normalize_phone_number(phone_number)
             logger.info(f"[TRUNK] Normalized phone number: {phone_number} -> {normalized_phone}")
 
-            # Try to reuse existing trunk first
+            # CRITICAL: One trunk per phone number - delete any existing trunk first
+            # This ensures no conflicts and clean state for each phone number
             existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
             if existing_trunk_id:
-                return existing_trunk_id
+                logger.info(f"[TRUNK] Found existing trunk {existing_trunk_id} for {normalized_phone}, deleting to create fresh trunk...")
+                await self._delete_sip_trunk(livekit_api, existing_trunk_id)
+                logger.info(f"[TRUNK] ✓ Deleted existing trunk {existing_trunk_id}")
 
-            # Create new SIP trunk
+            # Create new SIP trunk (always create fresh, never reuse)
             sip_service = livekit_api.sip
             
             if not hasattr(sip_service, "create_sip_inbound_trunk"):
@@ -263,62 +315,43 @@ class SIPConfigurationService:
                 error_str = str(create_error)
                 error_str_lower = error_str.lower()
 
-                # Handle "already exists" or "duplicate" errors
-                if "already exists" in error_str_lower or "duplicate" in error_str_lower or "409" in error_str:
-                    existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
-                    if existing_trunk_id:
-                        logger.info(f"[TRUNK] Found existing trunk via lookup: {existing_trunk_id}")
-                        return existing_trunk_id
-                    raise Exception("Could not retrieve existing SIP trunk ID from LiveKit")
-
-                # Handle "conflicting" trunk errors - extract and reuse the conflicting trunk
+                # Handle "conflicting" trunk errors - delete the conflicting trunk and retry
                 if "conflicting" in error_str_lower or "conflict" in error_str_lower:
                     conflicting_trunk_id = self._extract_trunk_id_from_conflict_error(error_str)
                     if conflicting_trunk_id:
-                        # Verify the conflicting trunk exists and is valid
-                        if await self._verify_trunk_exists(livekit_api, conflicting_trunk_id):
-                            logger.info(f"[TRUNK] Reusing conflicting trunk: {conflicting_trunk_id}")
-                            return conflicting_trunk_id
-                        else:
-                            logger.warning(f"[TRUNK] Conflicting trunk {conflicting_trunk_id} not found, will fail")
-                    # If we can't extract or verify, try lookup by phone number as fallback
+                        logger.warning(f"[TRUNK] Conflict detected with trunk {conflicting_trunk_id}, deleting it...")
+                        try:
+                            await self._delete_sip_trunk(livekit_api, conflicting_trunk_id)
+                            logger.info(f"[TRUNK] ✓ Deleted conflicting trunk {conflicting_trunk_id}, retrying creation...")
+                            # Retry creating the trunk after deleting the conflicting one
+                            return await self._get_or_create_sip_trunk(phone_number)
+                        except Exception as delete_error:
+                            logger.error(f"[TRUNK] Failed to delete conflicting trunk: {delete_error}")
+                            raise Exception(f"Trunk conflict detected and could not delete conflicting trunk: {error_str}")
+                    else:
+                        raise Exception(f"Trunk conflict detected but could not extract trunk ID: {error_str}")
+
+                # Handle "already exists" or "duplicate" errors - delete and retry
+                if "already exists" in error_str_lower or "duplicate" in error_str_lower or "409" in error_str:
                     existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
                     if existing_trunk_id:
-                        logger.info(f"[TRUNK] Found existing trunk via lookup after conflict: {existing_trunk_id}")
-                        return existing_trunk_id
-                    raise Exception(f"Trunk conflict detected but could not resolve: {error_str}")
+                        logger.warning(f"[TRUNK] Trunk already exists: {existing_trunk_id}, deleting and recreating...")
+                        try:
+                            await self._delete_sip_trunk(livekit_api, existing_trunk_id)
+                            logger.info(f"[TRUNK] ✓ Deleted existing trunk {existing_trunk_id}, retrying creation...")
+                            # Retry creating the trunk after deleting the existing one
+                            return await self._get_or_create_sip_trunk(phone_number)
+                        except Exception as delete_error:
+                            logger.error(f"[TRUNK] Failed to delete existing trunk: {delete_error}")
+                            raise Exception(f"Trunk already exists and could not delete it: {error_str}")
 
                 logger.error(f"Failed to create SIP inbound trunk: {create_error}")
                 raise
 
         except Exception as e:
-            error_str = str(e)
-            error_str_lower = error_str.lower()
-            
-            # Handle "already exists" or "duplicate" errors
-            if "already exists" in error_str_lower or "duplicate" in error_str_lower or "409" in error_str:
-                livekit_api = self._get_livekit_api()
-                existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
-                if existing_trunk_id:
-                    return existing_trunk_id
-            
-            # Handle "conflicting" trunk errors - extract and reuse the conflicting trunk
-            if "conflicting" in error_str_lower or "conflict" in error_str_lower:
-                livekit_api = self._get_livekit_api()
-                conflicting_trunk_id = self._extract_trunk_id_from_conflict_error(error_str)
-                if conflicting_trunk_id:
-                    # Verify the conflicting trunk exists and is valid
-                    if await self._verify_trunk_exists(livekit_api, conflicting_trunk_id):
-                        logger.info(f"[TRUNK] Reusing conflicting trunk: {conflicting_trunk_id}")
-                        return conflicting_trunk_id
-                # If we can't extract or verify, try lookup by phone number as fallback
-                existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
-                if existing_trunk_id:
-                    logger.info(f"[TRUNK] Found existing trunk via lookup after conflict: {existing_trunk_id}")
-                    return existing_trunk_id
-                raise Exception(f"Trunk conflict detected but could not resolve: {error_str}")
-            
-            raise Exception(f"Failed to setup SIP trunk: {error_str}")
+            # All error handling is done in the inner try/except block
+            # If we reach here, it's a fatal error that couldn't be recovered
+            raise Exception(f"Failed to setup SIP trunk: {str(e)}")
 
     async def _attach_trunk_to_dispatch_rule(
         self, livekit_api: api.LiveKitAPI, trunk_id: str, phone_number: str
@@ -689,23 +722,35 @@ class SIPConfigurationService:
             raise Exception(f"SIP configuration failed: {str(e)}")
 
     async def cleanup_phone_number_sip(
-        self, tenant_id: str, phone_number: str, dispatch_rule_id: Optional[str] = None
+        self, tenant_id: str, phone_number: str, dispatch_rule_id: Optional[str] = None, trunk_id: Optional[str] = None
     ) -> bool:
         """
         Cleanup SIP configuration when phone number is unassigned.
 
-        This detaches the trunk from the dispatch rule but does not delete the trunk.
+        This deletes both the dispatch rule AND the SIP trunk to ensure clean state.
+        One trunk per phone number means we must delete it when unassigning.
         """
         try:
-            # Get phone-specific trunk ID
-            normalized_phone = normalize_phone_number_safe(phone_number) or phone_number
-            phone_clean = (
-                normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
-            )
+            livekit_api = self._get_livekit_api()
             
-            # Delete dispatch rule for this phone number
-            # (LiveKit API doesn't support updating trunk_ids, so we delete the whole rule)
+            # Step 1: Delete dispatch rule for this phone number
             await self._delete_dispatch_rule_for_phone(phone_number)
+            logger.info(f"[CLEANUP] ✓ Deleted dispatch rule for {phone_number}")
+            
+            # Step 2: Delete the SIP trunk (one trunk per phone number)
+            # Try to find trunk if trunk_id not provided
+            if not trunk_id:
+                trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
+            
+            if trunk_id:
+                try:
+                    await self._delete_sip_trunk(livekit_api, trunk_id)
+                    logger.info(f"[CLEANUP] ✓ Deleted SIP trunk {trunk_id} for {phone_number}")
+                except Exception as trunk_delete_error:
+                    logger.warning(f"[CLEANUP] Failed to delete trunk {trunk_id}: {trunk_delete_error}")
+                    # Non-critical, continue
+            else:
+                logger.warning(f"[CLEANUP] No trunk ID found for {phone_number}, skipping trunk deletion")
             
             logger.info(f"[CLEANUP] ✓ Completed cleanup for {phone_number}")
             return True
