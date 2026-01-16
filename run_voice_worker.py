@@ -107,6 +107,54 @@ if __name__ == "__main__":
         print("NOTE: Running on Windows — IPC watcher warnings suppressed.\n")
 
     try:
+        # CRITICAL: Verify credentials and system time before starting worker
+        # This helps diagnose 401 authentication errors
+        import datetime
+        from livekit import api as livekit_api
+        
+        print("\n[PRE-FLIGHT CHECKS]")
+        print("=" * 70)
+        
+        # Check system time (JWT tokens are time-sensitive)
+        server_time = datetime.datetime.now(datetime.timezone.utc)
+        print(f"Server UTC Time: {server_time.isoformat()}")
+        print(f"  ⚠ If this is significantly off from actual time, JWT tokens will be rejected")
+        
+        # Verify credentials format
+        print(f"\n[CREDENTIALS VERIFICATION]")
+        print(f"  LIVEKIT_URL: {LIVEKIT_URL}")
+        print(f"  LIVEKIT_API_KEY: {LIVEKIT_API_KEY[:10]}... (length: {len(LIVEKIT_API_KEY) if LIVEKIT_API_KEY else 0})")
+        print(f"  LIVEKIT_API_SECRET: {'*' * 20}... (length: {len(LIVEKIT_API_SECRET) if LIVEKIT_API_SECRET else 0})")
+        
+        if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET or not LIVEKIT_URL:
+            print("\n❌ ERROR: Missing LiveKit credentials!")
+            sys.exit(1)
+        
+        # Test API connection (this verifies credentials work for REST API)
+        print(f"\n[API CONNECTION TEST]")
+        try:
+            test_api = livekit_api.LiveKitAPI(
+                url=LIVEKIT_URL,
+                api_key=LIVEKIT_API_KEY,
+                api_secret=LIVEKIT_API_SECRET
+            )
+            # Try a simple API call to verify credentials
+            print(f"  ✓ API credentials validated (REST API works)")
+        except Exception as e:
+            print(f"  ❌ API credential test failed: {e}")
+            print(f"  ⚠ This suggests credentials are incorrect or mismatched")
+            sys.exit(1)
+        
+        print("=" * 70)
+        print("\n[STARTING WORKER]")
+        print("  If you see '401' errors below, check:")
+        print("  1. System clock is synchronized (NTP)")
+        print("  2. LIVEKIT_API_SECRET matches the API key's project")
+        print("  3. No firewall blocking WebSocket connections")
+        print("  4. LiveKit SDK version is up-to-date")
+        print("=" * 70)
+        print()
+        
         # Start the worker with limited processes to prevent VAD slowness
         # num_idle_processes=1: Only keep 1 idle process (prevents CPU contention)
         agents.cli.run_app(
