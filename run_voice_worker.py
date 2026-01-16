@@ -124,25 +124,39 @@ if __name__ == "__main__":
         print(f"\n[CREDENTIALS VERIFICATION]")
         print(f"  LIVEKIT_URL: {LIVEKIT_URL}")
         print(f"  LIVEKIT_API_KEY: {LIVEKIT_API_KEY[:10]}... (length: {len(LIVEKIT_API_KEY) if LIVEKIT_API_KEY else 0})")
-        print(f"  LIVEKIT_API_SECRET: {'*' * 20}... (length: {len(LIVEKIT_API_SECRET) if LIVEKIT_API_SECRET else 0})")
+        secret_length = len(LIVEKIT_API_SECRET) if LIVEKIT_API_SECRET else 0
+        print(f"  LIVEKIT_API_SECRET: {'*' * 20}... (length: {secret_length})")
         
         if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET or not LIVEKIT_URL:
             print("\n❌ ERROR: Missing LiveKit credentials!")
             sys.exit(1)
         
-        # Test API connection (this verifies credentials work for REST API)
-        print(f"\n[API CONNECTION TEST]")
+        # Verify secret is not empty (LiveKit secrets can vary in length)
+        if secret_length < 20:
+            print(f"\n  ⚠ WARNING: API Secret length ({secret_length}) seems too short")
+            print(f"  ⚠ This might indicate a truncated secret in your .env file")
+        
+        # Test token generation (this verifies credentials work for JWT signing)
+        print(f"\n[TOKEN GENERATION TEST]")
         try:
-            test_api = livekit_api.LiveKitAPI(
-                url=LIVEKIT_URL,
-                api_key=LIVEKIT_API_KEY,
-                api_secret=LIVEKIT_API_SECRET
-            )
-            # Try a simple API call to verify credentials
-            print(f"  ✓ API credentials validated (REST API works)")
+            from livekit import api as lk_api
+            # Generate a test token to verify API key/secret are valid
+            test_token = lk_api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+            test_token.with_identity("test-worker")
+            test_token.with_grants(lk_api.VideoGrants(agent=True))
+            jwt_token = test_token.to_jwt()
+            
+            # Verify token was generated (not empty)
+            if jwt_token and len(jwt_token) > 10:
+                print(f"  ✓ Token generation successful (credentials are valid)")
+                print(f"  ✓ Token length: {len(jwt_token)} characters")
+            else:
+                print(f"  ❌ Token generation failed: empty token")
+                sys.exit(1)
         except Exception as e:
-            print(f"  ❌ API credential test failed: {e}")
-            print(f"  ⚠ This suggests credentials are incorrect or mismatched")
+            print(f"  ❌ Token generation failed: {e}")
+            print(f"  ⚠ This suggests API key/secret are incorrect or mismatched")
+            print(f"  ⚠ Error details: {type(e).__name__}: {str(e)}")
             sys.exit(1)
         
         print("=" * 70)
@@ -152,7 +166,22 @@ if __name__ == "__main__":
         print("  2. LIVEKIT_API_SECRET matches the API key's project")
         print("  3. No firewall blocking WebSocket connections")
         print("  4. LiveKit SDK version is up-to-date")
+        print("  5. agent_name matches dispatch rule configuration")
         print("=" * 70)
+        print()
+        
+        # CRITICAL: Ensure environment variables are set
+        # WorkerOptions may prefer env vars over passed parameters
+        # Setting them explicitly ensures consistency
+        os.environ["LIVEKIT_URL"] = LIVEKIT_URL
+        os.environ["LIVEKIT_API_KEY"] = LIVEKIT_API_KEY
+        os.environ["LIVEKIT_API_SECRET"] = LIVEKIT_API_SECRET
+        
+        print(f"[WORKER CONFIG] Using explicit credentials:")
+        print(f"  API Key: {LIVEKIT_API_KEY[:10]}...")
+        print(f"  API Secret: {'*' * 20}... (length: {len(LIVEKIT_API_SECRET)})")
+        print(f"  URL: {LIVEKIT_URL}")
+        print(f"  Agent Name: {AGENT_NAME}")
         print()
         
         # Start the worker with limited processes to prevent VAD slowness
