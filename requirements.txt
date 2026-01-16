@@ -11,7 +11,7 @@ passlib[bcrypt]
 bcrypt==4.3.0
 sendgrid
 twilio
-livekit-agents
+livekit-agents>=1.3.10
 livekit-plugins-deepgram
 livekit-plugins-elevenlabs
 livekit-plugins-google
