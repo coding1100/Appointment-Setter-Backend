@@ -131,18 +131,26 @@ class SIPConfigurationService:
         # Pattern to match trunk IDs in the error message
         # Look for patterns like "ST_xxx" or similar trunk ID formats
         patterns = [
-            r'"([ST]_[A-Za-z0-9]+)"',  # Matches "ST_xxxxx" format
-            r'and\s+"([A-Za-z0-9_]+)"',  # Matches trunk ID after "and"
-            r'Trunk[^"]*"([A-Za-z0-9_]+)"',  # Matches trunk ID in various formats
+            r'"([ST]_[A-Za-z0-9]+)"',  # Matches "ST_xxxxx" format (quoted)
+            r'and\s+"([ST]_[A-Za-z0-9]+)"',  # Matches trunk ID after "and" (quoted)
+            r'Trunk[^"]*"([ST]_[A-Za-z0-9]+)"',  # Matches trunk ID in various formats (quoted)
+            r'([ST]_[A-Za-z0-9]+)',  # Matches unquoted trunk ID as fallback
         ]
         
         for pattern in patterns:
             matches = re.findall(pattern, error_message)
             for match in matches:
-                # Skip "<new>" placeholder
-                if match.lower() not in ["<new>", "new"] and match.startswith(("ST_", "IT_", "TR_")):
-                    logger.debug(f"[TRUNK] Extracted trunk ID from conflict error: {match}")
+                # Skip "<new>" placeholder and ensure it's a valid trunk ID
+                if match and match.lower() not in ["<new>", "new"] and match.startswith(("ST_", "IT_", "TR_")):
+                    logger.info(f"[TRUNK] Extracted trunk ID from conflict error: {match}")
                     return match
+        
+        # Fallback: Try to find any ST_ pattern in the error
+        fallback_match = re.search(r'(ST_[A-Za-z0-9]+)', error_message)
+        if fallback_match:
+            trunk_id = fallback_match.group(1)
+            logger.info(f"[TRUNK] Extracted trunk ID using fallback pattern: {trunk_id}")
+            return trunk_id
         
         logger.warning(f"[TRUNK] Could not extract trunk ID from conflict error: {error_message}")
         return None
@@ -332,13 +340,30 @@ class SIPConfigurationService:
                     conflicting_trunk_id = self._extract_trunk_id_from_conflict_error(error_str)
                     if conflicting_trunk_id:
                         # Verify the conflicting trunk exists and reuse it
-                        if await self._verify_trunk_exists(livekit_api, conflicting_trunk_id):
+                        trunk_exists = await self._verify_trunk_exists(livekit_api, conflicting_trunk_id)
+                        if trunk_exists:
                             logger.info(f"[TRUNK] Conflict detected, reusing existing trunk: {conflicting_trunk_id}")
                             return conflicting_trunk_id
                         else:
-                            raise Exception(f"Trunk conflict detected but conflicting trunk {conflicting_trunk_id} not found. Error: {error_str}")
+                            # Trunk ID extracted but doesn't exist - try to find trunk by phone number as fallback
+                            logger.warning(f"[TRUNK] Conflicting trunk {conflicting_trunk_id} not found, trying to find by phone number...")
+                            existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
+                            if existing_trunk_id:
+                                logger.info(f"[TRUNK] Found existing trunk by phone number, reusing: {existing_trunk_id}")
+                                return existing_trunk_id
+                            else:
+                                # If we can't find it, still return the extracted ID - it might work
+                                logger.warning(f"[TRUNK] Could not verify trunk {conflicting_trunk_id} exists, but will attempt to use it")
+                                return conflicting_trunk_id
                     else:
-                        raise Exception(f"Trunk conflict detected but could not extract trunk ID: {error_str}")
+                        # Could not extract trunk ID - try to find by phone number
+                        logger.warning(f"[TRUNK] Could not extract trunk ID from conflict, trying to find by phone number...")
+                        existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
+                        if existing_trunk_id:
+                            logger.info(f"[TRUNK] Found existing trunk by phone number, reusing: {existing_trunk_id}")
+                            return existing_trunk_id
+                        else:
+                            raise Exception(f"Trunk conflict detected but could not extract trunk ID or find existing trunk. Error: {error_str}")
 
                 # Handle "already exists" or "duplicate" errors - reuse existing trunk
                 if "already exists" in error_str_lower or "duplicate" in error_str_lower or "409" in error_str:
@@ -386,15 +411,30 @@ class SIPConfigurationService:
             
             logger.info(f"[DISPATCH] Found {len(rules)} existing dispatch rules")
             
-            # 2️⃣ Find the global rule by name
+            # 2️⃣ First, check if ANY existing rule already has this trunk
+            # This prevents conflicts when creating new rules
             target_rule = None
+            for rule in rules:
+                current_trunk_ids = list(getattr(rule, "trunk_ids", []) or [])
+                if trunk_id in current_trunk_ids:
+                    rule_id = (
+                        getattr(rule, "sip_dispatch_rule_id", None)
+                        or getattr(rule, "dispatch_rule_id", None)
+                        or getattr(rule, "id", None)
+                    )
+                    rule_name_attr = getattr(rule, "name", None) or "unnamed"
+                    logger.info(f"[DISPATCH] ✓ Found existing rule {rule_id} (name: {rule_name_attr}) that already has trunk {trunk_id}")
+                    logger.info(f"[DISPATCH] Reusing existing rule to avoid conflict")
+                    return rule_id
+            
+            # 3️⃣ No rule has this trunk - find or create global rule by name
             for rule in rules:
                 rule_name_attr = getattr(rule, "name", None)
                 if rule_name_attr == rule_name:
                     target_rule = rule
                     break
             
-            # 3️⃣ Create global rule if not found
+            # 4️⃣ Create global rule if not found
             if target_rule is None:
                 logger.info(f"[DISPATCH] Creating global dispatch rule (will handle all phone numbers)...")
                 
@@ -450,22 +490,48 @@ class SIPConfigurationService:
                 )
                 
                 logger.debug(f"[DISPATCH] Creating global dispatch rule with agent '{agent_name}'")
-                created = await livekit_api.sip.create_sip_dispatch_rule(create_req)
-                rule_id = (
-                    getattr(created, "sip_dispatch_rule_id", None)
-                    or getattr(created, "dispatch_rule_id", None)
-                    or getattr(created, "id", None)
-                )
-                
-                if rule_id:
-                    logger.info(f"[DISPATCH] ✓ Created global dispatch rule {rule_id} WITH agent '{agent_name}' configuration")
-                    logger.info(f"[DISPATCH] Rule ready: agent={agent_name}, trunk={trunk_id} (will add more trunks as needed)")
-                    return rule_id
-                else:
-                    logger.error(f"[DISPATCH] Failed to extract rule_id from creation response")
-                    return None
+                try:
+                    created = await livekit_api.sip.create_sip_dispatch_rule(create_req)
+                    rule_id = (
+                        getattr(created, "sip_dispatch_rule_id", None)
+                        or getattr(created, "dispatch_rule_id", None)
+                        or getattr(created, "id", None)
+                    )
+                    
+                    if rule_id:
+                        logger.info(f"[DISPATCH] ✓ Created global dispatch rule {rule_id} WITH agent '{agent_name}' configuration")
+                        logger.info(f"[DISPATCH] Rule ready: agent={agent_name}, trunk={trunk_id} (will add more trunks as needed)")
+                        return rule_id
+                    else:
+                        logger.error(f"[DISPATCH] Failed to extract rule_id from creation response")
+                        return None
+                except Exception as create_error:
+                    error_msg = str(create_error)
+                    # Check if it's a conflict error - trunk already in another rule
+                    if "Conflicting SIP Dispatch Rules" in error_msg or "conflict" in error_msg.lower():
+                        logger.warning(f"[DISPATCH] Conflict detected during creation: {error_msg}")
+                        logger.info(f"[DISPATCH] Re-checking existing rules for trunk {trunk_id}...")
+                        # Re-fetch rules and find the one with this trunk
+                        response = await livekit_api.sip.list_sip_dispatch_rule(api.ListSIPDispatchRuleRequest())
+                        rules = response.items if hasattr(response, "items") else response or []
+                        for rule in rules:
+                            current_trunk_ids = list(getattr(rule, "trunk_ids", []) or [])
+                            if trunk_id in current_trunk_ids:
+                                rule_id = (
+                                    getattr(rule, "sip_dispatch_rule_id", None)
+                                    or getattr(rule, "dispatch_rule_id", None)
+                                    or getattr(rule, "id", None)
+                                )
+                                rule_name_attr = getattr(rule, "name", None) or "unnamed"
+                                logger.info(f"[DISPATCH] ✓ Found conflicting rule {rule_id} (name: {rule_name_attr}) - reusing it")
+                                return rule_id
+                        logger.error(f"[DISPATCH] Conflict detected but could not find rule with trunk {trunk_id}")
+                        return None
+                    else:
+                        # Re-raise if it's not a conflict error
+                        raise
             
-            # 4️⃣ Rule already exists - verify trunk is attached
+            # 5️⃣ Rule already exists - verify trunk is attached
             rule_id = (
                 getattr(target_rule, "sip_dispatch_rule_id", None)
                 or getattr(target_rule, "dispatch_rule_id", None)
