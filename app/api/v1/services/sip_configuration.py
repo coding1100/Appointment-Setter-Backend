@@ -14,6 +14,7 @@ ARCHITECTURE:
 
 import asyncio
 import logging
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from livekit import api
@@ -118,6 +119,70 @@ class SIPConfigurationService:
 
         return None
 
+    def _extract_trunk_id_from_conflict_error(self, error_message: str) -> Optional[str]:
+        """
+        Extract the conflicting trunk ID from a LiveKit conflict error message.
+        
+        Error format example:
+        "Conflicting inbound SIP Trunks: "<new>" and "ST_s5G6WaGoPVL4", using the same number(s)..."
+        
+        Returns the trunk ID (e.g., "ST_s5G6WaGoPVL4") if found, None otherwise.
+        """
+        # Pattern to match trunk IDs in the error message
+        # Look for patterns like "ST_xxx" or similar trunk ID formats
+        patterns = [
+            r'"([ST]_[A-Za-z0-9]+)"',  # Matches "ST_xxxxx" format
+            r'and\s+"([A-Za-z0-9_]+)"',  # Matches trunk ID after "and"
+            r'Trunk[^"]*"([A-Za-z0-9_]+)"',  # Matches trunk ID in various formats
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, error_message)
+            for match in matches:
+                # Skip "<new>" placeholder
+                if match.lower() not in ["<new>", "new"] and match.startswith(("ST_", "IT_", "TR_")):
+                    logger.debug(f"[TRUNK] Extracted trunk ID from conflict error: {match}")
+                    return match
+        
+        logger.warning(f"[TRUNK] Could not extract trunk ID from conflict error: {error_message}")
+        return None
+
+    async def _verify_trunk_exists(self, livekit_api: api.LiveKitAPI, trunk_id: str) -> bool:
+        """
+        Verify that a trunk ID exists and is valid in LiveKit.
+        
+        Returns True if trunk exists, False otherwise.
+        """
+        if not trunk_id or not trunk_id.startswith(("ST_", "IT_", "TR_")):
+            logger.warning(f"[TRUNK] Invalid trunk ID format: {trunk_id}")
+            return False
+        
+        try:
+            if not hasattr(livekit_api.sip, "list_sip_inbound_trunk"):
+                logger.warning("[TRUNK] Cannot verify trunk - SDK missing list method")
+                return False
+            
+            response = await livekit_api.sip.list_sip_inbound_trunk(api.ListSIPInboundTrunkRequest())
+            trunks = response.items if hasattr(response, "items") else response or []
+            
+            for trunk in trunks:
+                trunk_id_attr = (
+                    getattr(trunk, "sip_trunk_id", None)
+                    or getattr(trunk, "inbound_trunk_id", None)
+                    or getattr(trunk, "trunk_id", None)
+                    or getattr(trunk, "id", None)
+                )
+                if trunk_id_attr == trunk_id:
+                    logger.info(f"[TRUNK] Verified trunk exists: {trunk_id}")
+                    return True
+            
+            logger.warning(f"[TRUNK] Trunk {trunk_id} not found in LiveKit")
+            return False
+            
+        except Exception as e:
+            logger.error(f"[TRUNK] Failed to verify trunk existence: {e}")
+            return False
+
     async def _get_or_create_sip_trunk(self, phone_number: str) -> str:
         """
         Get existing SIP trunk or create new one for phone number.
@@ -195,26 +260,65 @@ class SIPConfigurationService:
                 return sip_trunk_id
                 
             except Exception as create_error:
-                error_str = str(create_error).lower()
+                error_str = str(create_error)
+                error_str_lower = error_str.lower()
 
-                # Handle "already exists" errors
-                if "already exists" in error_str or "duplicate" in error_str or "409" in error_str:
+                # Handle "already exists" or "duplicate" errors
+                if "already exists" in error_str_lower or "duplicate" in error_str_lower or "409" in error_str:
                     existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
                     if existing_trunk_id:
+                        logger.info(f"[TRUNK] Found existing trunk via lookup: {existing_trunk_id}")
                         return existing_trunk_id
                     raise Exception("Could not retrieve existing SIP trunk ID from LiveKit")
+
+                # Handle "conflicting" trunk errors - extract and reuse the conflicting trunk
+                if "conflicting" in error_str_lower or "conflict" in error_str_lower:
+                    conflicting_trunk_id = self._extract_trunk_id_from_conflict_error(error_str)
+                    if conflicting_trunk_id:
+                        # Verify the conflicting trunk exists and is valid
+                        if await self._verify_trunk_exists(livekit_api, conflicting_trunk_id):
+                            logger.info(f"[TRUNK] Reusing conflicting trunk: {conflicting_trunk_id}")
+                            return conflicting_trunk_id
+                        else:
+                            logger.warning(f"[TRUNK] Conflicting trunk {conflicting_trunk_id} not found, will fail")
+                    # If we can't extract or verify, try lookup by phone number as fallback
+                    existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
+                    if existing_trunk_id:
+                        logger.info(f"[TRUNK] Found existing trunk via lookup after conflict: {existing_trunk_id}")
+                        return existing_trunk_id
+                    raise Exception(f"Trunk conflict detected but could not resolve: {error_str}")
 
                 logger.error(f"Failed to create SIP inbound trunk: {create_error}")
                 raise
 
         except Exception as e:
-            error_str = str(e).lower()
-            if "already exists" in error_str or "duplicate" in error_str or "409" in error_str:
+            error_str = str(e)
+            error_str_lower = error_str.lower()
+            
+            # Handle "already exists" or "duplicate" errors
+            if "already exists" in error_str_lower or "duplicate" in error_str_lower or "409" in error_str:
                 livekit_api = self._get_livekit_api()
                 existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
                 if existing_trunk_id:
                     return existing_trunk_id
-            raise Exception(f"Failed to setup SIP trunk: {str(e)}")
+            
+            # Handle "conflicting" trunk errors - extract and reuse the conflicting trunk
+            if "conflicting" in error_str_lower or "conflict" in error_str_lower:
+                livekit_api = self._get_livekit_api()
+                conflicting_trunk_id = self._extract_trunk_id_from_conflict_error(error_str)
+                if conflicting_trunk_id:
+                    # Verify the conflicting trunk exists and is valid
+                    if await self._verify_trunk_exists(livekit_api, conflicting_trunk_id):
+                        logger.info(f"[TRUNK] Reusing conflicting trunk: {conflicting_trunk_id}")
+                        return conflicting_trunk_id
+                # If we can't extract or verify, try lookup by phone number as fallback
+                existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
+                if existing_trunk_id:
+                    logger.info(f"[TRUNK] Found existing trunk via lookup after conflict: {existing_trunk_id}")
+                    return existing_trunk_id
+                raise Exception(f"Trunk conflict detected but could not resolve: {error_str}")
+            
+            raise Exception(f"Failed to setup SIP trunk: {error_str}")
 
     async def _attach_trunk_to_dispatch_rule(
         self, livekit_api: api.LiveKitAPI, trunk_id: str, phone_number: str
@@ -548,17 +652,9 @@ class SIPConfigurationService:
 
             # Step 1: Get or create SIP trunk for this phone number
             # NOTE: Trunk does NOT contain tenant_id - multi-tenant routing via SIP headers
-            trunk_id = None
-            try:
-                trunk_id = await self._get_or_create_sip_trunk(phone_number)
-                logger.info(f"[SIP SETUP] ✓ SIP trunk ready: {trunk_id}")
-            except Exception as trunk_error:
-                normalized_phone = normalize_phone_number_safe(phone_number) or phone_number
-                phone_clean = (
-                    normalized_phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
-                )
-                trunk_id = f"trunk-{phone_clean}"
-                logger.warning(f"[SIP SETUP] Could not verify/create SIP trunk: {trunk_error}. Using fallback: {trunk_id}")
+            # CRITICAL: Must have a valid trunk ID - no fallback to string IDs
+            trunk_id = await self._get_or_create_sip_trunk(phone_number)
+            logger.info(f"[SIP SETUP] ✓ SIP trunk ready: {trunk_id}")
 
             # Step 2: Attach trunk to dispatch rule (auto-create if needed)
             normalized_phone = normalize_phone_number_safe(phone_number) or phone_number
