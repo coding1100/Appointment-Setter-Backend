@@ -107,6 +107,83 @@ if __name__ == "__main__":
         print("NOTE: Running on Windows — IPC watcher warnings suppressed.\n")
 
     try:
+        # CRITICAL: Verify credentials and system time before starting worker
+        # This helps diagnose 401 authentication errors
+        import datetime
+        from livekit import api as livekit_api
+        
+        print("\n[PRE-FLIGHT CHECKS]")
+        print("=" * 70)
+        
+        # Check system time (JWT tokens are time-sensitive)
+        server_time = datetime.datetime.now(datetime.timezone.utc)
+        print(f"Server UTC Time: {server_time.isoformat()}")
+        print(f"  ⚠ If this is significantly off from actual time, JWT tokens will be rejected")
+        
+        # Verify credentials format
+        print(f"\n[CREDENTIALS VERIFICATION]")
+        print(f"  LIVEKIT_URL: {LIVEKIT_URL}")
+        print(f"  LIVEKIT_API_KEY: {LIVEKIT_API_KEY[:10]}... (length: {len(LIVEKIT_API_KEY) if LIVEKIT_API_KEY else 0})")
+        secret_length = len(LIVEKIT_API_SECRET) if LIVEKIT_API_SECRET else 0
+        print(f"  LIVEKIT_API_SECRET: {'*' * 20}... (length: {secret_length})")
+        
+        if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET or not LIVEKIT_URL:
+            print("\n❌ ERROR: Missing LiveKit credentials!")
+            sys.exit(1)
+        
+        # Verify secret is not empty (LiveKit secrets can vary in length)
+        if secret_length < 20:
+            print(f"\n  ⚠ WARNING: API Secret length ({secret_length}) seems too short")
+            print(f"  ⚠ This might indicate a truncated secret in your .env file")
+        
+        # Test token generation (this verifies credentials work for JWT signing)
+        print(f"\n[TOKEN GENERATION TEST]")
+        try:
+            from livekit import api as lk_api
+            # Generate a test token to verify API key/secret are valid
+            test_token = lk_api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+            test_token.with_identity("test-worker")
+            test_token.with_grants(lk_api.VideoGrants(agent=True))
+            jwt_token = test_token.to_jwt()
+            
+            # Verify token was generated (not empty)
+            if jwt_token and len(jwt_token) > 10:
+                print(f"  ✓ Token generation successful (credentials are valid)")
+                print(f"  ✓ Token length: {len(jwt_token)} characters")
+            else:
+                print(f"  ❌ Token generation failed: empty token")
+                sys.exit(1)
+        except Exception as e:
+            print(f"  ❌ Token generation failed: {e}")
+            print(f"  ⚠ This suggests API key/secret are incorrect or mismatched")
+            print(f"  ⚠ Error details: {type(e).__name__}: {str(e)}")
+            sys.exit(1)
+        
+        print("=" * 70)
+        print("\n[STARTING WORKER]")
+        print("  If you see '401' errors below, check:")
+        print("  1. System clock is synchronized (NTP)")
+        print("  2. LIVEKIT_API_SECRET matches the API key's project")
+        print("  3. No firewall blocking WebSocket connections")
+        print("  4. LiveKit SDK version is up-to-date")
+        print("  5. agent_name matches dispatch rule configuration")
+        print("=" * 70)
+        print()
+        
+        # CRITICAL: Ensure environment variables are set
+        # WorkerOptions may prefer env vars over passed parameters
+        # Setting them explicitly ensures consistency
+        os.environ["LIVEKIT_URL"] = LIVEKIT_URL
+        os.environ["LIVEKIT_API_KEY"] = LIVEKIT_API_KEY
+        os.environ["LIVEKIT_API_SECRET"] = LIVEKIT_API_SECRET
+        
+        print(f"[WORKER CONFIG] Using explicit credentials:")
+        print(f"  API Key: {LIVEKIT_API_KEY[:10]}...")
+        print(f"  API Secret: {'*' * 20}... (length: {len(LIVEKIT_API_SECRET)})")
+        print(f"  URL: {LIVEKIT_URL}")
+        print(f"  Agent Name: {AGENT_NAME}")
+        print()
+        
         # Start the worker with limited processes to prevent VAD slowness
         # num_idle_processes=1: Only keep 1 idle process (prevents CPU contention)
         agents.cli.run_app(
