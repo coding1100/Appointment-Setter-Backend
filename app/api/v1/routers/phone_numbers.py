@@ -261,6 +261,7 @@ async def unassign_phone_from_agent(agent_id: str, current_user: Dict = Depends(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No phone number assigned to this agent")
 
         # Cleanup SIP configuration if trunk was configured
+        # CRITICAL: Delete both dispatch rule AND trunk (one trunk per phone number)
         if phone.get("sip_trunk_id") and phone.get("tenant_id"):
             try:
                 from app.api.v1.services.sip_configuration import sip_configuration_service
@@ -268,6 +269,7 @@ async def unassign_phone_from_agent(agent_id: str, current_user: Dict = Depends(
                 await sip_configuration_service.cleanup_phone_number_sip(
                     tenant_id=phone["tenant_id"],
                     phone_number=phone["phone_number"],
+                    trunk_id=phone.get("sip_trunk_id"),  # Pass trunk_id for deletion
                 )
             except Exception as cleanup_error:
                 logger.warning(f"Failed to cleanup SIP configuration: {cleanup_error}")
