@@ -18,6 +18,9 @@ livekit-plugins-deepgram
 livekit-plugins-elevenlabs
 livekit-plugins-google
 livekit-plugins-silero>=0.7.0
+transformers>=4.36.0
+packaging>=23.2
+sentencepiece>=0.1.99
 livekit-plugins-turn-detector
 
 # OpenTelemetry (pinned to avoid conflicts with livekit-agents)
@@ -29,5 +32,3 @@ structlog
 prometheus-client
 fastapi-mail
 pydantic-settings
-packaging>=23.2
-transformers>=4.36.0
