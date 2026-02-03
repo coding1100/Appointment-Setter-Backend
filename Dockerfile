@@ -21,8 +21,9 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 
 COPY . .
 
-# REQUIRED: Download LiveKit models at build time
-RUN python run_voice_worker.py download-files
+# Download LiveKit VAD + turn detector models (NO credentials required)
+RUN python scripts/download_livekit_model.py
+
 
 
 # ===============================
