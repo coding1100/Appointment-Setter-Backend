@@ -1,6 +1,9 @@
 services:
   backend:
-    image: ${DOCKER_IMAGE:-umairmalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: appointment-setter-backend:latest
     container_name: appointment-setter-backend
     restart: unless-stopped
     ports:
@@ -56,13 +59,6 @@ services:
     depends_on:
       - redis
 
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
 
   redis:
     image: redis:7-alpine
@@ -79,18 +75,17 @@ services:
 
     command: redis-server --appendonly yes
 
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
 
   voice-worker:
-    image: ${DOCKER_IMAGE:-umairmalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: appointment-setter-backend:latest
     container_name: appointment-setter-voice-worker
     restart: unless-stopped
+
+    # 🔥 REQUIRED: inference subprocess runs as root
+    user: root
 
     environment:
       ENVIRONMENT: production
@@ -127,7 +122,16 @@ services:
 
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
 
-      # 🔥 CRITICAL: VAD + Turn Detector performance
+      # 🔥 HuggingFace cache configuration
+      HF_HOME: /root/.cache/huggingface
+      TRANSFORMERS_CACHE: /root/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /root/.cache/huggingface
+      
+      # Disable offline mode to allow fallback downloads if needed
+      HF_HUB_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "0"
+
+      # 🔥 VAD + Turn Detector performance
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
@@ -137,8 +141,9 @@ services:
     volumes:
       - ./.env:/app/.env:ro
 
-      # ✅ PERSISTENT HuggingFace cache (THIS FIXES model_q8.onnx)
-      - hf-cache:/home/appuser/.cache/huggingface
+      # ✅ Mount HuggingFace cache as a named volume for persistence
+      # This ensures the model downloaded during build is available at runtime
+      - hf-cache:/root/.cache/huggingface
 
     networks:
       - app-network
@@ -174,3 +179,5 @@ networks:
 volumes:
   redis-data:
   hf-cache:
+    # Optional: specify driver options for better performance
+    driver: local
