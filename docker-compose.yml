@@ -1,57 +1,46 @@
 services:
   backend:
-    # Use image from Docker Hub (tag controlled via IMAGE_TAG env)
     image: ${DOCKER_IMAGE:-umairmalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
-    # build: .  # Uncomment for local development
     container_name: appointment-setter-backend
     restart: unless-stopped
     ports:
       - "8001:8000"
 
     environment:
-      # App runtime
       ENVIRONMENT: production
       DEBUG: "false"
       LOG_LEVEL: INFO
       API_HOST: 0.0.0.0
       API_PORT: 8000
 
-      # Core services
       REDIS_URL: redis://redis:6379/0
 
-      # Firebase
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
       FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY}
       FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL}
 
-      # LiveKit
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       LIVEKIT_URL: ${LIVEKIT_URL}
       LIVEKIT_SIP_DOMAIN: ${LIVEKIT_SIP_DOMAIN}
 
-      # Twilio
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
       TWILIO_WEBHOOK_BASE_URL: ${TWILIO_WEBHOOK_BASE_URL}
 
-      # AI Services
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY}
       ELEVEN_API_KEY: ${ELEVEN_API_KEY}
       AGENT_VOICE: ${AGENT_VOICE}
 
-      # Email
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
       SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL}
 
-      # Security / JWT
       SECRET_KEY: ${SECRET_KEY}
       JWT_ALGORITHM: ${JWT_ALGORITHM}
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES}
       JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS}
 
-      # GCP Service Account
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
 
     env_file:
@@ -99,58 +88,46 @@ services:
 
 
   voice-worker:
-    # Use same image as backend (multi-role container)
     image: ${DOCKER_IMAGE:-umairmalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
-    # build: .  # Uncomment for local development
     container_name: appointment-setter-voice-worker
     restart: unless-stopped
 
     environment:
-      # App runtime
       ENVIRONMENT: production
       DEBUG: "false"
       LOG_LEVEL: INFO
 
-      # Core services
       REDIS_URL: redis://redis:6379/0
 
-      # Firebase
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
       FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY}
       FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL}
 
-      # LiveKit (Voice Agents)
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       LIVEKIT_URL: ${LIVEKIT_URL}
       LIVEKIT_SIP_DOMAIN: ${LIVEKIT_SIP_DOMAIN}
 
-      # Twilio
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
       TWILIO_WEBHOOK_BASE_URL: ${TWILIO_WEBHOOK_BASE_URL}
 
-      # AI Services
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY}
       ELEVEN_API_KEY: ${ELEVEN_API_KEY}
       AGENT_VOICE: ${AGENT_VOICE}
 
-      # Email
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
       SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL}
 
-      # Security / JWT
       SECRET_KEY: ${SECRET_KEY}
       JWT_ALGORITHM: ${JWT_ALGORITHM}
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES}
       JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS}
 
-      # GCP Service Account
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
 
       # 🔥 CRITICAL: VAD + Turn Detector performance
-      # Prevents ONNX / BLAS thread contention
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
@@ -159,6 +136,9 @@ services:
 
     volumes:
       - ./.env:/app/.env:ro
+
+      # ✅ PERSISTENT HuggingFace cache (THIS FIXES model_q8.onnx)
+      - hf-cache:/home/appuser/.cache/huggingface
 
     networks:
       - app-network
@@ -169,7 +149,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"        # REQUIRED for Turn Detector
+          cpus: "2.0"
           memory: 4G
         reservations:
           cpus: "1.0"
@@ -193,3 +173,4 @@ networks:
 
 volumes:
   redis-data:
+  hf-cache:
