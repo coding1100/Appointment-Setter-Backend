@@ -11,17 +11,21 @@ passlib[bcrypt]
 bcrypt==4.3.0
 sendgrid
 twilio
+
+# LiveKit Agents + Plugins
 livekit-agents>=1.3.10
 livekit-plugins-deepgram
 livekit-plugins-elevenlabs
 livekit-plugins-google
 livekit-plugins-silero>=0.7.0
-# Pin OpenTelemetry SDK versions to avoid import conflicts with livekit-agents
+livekit-plugins-turn-detector>=0.2.0
+
+# OpenTelemetry (pinned to avoid conflicts with livekit-agents)
 opentelemetry-api>=1.27.0,<2.0.0
 opentelemetry-sdk>=1.27.0,<2.0.0
+
 boto3
 structlog
-prometheus-client
 prometheus-client
 fastapi-mail
 pydantic-settings
