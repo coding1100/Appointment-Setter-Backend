@@ -29,3 +29,5 @@ structlog
 prometheus-client
 fastapi-mail
 pydantic-settings
+packaging>=23.2
+transformers>=4.36.0
