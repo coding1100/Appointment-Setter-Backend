@@ -10,11 +10,6 @@ ARCHITECTURE (LiveKit Official Telephony Flow - Multi-Tenant Design):
 - Worker extracts tenant_id, call_id, and called_number from SIP headers
 - Worker loads config from Redis: tenant_config:<tenant_id>:<call_id>
 - Worker FAILS if config is missing (no fallback to defaults)
-
-SIP HEADERS (set by Twilio webhook):
-- X-LK-TenantId: tenant identifier
-- X-LK-CallId: unique call identifier
-- X-LK-CalledNumber: phone number that was called
 """
 
 import os
@@ -32,11 +27,6 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
-# -------------------------------------------------
-# CLI MODE DETECTION (OFFICIAL LIVEKIT PATTERN)
-# -------------------------------------------------
-IS_DOWNLOAD_ONLY = len(sys.argv) > 1 and sys.argv[1] == "download-files"
-
 # Load environment variables
 load_dotenv()
 
@@ -53,44 +43,15 @@ if __name__ == "__main__":
     print("=" * 70)
     print("Starting LiveKit Voice Agent Worker")
     print("=" * 70)
-
-    # -------------------------------------------------
-    # DOWNLOAD FILES MODE (NO CREDENTIALS REQUIRED)
-    # -------------------------------------------------
-    if IS_DOWNLOAD_ONLY:
-        print("\n[DOWNLOAD FILES MODE]")
-        print("=" * 70)
-        print("Downloading LiveKit agent model files (VAD, Turn Detector, etc.)")
-        print("No LiveKit credentials required.")
-        print("=" * 70)
-
-        try:
-            # OFFICIAL LiveKit CLI entrypoint
-            from livekit.agents.cli import main as cli_main
-
-            # Emulate: python agent.py download-files
-            sys.argv = ["livekit-agents", "download-files"]
-            cli_main()
-
-            print("\n✓ Model files downloaded successfully")
-            sys.exit(0)
-
-        except Exception as e:
-            print(f"\n❌ Failed to download model files: {e}")
-            import traceback
-            traceback.print_exc()
-            sys.exit(1)
-
-    # -------------------------------------------------
-    # WORKER MODE (CREDENTIALS REQUIRED)
-    # -------------------------------------------------
     print(f"LiveKit URL: {LIVEKIT_URL}")
     print(f"Agent Name: {AGENT_NAME}")
-    print("  ↳ Single global agent handles ALL phone numbers")
-    print("  ↳ Multi-tenant routing via SIP headers (X-LK-TenantId)")
+    print(f"  ↳ Single global agent handles ALL phone numbers")
+    print(f"  ↳ Multi-tenant routing via SIP headers (X-LK-TenantId)")
     print("=" * 70)
 
+    # -------------------------------------------------
     # Windows IPC warning suppressor
+    # -------------------------------------------------
     if sys.platform == "win32":
         class WindowsIPCFilter(logging.Filter):
             def filter(self, record):
@@ -98,47 +59,29 @@ if __name__ == "__main__":
                 return not ("DuplexClosed" in msg or "Error in _read_ipc_task" in msg)
 
         logging.getLogger("livekit.agents").addFilter(WindowsIPCFilter())
+        print("NOTE: Running on Windows — IPC watcher warnings suppressed.\n")
 
     try:
-        import datetime
-        from livekit import api as lk_api
+        # -------------------------------------------------
+        # Ensure env vars are available for LiveKit SDK
+        # -------------------------------------------------
+        if LIVEKIT_URL:
+            os.environ["LIVEKIT_URL"] = LIVEKIT_URL
+        if LIVEKIT_API_KEY:
+            os.environ["LIVEKIT_API_KEY"] = LIVEKIT_API_KEY
+        if LIVEKIT_API_SECRET:
+            os.environ["LIVEKIT_API_SECRET"] = LIVEKIT_API_SECRET
 
-        print("\n[PRE-FLIGHT CHECKS]")
+        print("[WORKER CONFIG]")
+        print(f"  LIVEKIT_URL set: {'yes' if LIVEKIT_URL else 'no'}")
+        print(f"  LIVEKIT_API_KEY set: {'yes' if LIVEKIT_API_KEY else 'no'}")
+        print(f"  LIVEKIT_API_SECRET set: {'yes' if LIVEKIT_API_SECRET else 'no'}")
+        print(f"  Agent Name: {AGENT_NAME}")
         print("=" * 70)
 
-        server_time = datetime.datetime.now(datetime.timezone.utc)
-        print(f"Server UTC Time: {server_time.isoformat()}")
-        print("  ⚠ JWT tokens are time-sensitive")
-
-        print("\n[CREDENTIALS VERIFICATION]")
-        print(f"  LIVEKIT_URL: {LIVEKIT_URL}")
-        print(f"  LIVEKIT_API_KEY: {LIVEKIT_API_KEY[:10]}... (length: {len(LIVEKIT_API_KEY) if LIVEKIT_API_KEY else 0})")
-        print(f"  LIVEKIT_API_SECRET: {'*' * 20}... (length: {len(LIVEKIT_API_SECRET) if LIVEKIT_API_SECRET else 0})")
-
-        if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET or not LIVEKIT_URL:
-            print("\n❌ ERROR: Missing LiveKit credentials!")
-            sys.exit(1)
-
-        # Validate token generation
-        token = lk_api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-        token.with_identity("worker-test")
-        token.with_grants(lk_api.VideoGrants(agent=True))
-        jwt = token.to_jwt()
-
-        if not jwt or len(jwt) < 20:
-            print("\n❌ ERROR: Failed to generate JWT")
-            sys.exit(1)
-
-        print("✓ LiveKit credentials validated")
-
-        # Ensure env vars are set explicitly
-        os.environ["LIVEKIT_URL"] = LIVEKIT_URL
-        os.environ["LIVEKIT_API_KEY"] = LIVEKIT_API_KEY
-        os.environ["LIVEKIT_API_SECRET"] = LIVEKIT_API_SECRET
-
-        print("\n[STARTING WORKER]")
-        print("=" * 70)
-
+        # -------------------------------------------------
+        # Start LiveKit worker
+        # -------------------------------------------------
         agents.cli.run_app(
             agents.WorkerOptions(
                 entrypoint_fnc=entrypoint,
@@ -152,7 +95,7 @@ if __name__ == "__main__":
         )
 
     except KeyboardInterrupt:
-        print("\n✓ Worker stopped by user")
+        print("\n✓ Worker stopped by user.")
         sys.exit(0)
 
     except Exception as e:
