@@ -2,11 +2,12 @@ services:
   backend:
     # Use image from Docker Hub (tag controlled via IMAGE_TAG env)
     image: ${DOCKER_IMAGE:-umaimalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
-    # build: .  # Uncomment this for local development
+    # build: .  # Uncomment for local development
     container_name: appointment-setter-backend
     restart: unless-stopped
     ports:
       - "8001:8000"
+
     environment:
       # App runtime
       ENVIRONMENT: production
@@ -23,7 +24,7 @@ services:
       FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY}
       FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL}
 
-      # LiveKit (Voice Agents)
+      # LiveKit
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       LIVEKIT_URL: ${LIVEKIT_URL}
@@ -50,19 +51,22 @@ services:
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES}
       JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS}
 
-      # GCP Service Account (if used)
+      # GCP Service Account
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
+
     env_file:
       - .env
+
     volumes:
-      # Mount .env file for local development
       - ./.env:/app/.env:ro
-      # Optional: Mount static files if needed
       - ./app/static:/app/app/static:ro
+
     networks:
       - app-network
+
     depends_on:
       - redis
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
@@ -70,17 +74,22 @@ services:
       retries: 3
       start_period: 40s
 
+
   redis:
     image: redis:7-alpine
     container_name: appointment-setter-redis
     restart: unless-stopped
     ports:
       - "6379:6379"
+
     volumes:
       - redis-data:/data
+
     networks:
       - app-network
+
     command: redis-server --appendonly yes
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -88,12 +97,14 @@ services:
       retries: 3
       start_period: 10s
 
+
   voice-worker:
-    # Use image from Docker Hub (tag controlled via IMAGE_TAG env)
+    # Use same image as backend (multi-role container)
     image: ${DOCKER_IMAGE:-umaimalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
     # build: .  # Uncomment for local development
     container_name: appointment-setter-voice-worker
     restart: unless-stopped
+
     environment:
       # App runtime
       ENVIRONMENT: production
@@ -135,32 +146,38 @@ services:
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES}
       JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS}
 
-      # GCP Service Account (if used)
+      # GCP Service Account
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
 
-      # VAD Performance Optimization (prevents thread contention)
-      # These must be set in Docker environment to ensure worker processes inherit them
+      # 🔥 CRITICAL: VAD + Turn Detector performance
+      # Prevents ONNX / BLAS thread contention
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
       VECLIB_MAXIMUM_THREADS: "1"
       NUMEXPR_NUM_THREADS: "1"
+
     volumes:
       - ./.env:/app/.env:ro
+
     networks:
       - app-network
+
     depends_on:
       - redis
+
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: "2.0"        # REQUIRED for Turn Detector
           memory: 4G
         reservations:
-          cpus: '1.0'
+          cpus: "1.0"
           memory: 2G
+
     entrypoint: []
     command: ["python", "run_voice_worker.py", "start"]
+
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f voice_worker || exit 1"]
       interval: 30s
@@ -168,10 +185,11 @@ services:
       retries: 3
       start_period: 40s
 
+
 networks:
   app-network:
     driver: bridge
 
+
 volumes:
   redis-data:
-
