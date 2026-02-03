@@ -37,7 +37,7 @@ jobs:
             echo "env=development" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build and push Docker image (models baked in)
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -64,28 +64,19 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up SSH key
-        env:
-          SSH_KEY: ${{ secrets.PROD_VPS_SSH_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.PROD_VPS_HOST }} >> ~/.ssh/known_hosts
-
       - name: Deploy to Production VPS
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.PROD_VPS_HOST }}
           username: ${{ secrets.PROD_VPS_USERNAME }}
-          key_path: ~/.ssh/deploy_key
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
           port: ${{ secrets.PROD_VPS_PORT || 22 }}
+          timeout: 30s
+          command_timeout: 10m
           script: |
             cd ${{ secrets.PROD_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
             git pull origin main
-            docker login -u "${{ secrets.DOCKER_USERNAME }}" -p "${{ secrets.DOCKER_PASSWORD }}"
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
             docker pull ${{ env.DOCKER_IMAGE }}:latest
             export DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}
             export IMAGE_TAG=latest
@@ -102,30 +93,21 @@ jobs:
     if: github.ref == 'refs/heads/dev'
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up SSH key
-        env:
-          SSH_KEY: ${{ secrets.DEV_VPS_SSH_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.DEV_VPS_HOST }} >> ~/.ssh/known_hosts
-
       - name: Deploy to Development VPS
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.DEV_VPS_HOST }}
           username: ${{ secrets.DEV_VPS_USERNAME }}
-          key_path: ~/.ssh/deploy_key
+          key: ${{ secrets.DEV_VPS_SSH_KEY }}
           port: ${{ secrets.DEV_VPS_PORT || 22 }}
+          timeout: 30s
+          command_timeout: 10m
           script: |
             cd ${{ secrets.DEV_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
             git fetch origin dev
             git checkout dev || git checkout -b dev
             git reset --hard origin/dev
-            docker login -u "${{ secrets.DOCKER_USERNAME }}" -p "${{ secrets.DOCKER_PASSWORD }}"
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
             docker pull ${{ env.DOCKER_IMAGE }}:dev
             export DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}
             export IMAGE_TAG=dev
