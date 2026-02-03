@@ -1,6 +1,3 @@
-# ===============================
-# Builder stage
-# ===============================
 FROM python:3.11 AS builder
 
 RUN apt-get update && apt-get install -y \

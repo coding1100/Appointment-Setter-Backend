@@ -1,7 +1,7 @@
 services:
   backend:
     # Use image from Docker Hub (tag controlled via IMAGE_TAG env)
-    image: ${DOCKER_IMAGE:-umaimalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
+    image: ${DOCKER_IMAGE:-umairmalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
     # build: .  # Uncomment for local development
     container_name: appointment-setter-backend
     restart: unless-stopped
@@ -100,7 +100,7 @@ services:
 
   voice-worker:
     # Use same image as backend (multi-role container)
-    image: ${DOCKER_IMAGE:-umaimalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
+    image: ${DOCKER_IMAGE:-umairmalick/appointment-setter-backend}:${IMAGE_TAG:-latest}
     # build: .  # Uncomment for local development
     container_name: appointment-setter-voice-worker
     restart: unless-stopped
