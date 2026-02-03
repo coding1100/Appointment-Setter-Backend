@@ -26,44 +26,30 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push Docker image (main)
-        if: github.ref == 'refs/heads/main'
+      # 🔥 SINGLE, CACHE-SAFE BUILD STEP
+      - name: Build and push Docker image (NO STALE DEPS)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: |
-            ${{ env.DOCKER_IMAGE }}:latest
-            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
-          labels: |
-            org.opencontainers.image.title=Appointment Setter Backend
-            org.opencontainers.image.description=Backend API for AI Appointment Setter
-            org.opencontainers.image.version=${{ github.sha }}
-            org.opencontainers.image.environment=production
-          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
 
-      - name: Build and push Docker image (dev)
-        if: github.ref == 'refs/heads/dev'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
+          # 🔥 FORCE FULL REBUILD (DEPENDENCIES INCLUDED)
+          no-cache: true
+
+          # 🔥 CACHE BUSTER (even if no-cache removed later)
           build-args: |
             BUILD_TIME=${{ github.sha }}
+
           tags: |
-            ${{ env.DOCKER_IMAGE }}:dev
+            ${{ env.DOCKER_IMAGE }}:${{ github.ref == 'refs/heads/main' && 'latest' || 'dev' }}
             ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+
           labels: |
             org.opencontainers.image.title=Appointment Setter Backend
             org.opencontainers.image.description=Backend API + Voice Worker (LiveKit)
             org.opencontainers.image.version=${{ github.sha }}
-            org.opencontainers.image.environment=development
-          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
-
+            org.opencontainers.image.environment=${{ github.ref_name }}
 
   deploy-production:
     name: Deploy to Production
@@ -82,26 +68,28 @@ jobs:
           timeout: 30s
           command_timeout: 10m
           script: |
+            set -e
+
             cd ${{ secrets.PROD_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
+
             git fetch origin main
             git checkout main || git checkout -b main
             git reset --hard origin/main
-            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login \
+              -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
             docker pull ${{ env.DOCKER_IMAGE }}:latest
+
             export DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}
             export IMAGE_TAG=latest
-            compose() {
-              if command -v docker-compose >/dev/null 2>&1; then
-                docker-compose "$@"
-              else
-                docker compose "$@"
-              fi
-            }
-            compose down
-            compose up -d
+
+            docker compose down --remove-orphans
+            docker compose pull
+            docker compose up -d --force-recreate
+
             docker image prune -f
             docker compose ps
-
 
   deploy-development:
     name: Deploy to Development
@@ -120,15 +108,25 @@ jobs:
           timeout: 30s
           command_timeout: 10m
           script: |
+            set -e
+
             cd ${{ secrets.DEV_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
+
             git fetch origin dev
             git checkout dev || git checkout -b dev
             git reset --hard origin/dev
-            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login \
+              -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
             docker pull ${{ env.DOCKER_IMAGE }}:dev
+
             export DOCKER_IMAGE=${{ env.DOCKER_IMAGE }}
             export IMAGE_TAG=dev
-            docker compose down
-            docker compose up -d
+
+            docker compose down --remove-orphans
+            docker compose pull
+            docker compose up -d --force-recreate
+
             docker image prune -f
             docker compose ps
