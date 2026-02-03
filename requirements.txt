@@ -18,7 +18,7 @@ livekit-plugins-deepgram
 livekit-plugins-elevenlabs
 livekit-plugins-google
 livekit-plugins-silero>=0.7.0
-livekit-plugins-turn-detector>=0.2.0
+livekit-plugins-turn-detector
 
 # OpenTelemetry (pinned to avoid conflicts with livekit-agents)
 opentelemetry-api>=1.27.0,<2.0.0
