@@ -274,10 +274,15 @@ class UnifiedVoiceAgentService:
                     "agent_id": agent_id,
                     "voice_id": voice_id,
                     "agent_data": self._clean_agent_data(agent_data) if agent_data else None,
+                    "call_id": session_id,  # Use session_id as call_id for browser tests
+                    "session_id": session_id,  # Also store session_id for reference
                 }
                 
                 # For browser testing, store config under tenant_config for worker
                 await self._store_tenant_config(tenant_id, session_id, room_config)
+                
+                # ALSO store by room name for direct lookup by worker
+                await self._store_room_config(room_name, room_config)
                 
                 # Create the actual room for browser testing
                 await self._create_browser_test_room(room_name)
@@ -645,6 +650,37 @@ class UnifiedVoiceAgentService:
                 
         except Exception as exc:
             logger.error(f"[REDIS STORE] ✗ Error storing config: {exc}", exc_info=True)
+            return False
+
+    async def _store_room_config(
+        self, room_name: str, config: Dict[str, Any], ttl: int = CALL_CONFIG_TTL_SECONDS
+    ) -> bool:
+        """
+        Store call configuration in Redis by room name (for browser test sessions).
+        
+        Key format: room_config:<room_name>
+        
+        This allows the worker to look up config directly from the room name
+        when handling browser test sessions (WebRTC participants).
+        """
+        try:
+            config_key = f"room_config:{room_name}"
+            config_json = json.dumps(config)
+            
+            logger.info(f"[REDIS STORE] Storing config by room name: {config_key}")
+            await async_redis_client.set(config_key, config_json, ttl=ttl)
+            
+            # Verify storage
+            verify_data = await async_redis_client.get(config_key)
+            if verify_data:
+                logger.info(f"[REDIS STORE] ✓ Successfully stored config by room name")
+                return True
+            else:
+                logger.error(f"[REDIS STORE] ✗ Failed to verify config storage by room name")
+                return False
+                
+        except Exception as exc:
+            logger.error(f"[REDIS STORE] ✗ Error storing config by room name: {exc}", exc_info=True)
             return False
 
     async def _store_config_by_twilio_callsid(

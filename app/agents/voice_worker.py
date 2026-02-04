@@ -107,37 +107,69 @@ class VoiceAgent(Agent):
 async def entrypoint(ctx: agents.JobContext):
     logger.info("=" * 80)
     logger.info("[WORKER ENTRYPOINT] Voice agent starting")
-    logger.info(f"[WORKER ENTRYPOINT] Room (logging only): {ctx.room.name}")
+    logger.info(f"[WORKER ENTRYPOINT] Room: {ctx.room.name}")
     logger.info("=" * 80)
 
     # 1️⃣ Connect first
     await ctx.connect()
     await asyncio.sleep(0.5)
 
-    # 2️⃣ Find SIP participant
+    # 2️⃣ Determine connection type: SIP (phone) or WebRTC (browser)
     sip_participant = None
     for p in ctx.room.remote_participants.values():
         if p.attributes:
-            sip_participant = p
-            break
+            # Check if this is a SIP participant (has SIP attributes)
+            attrs = p.attributes
+            if attrs.get("lk_callid") or attrs.get("sip.h.x-lk-callid") or attrs.get("sip.twilio.callSid"):
+                sip_participant = p
+                break
 
-    if not sip_participant:
-        raise RuntimeError("No SIP participant found")
+    config = None
+    tenant_id = None
+    call_id = None
 
-    attrs = sip_participant.attributes
-    original_call_sid = attrs.get("lk_callid") or attrs.get("sip.h.x-lk-callid")
+    if sip_participant:
+        # ========================================
+        # PHONE CALL MODE (SIP participant)
+        # ========================================
+        logger.info("[WORKER ENTRYPOINT] Detected SIP participant (phone call)")
+        attrs = sip_participant.attributes
+        original_call_sid = attrs.get("lk_callid") or attrs.get("sip.h.x-lk-callid") or attrs.get("sip.twilio.callSid")
 
-    if not original_call_sid:
-        raise RuntimeError("Missing CallSid in SIP attributes")
+        if not original_call_sid:
+            raise RuntimeError("Missing CallSid in SIP attributes")
 
-    # 3️⃣ Load config from Redis
-    config = await async_redis_client.get(f"call_config:{original_call_sid}")
-    if not config:
-        raise RuntimeError(f"No config found for CallSid {original_call_sid}")
+        logger.info(f"[WORKER ENTRYPOINT] CallSid: {original_call_sid}")
 
-    config = json.loads(config)
-    tenant_id = config.get("tenant_id")
-    call_id = config.get("call_id")
+        # Load config from Redis by CallSid
+        config = await async_redis_client.get(f"call_config:{original_call_sid}")
+        if not config:
+            raise RuntimeError(f"No config found for CallSid {original_call_sid}")
+
+        config = json.loads(config)
+        tenant_id = config.get("tenant_id")
+        call_id = config.get("call_id")
+        logger.info(f"[WORKER ENTRYPOINT] Loaded config for tenant: {tenant_id}, call_id: {call_id}")
+
+    else:
+        # ========================================
+        # BROWSER TEST MODE (WebRTC participant)
+        # ========================================
+        logger.info("[WORKER ENTRYPOINT] Detected WebRTC participant (browser test)")
+        
+        # Browser test rooms: config is stored by room name
+        room_name = ctx.room.name
+        config_key = f"room_config:{room_name}"
+        logger.info(f"[WORKER ENTRYPOINT] Looking up config for room: {room_name}")
+        
+        config = await async_redis_client.get(config_key)
+        if not config:
+            raise RuntimeError(f"No config found for browser test room: {room_name}")
+        
+        config = json.loads(config)
+        tenant_id = config.get("tenant_id")
+        call_id = config.get("call_id") or config.get("session_id")
+        logger.info(f"[WORKER ENTRYPOINT] Loaded browser test config for tenant: {tenant_id}, call_id: {call_id}")
 
     # 4️⃣ Build instructions
     instructions = get_template(
@@ -191,8 +223,10 @@ async def entrypoint(ctx: agents.JobContext):
     def on_close(_):
         async def cleanup():
             try:
+                # Clean up both tenant_config and room_config
                 await async_redis_client.delete(f"tenant_config:{tenant_id}:{call_id}")
-                logger.info("[CLEANUP] Deleted per-call config")
+                await async_redis_client.delete(f"room_config:{ctx.room.name}")
+                logger.info("[CLEANUP] Deleted per-call configs")
             except Exception as e:
                 logger.warning(f"[CLEANUP] Failed: {e}")
             closed_event.set()
