@@ -60,7 +60,7 @@ jobs:
           key: ${{ secrets.DEV_VPS_SSH_KEY }}
           port: ${{ secrets.DEV_VPS_PORT || 22 }}
           timeout: 30s
-          command_timeout: 15m
+          command_timeout: 60m
           script: |
             set -e
 
