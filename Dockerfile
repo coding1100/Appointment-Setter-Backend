@@ -23,26 +23,35 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy system-wide Python packages
-COPY --from=builder /usr/local /usr/local
-
-# Copy application code
-COPY . .
-
-# Set env BEFORE downloading so build + runtime share the same cache
+# Set env early (rarely changes, so cached)
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/root/.cache/huggingface \
     HF_HUB_CACHE=/root/.cache/huggingface \
     HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface
 
-# Ensure cache dir exists and download LiveKit agent model files (turn detector, etc.)
-# This is equivalent in spirit to: `python agent.py download-files`
+# Copy system-wide Python packages (cached unless requirements.txt changes)
+COPY --from=builder /usr/local /usr/local
+
+# Copy application code in stages for optimal caching:
+# Strategy: Copy minimal files → Download models → Copy rest
+# This ensures model download (slow step) is cached unless core files change
+
+# Stage 1: Copy only essential files for download-files command
+# These files rarely change, so model download layer stays cached
+COPY run_voice_worker.py .
+COPY app/__init__.py app/
+COPY app/agents/ app/agents/
+COPY app/core/__init__.py app/core/
+COPY app/core/config.py app/core/
+
+# Stage 2: Download models (SLOW - ~5-10 min, but cached if stage 1 unchanged)
 RUN mkdir -p /root/.cache/huggingface && \
     python run_voice_worker.py download-files
 
-# Make startup script executable
-RUN chmod +x start_backend.sh || true
+# Stage 3: Copy all remaining application code
+# This invalidates cache, but model download from stage 2 remains cached
+COPY . .
 
 EXPOSE 8000
 
