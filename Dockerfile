@@ -29,15 +29,17 @@ COPY --from=builder /usr/local /usr/local
 # Copy application code
 COPY . .
 
-# Download LiveKit agent model files (turn detector, etc.)
-# Uses the same CLI pattern as: `uv run agent.py download-files`
-RUN python run_voice_worker.py download-files
-
+# Set env BEFORE downloading so build + runtime share the same cache
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/root/.cache/huggingface \
-    TRANSFORMERS_CACHE=/root/.cache/huggingface \
+    HF_HUB_CACHE=/root/.cache/huggingface \
     HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface
+
+# Ensure cache dir exists and download LiveKit agent model files (turn detector, etc.)
+# This is equivalent in spirit to: `python agent.py download-files`
+RUN mkdir -p /root/.cache/huggingface && \
+    python run_voice_worker.py download-files
 
 EXPOSE 8000
 
