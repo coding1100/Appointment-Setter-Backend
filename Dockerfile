@@ -41,7 +41,10 @@ ENV PYTHONUNBUFFERED=1 \
 RUN mkdir -p /root/.cache/huggingface && \
     python run_voice_worker.py download-files
 
+# Make startup script executable
+RUN chmod +x start_backend.sh || true
+
 EXPOSE 8000
 
-# Start ONLY at runtime
+# Default CMD (can be overridden in docker-compose)
 CMD ["python", "run_voice_worker.py", "start"]
