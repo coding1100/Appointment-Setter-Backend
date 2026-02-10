@@ -217,7 +217,7 @@ class UnifiedVoiceAgentService:
         """
         Start a voice agent session.
 
-        For test_mode=True: Creates room for browser testing
+        For test_mode=True: Creates token with RoomConfiguration; room is created on join
         For test_mode=False: Initiates outbound Twilio call (room still pre-created for outbound)
         
         NOTE: For INBOUND calls, the room is created by LiveKit dispatch rule, not here.
@@ -225,8 +225,9 @@ class UnifiedVoiceAgentService:
         try:
             session_id = str(uuid.uuid4())
             
-            # For browser testing, we still create rooms
-            # For outbound calls, we also create rooms (different from inbound)
+            # For browser testing, we do NOT pre-create rooms.
+            # Rooms are created on first join using token RoomConfiguration.
+            # For outbound calls, we still create rooms (different from inbound).
             room_name = f"agent-{tenant_id}-{session_id[:8]}"
 
             logger.info(f"Starting session {session_id} for tenant {tenant_id}, test_mode={test_mode}")
@@ -264,8 +265,8 @@ class UnifiedVoiceAgentService:
             }
 
             if test_mode:
-                # BROWSER TESTING MODE: Create room for direct connection
-                logger.info(f"Creating LiveKit room for browser testing: {room_name}")
+                # BROWSER TESTING MODE: token-based dispatch on participant connection
+                logger.info(f"Preparing browser test room (token dispatch; room created on join): {room_name}")
                 
                 # Create room config for browser testing
                 room_config = {
@@ -284,8 +285,10 @@ class UnifiedVoiceAgentService:
                 # ALSO store by room name for direct lookup by worker
                 await self._store_room_config(room_name, room_config)
                 
-                # Create the actual room for browser testing
-                await self._create_browser_test_room(room_name)
+                # Do NOT pre-create the room. When the participant joins with a token that
+                # includes RoomConfiguration, LiveKit creates the room and dispatches the agent.
+                # Pre-creating the room would skip token room_config and prevent dispatch.
+                logger.info(f"[ROOM] Skipping pre-create for browser testing: {room_name}")
                 
                 # Generate token for browser client
                 token = self._generate_room_token(room_name, f"client-{session_id[:8]}")
@@ -918,12 +921,15 @@ Business: {business_name}"""
             # Dispatch the "voice-agent" when the participant connects (per LiveKit docs).
             token.with_room_config(
                 api.RoomConfiguration(
+                    # Preserve previous room settings from create_room
+                    empty_timeout=300,
+                    max_participants=10,
                     agents=[
                         api.RoomAgentDispatch(
                             agent_name="voice-agent",
                             metadata=json.dumps({"room": room_name}),
                         )
-                    ]
+                    ],
                 )
             )
             return token.to_jwt()
