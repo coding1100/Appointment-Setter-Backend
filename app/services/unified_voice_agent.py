@@ -914,6 +914,18 @@ Business: {business_name}"""
             token.with_grants(
                 api.VideoGrants(room_join=True, room=room_name, can_publish=True, can_subscribe=True, can_publish_data=True)
             )
+            # Explicit agent dispatch is required because the worker sets agent_name.
+            # Dispatch the "voice-agent" when the participant connects (per LiveKit docs).
+            token.with_room_config(
+                api.RoomConfiguration(
+                    agents=[
+                        api.RoomAgentDispatch(
+                            agent_name="voice-agent",
+                            metadata=json.dumps({"room": room_name}),
+                        )
+                    ]
+                )
+            )
             return token.to_jwt()
         except Exception as e:
             logger.error(f"Error generating token: {e}")
