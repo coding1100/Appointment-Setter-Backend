@@ -4,6 +4,10 @@ on:
   push:
     branches: [main, dev]
 
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   PYTHON_VERSION: "3.11"
 
@@ -34,11 +38,7 @@ jobs:
             git reset --hard origin/main
 
             echo "🔨 Building Docker image locally (no-cache for fresh dependencies)..."
-            docker compose build --no-cache backend voice-worker
-
-            echo "🔄 Recreating containers with new image..."
-            docker compose down --remove-orphans
-            docker compose up -d --force-recreate
+            docker compose up -d --build --remove-orphans
 
             echo "🧹 Cleaning up old images..."
             docker image prune -f
@@ -72,11 +72,7 @@ jobs:
             git reset --hard origin/dev
 
             echo "🔨 Building Docker image locally (no-cache for fresh dependencies)..."
-            docker compose build --no-cache backend voice-worker
-
-            echo "🔄 Recreating containers with new image..."
-            docker compose down --remove-orphans
-            docker compose up -d --force-recreate
+            docker compose up -d --build --remove-orphans
 
             echo "🧹 Cleaning up old images..."
             docker image prune -f
