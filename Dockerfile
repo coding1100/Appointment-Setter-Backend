@@ -33,24 +33,21 @@ ENV PYTHONUNBUFFERED=1 \
 # Copy system-wide Python packages (cached unless requirements.txt changes)
 COPY --from=builder /usr/local /usr/local
 
-# Copy application code in stages for optimal caching:
-# Strategy: Copy minimal files → Download models → Copy rest
-# This ensures model download (slow step) is cached unless core files change
-
-# Stage 1: Copy only essential files for download-files command
-# These files rarely change, so model download layer stays cached
+# Copy minimal files required to run LiveKit `download-files` during build
 COPY run_voice_worker.py .
 COPY app/__init__.py app/
-COPY app/agents/ app/agents/
+COPY app/agents/__init__.py app/agents/
+COPY app/agents/voice_worker.py app/agents/
 COPY app/core/__init__.py app/core/
 COPY app/core/config.py app/core/
+COPY app/core/async_redis.py app/core/
+COPY app/core/prompts.py app/core/
 
-# Stage 2: Download models (SLOW - ~5-10 min, but cached if stage 1 unchanged)
+# Download models/plugins at build time per LiveKit docs
 RUN mkdir -p /root/.cache/huggingface && \
     python run_voice_worker.py download-files
 
-# Stage 3: Copy all remaining application code
-# This invalidates cache, but model download from stage 2 remains cached
+# Copy application code
 COPY . .
 
 EXPOSE 8000

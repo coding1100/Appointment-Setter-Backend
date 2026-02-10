@@ -36,6 +36,16 @@ services:
       ELEVEN_API_KEY: ${ELEVEN_API_KEY}
       AGENT_VOICE: ${AGENT_VOICE}
 
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_FROM: ${MAIL_FROM}
+      MAIL_PORT: ${MAIL_PORT}
+      MAIL_SERVER: ${MAIL_SERVER}
+      MAIL_STARTTLS: ${MAIL_STARTTLS}
+      MAIL_SSL_TLS: ${MAIL_SSL_TLS}
+      USE_CREDENTIALS: ${USE_CREDENTIALS}
+      VALIDATE_CERTS: ${VALIDATE_CERTS}
+
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
       SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL}
 
@@ -57,7 +67,8 @@ services:
       - app-network
 
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
 
     # Backend runs FastAPI server, not LiveKit worker
     entrypoint: []
@@ -69,7 +80,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-
 
   redis:
     image: redis:7-alpine
@@ -86,6 +96,11 @@ services:
 
     command: redis-server --appendonly yes
 
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   voice-worker:
     build:
@@ -95,7 +110,7 @@ services:
     container_name: appointment-setter-voice-worker
     restart: unless-stopped
 
-    # 🔥 REQUIRED: inference subprocess runs as root
+    # Required: inference subprocess runs as root
     user: root
 
     environment:
@@ -133,17 +148,17 @@ services:
 
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
 
-      # 🔥 HuggingFace cache configuration
+      # HuggingFace cache configuration
       HF_HOME: /root/.cache/huggingface
       HF_HUB_CACHE: /root/.cache/huggingface
       TRANSFORMERS_CACHE: /root/.cache/huggingface
       HUGGINGFACE_HUB_CACHE: /root/.cache/huggingface
-      
+
       # Disable offline mode to allow fallback downloads if needed
       HF_HUB_OFFLINE: "0"
       TRANSFORMERS_OFFLINE: "0"
 
-      # 🔥 VAD + Turn Detector performance
+      # VAD + Turn Detector performance
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
@@ -153,7 +168,7 @@ services:
     volumes:
       - ./.env:/app/.env:ro
 
-      # ✅ Mount HuggingFace cache as a named volume for persistence
+      # Mount HuggingFace cache as a named volume for persistence
       # This ensures the model downloaded during build is available at runtime
       - hf-cache:/root/.cache/huggingface
 
@@ -161,32 +176,22 @@ services:
       - app-network
 
     depends_on:
-      - redis
-
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
-          memory: 4G
-        reservations:
-          cpus: "1.0"
-          memory: 2G
+      redis:
+        condition: service_healthy
 
     entrypoint: []
     command: ["python", "run_voice_worker.py", "start"]
 
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f voice_worker || exit 1"]
+      test: ["CMD-SHELL", "pgrep -f run_voice_worker.py || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
-
 networks:
   app-network:
     driver: bridge
-
 
 volumes:
   redis-data:
