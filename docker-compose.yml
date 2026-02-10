@@ -168,10 +168,6 @@ services:
     volumes:
       - ./.env:/app/.env:ro
 
-      # Mount HuggingFace cache as a named volume for persistence
-      # This ensures the model downloaded during build is available at runtime
-      - hf-cache:/root/.cache/huggingface
-
     networks:
       - app-network
 
@@ -195,6 +191,3 @@ networks:
 
 volumes:
   redis-data:
-  hf-cache:
-    # Optional: specify driver options for better performance
-    driver: local
