@@ -289,6 +289,23 @@ POST   /api/v1/voice-agent/twilio/webhook      # Twilio webhook
 POST   /api/v1/voice-agent/twilio/status       # Twilio status callback
 ```
 
+### Chatbot Agent Operations
+```
+POST   /api/v1/chatbot-agents                         # Create chatbot agent
+GET    /api/v1/chatbot-agents                         # List chatbot agents (owner/admin scoped)
+GET    /api/v1/chatbot-agents/{chatbot_id}            # Get chatbot agent
+PUT    /api/v1/chatbot-agents/{chatbot_id}            # Update chatbot agent
+DELETE /api/v1/chatbot-agents/{chatbot_id}            # Delete chatbot agent
+POST   /api/v1/chatbot-agents/{chatbot_id}/embed-token        # Generate launcher token and script payload
+POST   /api/v1/chatbot-agents/{chatbot_id}/revoke-embed-tokens# Revoke previously issued embed tokens
+GET    /api/v1/chatbot-agents/{chatbot_id}/runtime-logs       # View chatbot runtime logs (owner/admin)
+GET    /api/v1/chatbot-agents/runtime/kill-switch             # Get global chatbot runtime status (admin)
+POST   /api/v1/chatbot-agents/runtime/kill-switch             # Toggle global chatbot runtime (admin)
+GET    /api/v1/chatbot-embed/loader.js?token=...              # Public launcher script endpoint
+GET    /api/v1/chatbot-embed/config?token=...                 # Public chatbot config fetch
+POST   /api/v1/chatbot-embed/stream?token=...         # SSE token stream for real-time chatbot text
+```
+
 ### Appointment Management
 ```
 POST   /api/v1/appointments                             # Create appointment

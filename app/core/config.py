@@ -93,6 +93,16 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
+# Chatbot embed settings
+CHATBOT_EMBED_SECRET = os.environ.get("CHATBOT_EMBED_SECRET", SECRET_KEY)
+CHATBOT_EMBED_TOKEN_TTL_MINUTES = int(os.environ.get("CHATBOT_EMBED_TOKEN_TTL_MINUTES", "60"))
+CHATBOT_TEXT_MODEL = os.environ.get("CHATBOT_TEXT_MODEL", "gemini-2.0-flash")
+CHATBOT_LOADER_BASE_URL = os.environ.get("CHATBOT_LOADER_BASE_URL", "")
+CHATBOT_LLM_PROVIDER = os.environ.get("CHATBOT_LLM_PROVIDER", "gemini")
+CHATBOT_STREAM_TIMEOUT_SECONDS = int(os.environ.get("CHATBOT_STREAM_TIMEOUT_SECONDS", "60"))
+CHATBOT_DEV_ALLOW_ANY_ORIGIN = os.environ.get("CHATBOT_DEV_ALLOW_ANY_ORIGIN", "false").lower() == "true"
+CHATBOT_RUNTIME_ENABLED = os.environ.get("CHATBOT_RUNTIME_ENABLED", "true").lower() == "true"
+
 # Home Services voice mapping
 VOICE_MAP: Dict[str, str] = {
     "Home Services": "en_us_006",
