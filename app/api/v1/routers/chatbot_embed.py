@@ -196,6 +196,7 @@ async def get_chatbot_embed_loader(
   iframe.style.width = "100%";
   iframe.style.height = "100%";
   iframe.style.border = "0";
+  iframe.allow = "microphone";
   iframe.loading = "lazy";
   iframe.referrerPolicy = "strict-origin-when-cross-origin";
   panel.appendChild(iframe);
@@ -332,6 +333,50 @@ async def get_chatbot_embed_panel(token: str = Query(..., min_length=1)):
       opacity: 0.55;
       cursor: not-allowed;
     }}
+    .mic-btn {{
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      width: 42px;
+      height: 42px;
+      padding: 0;
+      background: #fff;
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+    }}
+    .mic-btn:hover:not(:disabled) {{
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+    }}
+    .mic-btn:disabled {{
+      opacity: 0.45;
+      cursor: not-allowed;
+    }}
+    .mic-btn.active {{
+      background: #dc2626;
+      border-color: #dc2626;
+      color: #fff;
+      box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.18);
+    }}
+    .mic-icon {{
+      width: 18px;
+      height: 18px;
+      display: block;
+    }}
+    .sr-only {{
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }}
     .status {{
       padding: 0 16px 10px;
       font-size: 12px;
@@ -348,9 +393,19 @@ async def get_chatbot_embed_panel(token: str = Query(..., min_length=1)):
     <div class="status" id="chatbot-status">Initializing chatbot...</div>
     <div class="footer">
       <textarea id="chatbot-input" class="composer" placeholder="Type your message..." rows="1"></textarea>
+      <button id="chatbot-mic" class="mic-btn" type="button" aria-label="Start voice input" aria-pressed="false" title="Start voice input" disabled>
+        <span class="sr-only">Mic</span>
+        <svg class="mic-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 1 0 6 0V6a3 3 0 0 0-3-3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          <path d="M19 11a7 7 0 0 1-14 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M8 21h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+        </svg>
+      </button>
       <button id="chatbot-send" class="send-btn" type="button">Send</button>
     </div>
   </div>
+  <script src="/api-static/vendor/annyang.min.js"></script>
   <script>
     (async function () {{
       const token = "{safe_token}";
@@ -358,9 +413,16 @@ async def get_chatbot_embed_panel(token: str = Query(..., min_length=1)):
       const messages = document.getElementById("chatbot-messages");
       const status = document.getElementById("chatbot-status");
       const input = document.getElementById("chatbot-input");
+      const micButton = document.getElementById("chatbot-mic");
       const sendButton = document.getElementById("chatbot-send");
       let chatHistory = [];
       let isSending = false;
+      let speechEnabled = false;
+      let speechBlockedReason = "";
+      let isListening = false;
+      let speechFinalTranscript = "";
+      let preListenInputValue = "";
+      let recognition = null;
 
       const appendMessage = function (role, text, extraClass) {{
         const el = document.createElement("div");
@@ -378,6 +440,162 @@ async def get_chatbot_embed_panel(token: str = Query(..., min_length=1)):
       const setComposerDisabled = function (disabled) {{
         input.disabled = disabled;
         sendButton.disabled = disabled;
+        if (micButton && !isListening) {{
+          micButton.disabled = disabled || !speechEnabled;
+        }}
+      }};
+
+      const isLocalhost = function () {{
+        const host = window.location.hostname;
+        return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+      }};
+
+      const isSpeechSecureContext = function () {{
+        return window.isSecureContext || isLocalhost();
+      }};
+
+      const setReadyStatus = function () {{
+        if (speechBlockedReason) {{
+          status.textContent = "Ready | Voice disabled: " + speechBlockedReason;
+          return;
+        }}
+        status.textContent = "Ready";
+      }};
+
+      const refreshMicButtonState = function () {{
+        if (!micButton) {{
+          return;
+        }}
+
+        micButton.classList.toggle("active", isListening);
+        micButton.setAttribute("aria-pressed", isListening ? "true" : "false");
+        micButton.setAttribute("aria-label", isListening ? "Stop voice input" : "Start voice input");
+
+        if (isListening) {{
+          micButton.title = "Stop voice input";
+          return;
+        }}
+
+        if (speechEnabled) {{
+          micButton.title = "Start voice input";
+          return;
+        }}
+
+        micButton.title = speechBlockedReason ? "Voice disabled: " + speechBlockedReason : "Voice input unavailable";
+      }};
+
+      const disableSpeech = function (reason) {{
+        speechEnabled = false;
+        speechBlockedReason = reason || "unsupported";
+        isListening = false;
+        if (micButton) {{
+          micButton.disabled = true;
+        }}
+        refreshMicButtonState();
+      }};
+
+      const initializeSpeechRecognition = function () {{
+        if (!micButton) {{
+          return;
+        }}
+        if (!isSpeechSecureContext()) {{
+          disableSpeech("requires HTTPS");
+          return;
+        }}
+        if (!window.annyang || typeof window.annyang.getSpeechRecognizer !== "function") {{
+          disableSpeech("library not loaded");
+          return;
+        }}
+
+        try {{
+          window.annyang.init({{}}, false);
+        }} catch (_error) {{
+          disableSpeech("browser not supported");
+          return;
+        }}
+
+        recognition = window.annyang.getSpeechRecognizer();
+        if (!recognition) {{
+          disableSpeech("browser not supported");
+          return;
+        }}
+
+        recognition.continuous = false;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+        recognition.lang = "en-US";
+
+        recognition.onstart = function () {{
+          isListening = true;
+          refreshMicButtonState();
+          status.textContent = "Listening...";
+        }};
+
+        recognition.onerror = function (event) {{
+          const errorCode = event && event.error ? event.error : "unknown";
+          if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {{
+            disableSpeech("microphone permission denied");
+            status.textContent = "Voice input blocked by browser permissions.";
+            return;
+          }}
+          status.textContent = "Voice input error: " + errorCode;
+        }};
+
+        recognition.onresult = function (event) {{
+          if (!event || !event.results) {{
+            return;
+          }}
+          let finalChunk = "";
+          let interimChunk = "";
+          for (let i = event.resultIndex; i < event.results.length; i += 1) {{
+            const result = event.results[i];
+            const transcript = result && result[0] && result[0].transcript ? result[0].transcript : "";
+            if (!transcript) {{
+              continue;
+            }}
+            if (result.isFinal) {{
+              finalChunk += transcript + " ";
+            }} else {{
+              interimChunk += transcript;
+            }}
+          }}
+
+          if (finalChunk) {{
+            speechFinalTranscript += finalChunk;
+          }}
+
+          const composed = (speechFinalTranscript + interimChunk).trim();
+          if (composed) {{
+            input.value = composed;
+          }}
+        }};
+
+        recognition.onend = function () {{
+          const spokenText = (input.value || speechFinalTranscript || "").trim();
+          const shouldSubmit = Boolean(spokenText) && !isSending;
+
+          isListening = false;
+          speechFinalTranscript = "";
+          refreshMicButtonState();
+
+          if (!shouldSubmit) {{
+            if (!spokenText) {{
+              input.value = preListenInputValue;
+            }}
+            setReadyStatus();
+            return;
+          }}
+
+          input.value = spokenText;
+          submitMessage();
+        }};
+
+        speechEnabled = true;
+        speechBlockedReason = "";
+        if (!isSending) {{
+          micButton.disabled = false;
+        }}
+        refreshMicButtonState();
       }};
 
       const getEmbedOrigin = function () {{
@@ -422,8 +640,9 @@ async def get_chatbot_embed_panel(token: str = Query(..., min_length=1)):
         const welcomeText = payload.welcome_message || "Hello!";
         appendMessage("assistant", welcomeText, "");
         chatHistory.push({{ role: "assistant", content: welcomeText }});
-        status.textContent = "Ready";
         setComposerDisabled(false);
+        initializeSpeechRecognition();
+        setReadyStatus();
         input.focus();
       }} catch (error) {{
         messages.innerHTML = "";
@@ -546,7 +765,7 @@ async def get_chatbot_embed_panel(token: str = Query(..., min_length=1)):
           }}
           isSending = false;
           setComposerDisabled(false);
-          status.textContent = "Ready";
+          setReadyStatus();
           input.focus();
           messages.scrollTop = messages.scrollHeight;
         }}
@@ -564,6 +783,29 @@ async def get_chatbot_embed_panel(token: str = Query(..., min_length=1)):
       sendButton.addEventListener("click", function () {{
         submitMessage();
       }});
+
+      if (micButton) {{
+        micButton.addEventListener("click", function () {{
+          if (!speechEnabled || isSending || !window.annyang) {{
+            return;
+          }}
+
+          if (isListening) {{
+            window.annyang.abort();
+            return;
+          }}
+
+          preListenInputValue = (input.value || "").trim();
+          speechFinalTranscript = "";
+          input.value = "";
+
+          try {{
+            window.annyang.start({{ autoRestart: false, continuous: false }});
+          }} catch (_error) {{
+            status.textContent = "Unable to start microphone.";
+          }}
+        }});
+      }}
 
       input.addEventListener("keydown", function (event) {{
         if (event.key === "Enter" && !event.shiftKey) {{
