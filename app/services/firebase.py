@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import firebase_admin
@@ -580,6 +581,133 @@ class FirebaseService:
             return False
 
         return await self._run_in_executor(_delete)
+
+    # Chatbot agent operations (independent from voice agents)
+    async def create_chatbot_agent(self, chatbot_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new chatbot agent."""
+        add_timestamps(chatbot_data)
+
+        def _create():
+            doc_ref = self.db.collection("chatbot_agents").document(chatbot_data["id"])
+            doc_ref.set(chatbot_data)
+            return chatbot_data
+
+        return await self._run_in_executor(_create)
+
+    async def get_chatbot_agent(self, chatbot_id: str) -> Optional[Dict[str, Any]]:
+        """Get chatbot agent by ID."""
+
+        def _get():
+            doc_ref = self.db.collection("chatbot_agents").document(chatbot_id)
+            doc = doc_ref.get()
+            return doc.to_dict() if doc.exists else None
+
+        return await self._run_in_executor(_get)
+
+    async def list_chatbot_agents_by_owner(self, owner_user_id: str, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """List chatbot agents for a specific owner."""
+
+        def _list():
+            agents_ref = self.db.collection("chatbot_agents")
+            query = agents_ref.where("owner_user_id", "==", owner_user_id).limit(limit).offset(offset)
+            docs = query.stream()
+            return [doc.to_dict() for doc in docs]
+
+        return await self._run_in_executor(_list)
+
+    async def list_chatbot_agents(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """List all chatbot agents."""
+
+        def _list():
+            agents_ref = self.db.collection("chatbot_agents")
+            query = agents_ref.limit(limit).offset(offset)
+            docs = query.stream()
+            return [doc.to_dict() for doc in docs]
+
+        return await self._run_in_executor(_list)
+
+    async def update_chatbot_agent(self, chatbot_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update chatbot agent."""
+        add_updated_timestamp(update_data)
+
+        def _update():
+            doc_ref = self.db.collection("chatbot_agents").document(chatbot_id)
+            doc = doc_ref.get()
+            if not doc.exists:
+                return None
+            doc_ref.update(update_data)
+            updated = doc_ref.get()
+            return updated.to_dict() if updated.exists else None
+
+        return await self._run_in_executor(_update)
+
+    async def delete_chatbot_agent(self, chatbot_id: str) -> bool:
+        """Delete chatbot agent."""
+
+        def _delete():
+            doc_ref = self.db.collection("chatbot_agents").document(chatbot_id)
+            doc = doc_ref.get()
+            if doc.exists:
+                doc_ref.delete()
+                return True
+            return False
+
+        return await self._run_in_executor(_delete)
+
+    async def create_chatbot_runtime_log(self, log_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create chatbot runtime log entry."""
+        add_timestamps(log_data)
+
+        def _create():
+            doc_ref = self.db.collection("chatbot_runtime_logs").document(log_data["request_id"])
+            doc_ref.set(log_data)
+            return log_data
+
+        return await self._run_in_executor(_create)
+
+    async def list_chatbot_runtime_logs(
+        self, chatbot_id: str, limit: int = 100, status_filter: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List runtime logs for chatbot."""
+
+        def _list():
+            logs_ref = self.db.collection("chatbot_runtime_logs")
+            query = logs_ref.where("chatbot_id", "==", chatbot_id)
+            if status_filter:
+                query = query.where("status", "==", status_filter)
+            query = query.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(limit)
+            docs = query.stream()
+            return [doc.to_dict() for doc in docs]
+
+        return await self._run_in_executor(_list)
+
+    async def get_chatbot_runtime_settings(self) -> Dict[str, Any]:
+        """Get global chatbot runtime settings."""
+
+        def _get():
+            doc_ref = self.db.collection("system_settings").document("chatbot_runtime")
+            doc = doc_ref.get()
+            if not doc.exists:
+                return {}
+            return doc.to_dict() or {}
+
+        return await self._run_in_executor(_get)
+
+    async def update_chatbot_runtime_settings(self, enabled: bool, updated_by: str) -> Dict[str, Any]:
+        """Update global chatbot runtime settings."""
+
+        def _update():
+            payload = {
+                "enabled": bool(enabled),
+                "updated_by": updated_by,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            doc_ref = self.db.collection("system_settings").document("chatbot_runtime")
+            doc_ref.set(payload, merge=True)
+            doc = doc_ref.get()
+            return doc.to_dict() if doc.exists else payload
+
+        return await self._run_in_executor(_update)
 
     # Phone number operations
     async def create_phone_number(self, phone_data: Dict[str, Any]) -> Dict[str, Any]:

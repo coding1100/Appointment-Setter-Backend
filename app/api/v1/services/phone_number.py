@@ -44,6 +44,15 @@ class PhoneNumberService:
         if agent.get("tenant_id") != tenant_id:
             raise ValueError(f"Agent {agent_id} does not belong to this tenant")
 
+        # Voice safety: phone assignments are only valid for voice agents.
+        # Legacy records without agent_type are treated as voice during migration.
+        agent_type = agent.get("agent_type") or "voice"
+        if agent_type != "voice":
+            raise ValueError(
+                f"Agent {agent_id} (name: {agent.get('name')}) is type '{agent_type}'. "
+                "Phone numbers can only be assigned to voice agents."
+            )
+
         # Verify agent has service_type set (required field)
         if not agent.get("service_type"):
             raise ValueError(

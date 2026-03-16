@@ -48,6 +48,7 @@ class AgentResponse(BaseModel):
     """Schema for agent response."""
 
     id: str
+    agent_type: str = "voice"
     tenant_id: str
     name: str
     voice_id: str

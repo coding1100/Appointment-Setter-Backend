@@ -114,6 +114,7 @@ def to_agent_response(agent_dict: Dict[str, Any]) -> AgentResponse:
     try:
         return AgentResponse(
             id=agent_dict.get("id", ""),
+            agent_type=agent_dict.get("agent_type") or "voice",
             tenant_id=agent_dict.get("tenant_id", ""),
             name=agent_dict.get("name", ""),
             voice_id=agent_dict.get("voice_id", ""),

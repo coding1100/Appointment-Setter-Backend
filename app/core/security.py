@@ -51,6 +51,11 @@ class IdempotencyKey:
 class SecurityService:
     """Service class for security operations using async Redis."""
 
+    # Redis outage handling for rate limiting (fail-open with short retry cooldown).
+    _rate_limit_redis_unavailable_until: float = 0.0
+    _rate_limit_redis_unavailable_logged: bool = False
+    _rate_limit_redis_cooldown_seconds: int = 30
+
     def __init__(self):
         """Initialize security service with async Redis client."""
         # Use async Redis client (no initialization needed, it's a singleton)
@@ -67,10 +72,22 @@ class SecurityService:
         else:
             self.secrets_manager = None
 
+    @staticmethod
+    def _permissive_rate_limit(limit: int, window_seconds: int) -> RateLimitInfo:
+        """Return permissive rate limit information when backend checks are unavailable."""
+        return RateLimitInfo(
+            limit=limit, remaining=limit, reset_time=datetime.now(timezone.utc) + timedelta(seconds=window_seconds)
+        )
+
     async def check_rate_limit(
         self, identifier: str, limit: int, window_seconds: int, operation: str = "default"
     ) -> RateLimitInfo:
         """Check rate limit for an identifier."""
+        now_epoch = time.time()
+        if now_epoch < self.__class__._rate_limit_redis_unavailable_until:
+            # During cooldown window, skip Redis to avoid repeated connection failures on every request.
+            return self._permissive_rate_limit(limit, window_seconds)
+
         try:
             key = f"rate_limit:{operation}:{identifier}"
             current_time = int(time.time())
@@ -94,6 +111,11 @@ class SecurityService:
 
             results = await pipe.execute()
             current_count = results[1]
+
+            if self.__class__._rate_limit_redis_unavailable_logged:
+                logger.info("Redis connection restored for rate limiting")
+                self.__class__._rate_limit_redis_unavailable_logged = False
+                self.__class__._rate_limit_redis_unavailable_until = 0.0
 
             # Check if limit exceeded
             if current_count >= limit:
@@ -119,11 +141,16 @@ class SecurityService:
             )
 
         except Exception as e:
-            logger.error(f"Error checking rate limit: {e}", exc_info=True)
-            # Return permissive rate limit on error
-            return RateLimitInfo(
-                limit=limit, remaining=limit, reset_time=datetime.now(timezone.utc) + timedelta(seconds=window_seconds)
-            )
+            self.__class__._rate_limit_redis_unavailable_until = now_epoch + self.__class__._rate_limit_redis_cooldown_seconds
+            if not self.__class__._rate_limit_redis_unavailable_logged:
+                logger.warning(
+                    "Rate limiting fallback enabled: Redis unavailable (%s). "
+                    "Failing open for %ss before retrying.",
+                    e,
+                    self.__class__._rate_limit_redis_cooldown_seconds,
+                )
+                self.__class__._rate_limit_redis_unavailable_logged = True
+            return self._permissive_rate_limit(limit, window_seconds)
 
     async def enforce_rate_limit(self, identifier: str, limit: int, window_seconds: int, operation: str = "default") -> None:
         """Enforce rate limit, raise exception if exceeded."""
