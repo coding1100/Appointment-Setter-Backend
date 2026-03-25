@@ -36,6 +36,19 @@ class TwilioIntegrationService:
         """Initialize Twilio integration service."""
         pass
 
+    async def _list_active_role_bindings(self, tenant_id: str) -> List[Dict[str, Any]]:
+        """List active telephony role bindings for the tenant."""
+        phones = await firebase_service.list_phones_by_tenant(tenant_id)
+        active_bindings: List[Dict[str, Any]] = []
+        for phone in phones:
+            usage_role = phone.get("usage_role") or "voice_agent_inbound"
+            role_status = phone.get("role_status")
+            if not role_status:
+                role_status = "active" if phone.get("status", "active") == "active" else "inactive"
+            if phone.get("status", "active") == "active" and role_status == "active":
+                active_bindings.append({**phone, "usage_role": usage_role, "role_status": role_status})
+        return active_bindings
+
     async def test_credentials(self, credentials: TwilioCredentialTest) -> TwilioCredentialTestResponse:
         """Test Twilio credentials and return account information.
 
@@ -267,6 +280,15 @@ class TwilioIntegrationService:
     async def update_integration(self, tenant_id: str, config: TwilioIntegrationConfig) -> Dict[str, Any]:
         """Update Twilio integration for a tenant."""
         try:
+            current_integration = await firebase_service.get_twilio_integration(tenant_id)
+            if current_integration and current_integration.get("account_sid") != config.account_sid:
+                active_bindings = await self._list_active_role_bindings(tenant_id)
+                if active_bindings:
+                    raise ValueError(
+                        "Cannot change shared Twilio Account SID while active phone ownership bindings exist. "
+                        "Unbind numbers from voice/cold-caller roles first."
+                    )
+
             # Test new credentials (phone number optional)
             test_credentials = TwilioCredentialTest(
                 account_sid=config.account_sid, auth_token=config.auth_token, phone_number=config.phone_number  # Optional
@@ -325,6 +347,8 @@ class TwilioIntegrationService:
 
             return result
 
+        except ValueError:
+            raise
         except Exception as e:
             raise Exception(f"Failed to update Twilio integration: {str(e)}")
 
@@ -357,6 +381,12 @@ class TwilioIntegrationService:
     async def delete_integration(self, tenant_id: str) -> bool:
         """Delete Twilio integration for a tenant."""
         try:
+            active_bindings = await self._list_active_role_bindings(tenant_id)
+            if active_bindings:
+                raise ValueError(
+                    "Cannot delete shared Twilio credentials while active phone ownership bindings exist."
+                )
+
             # Get current integration
             integration = await self.get_integration(tenant_id)
 
@@ -364,7 +394,8 @@ class TwilioIntegrationService:
                 return False
 
             # Remove webhook configuration from Twilio
-            await self._remove_webhook(integration["account_sid"], integration["auth_token"], integration["phone_number"])
+            if integration.get("phone_number"):
+                await self._remove_webhook(integration["account_sid"], integration["auth_token"], integration["phone_number"])
 
             # Delete from Firebase
             result = await firebase_service.delete_twilio_integration(tenant_id)
@@ -377,6 +408,8 @@ class TwilioIntegrationService:
 
             return result is not None
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(f"Error deleting Twilio integration: {e}", exc_info=True)
             return False
@@ -633,6 +666,10 @@ class TwilioIntegrationService:
                 "agent_id": "",  # unassigned
                 "twilio_integration_id": integration_id or "system",
                 "status": "inactive",
+                "usage_role": "voice_agent_inbound",
+                "role_status": "inactive",
+                "conflict_code": None,
+                "conflict_message": None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }

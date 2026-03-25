@@ -58,6 +58,8 @@ async def update_twilio_integration(tenant_id: str, config: TwilioIntegrationCon
 
         return {"message": "Twilio integration updated successfully", "integration": result}
 
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -104,6 +106,8 @@ async def delete_twilio_integration(tenant_id: str):
 
         return {"message": "Twilio integration deleted successfully"}
 
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:

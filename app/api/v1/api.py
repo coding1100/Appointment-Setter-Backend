@@ -8,13 +8,16 @@ from app.api.v1.routers import (
     agents,
     appointments,
     auth,
+    chatbot_agents,
+    chatbot_embed,
     contacts,
+    email,
     health,
     phone_numbers,
+    telephony,
     tenants,
     twilio_integration,
     voice_agent_unified,
-    email,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -24,8 +27,11 @@ api_router.include_router(auth.router)
 api_router.include_router(tenants.router)
 api_router.include_router(agents.router)
 api_router.include_router(phone_numbers.router)
+api_router.include_router(telephony.router)
 api_router.include_router(appointments.router)
 api_router.include_router(voice_agent_unified.router)
 api_router.include_router(twilio_integration.router)
 api_router.include_router(contacts.router)
 api_router.include_router(email.router)
+api_router.include_router(chatbot_agents.router)
+api_router.include_router(chatbot_embed.router)
