@@ -128,6 +128,13 @@ class UnifiedVoiceAgentService:
         """Generate agent key for tenant and service type."""
         return f"{tenant_id}:{service_type}"
 
+    @staticmethod
+    def _resolve_agent_type(agent_data: Optional[Dict[str, Any]]) -> str:
+        """Resolve agent type with migration fallback."""
+        if not agent_data:
+            return "voice"
+        return agent_data.get("agent_type") or "voice"
+
     async def get_or_create_agent(
         self,
         tenant_id: str,
@@ -243,11 +250,19 @@ class UnifiedVoiceAgentService:
 
                 try:
                     agent_data = await firebase_service.get_agent(agent_id)
-                    if agent_data:
-                        voice_id = agent_data.get("voice_id")
-                        logger.info(f"Fetched agent config - voice_id: {voice_id}, name: {agent_data.get('name')}")
+                    if not agent_data:
+                        raise ValueError(f"Voice agent '{agent_id}' not found")
+
+                    agent_type = self._resolve_agent_type(agent_data)
+                    if agent_type != "voice":
+                        raise ValueError(
+                            f"Agent {agent_id} is type '{agent_type}'. Voice sessions require voice agents."
+                        )
+                    voice_id = agent_data.get("voice_id")
+                    logger.info(f"Fetched agent config - voice_id: {voice_id}, name: {agent_data.get('name')}")
                 except Exception as e:
                     logger.error(f"Error fetching agent data: {e}")
+                    raise
 
             # Store session data
             session_data = {
@@ -331,6 +346,8 @@ class UnifiedVoiceAgentService:
             self.active_sessions[session_id] = session_data
             return result
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(f"Error starting session: {e}")
             raise Exception(f"Failed to start session: {str(e)}")
@@ -479,6 +496,13 @@ class UnifiedVoiceAgentService:
 
             logger.info(f"[TWILIO WEBHOOK] ✓ Found agent: Name={agent.get('name')}, ServiceType={agent.get('service_type')}")
 
+            # Voice safety: inbound phone calls can only target voice agents.
+            # Legacy agents without an explicit type are treated as voice.
+            agent_type = self._resolve_agent_type(agent)
+            if agent_type != "voice":
+                logger.error(f"[TWILIO WEBHOOK] Agent {agent_id} has type={agent_type} - FAILING CALL")
+                return self._error_response("This number is assigned to a non-voice agent. Please contact support.")
+
             # Step 5: Validate agent has service_type (NO FALLBACK)
             service_type = agent.get("service_type")
             if not service_type:
@@ -496,6 +520,7 @@ class UnifiedVoiceAgentService:
                 "call_id": call_id,
                 "agent_data": self._clean_agent_data(agent),
                 "voice_id": agent.get("voice_id"),
+                "agent_type": agent_type,
                 "service_type": service_type,
                 "call_type": "inbound",
                 "caller_number": from_number,
@@ -614,6 +639,7 @@ class UnifiedVoiceAgentService:
             return None
         return {
             "id": agent_data.get("id"),
+            "agent_type": self._resolve_agent_type(agent_data),
             "name": agent_data.get("name"),
             "voice_id": agent_data.get("voice_id"),
             "language": agent_data.get("language"),

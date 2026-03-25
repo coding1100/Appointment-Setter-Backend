@@ -30,11 +30,11 @@ jobs:
           script: |
             set -e
 
-            cd ${{ secrets.PROD_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
+            cd ${{ secrets.PROD_VPS_DEPLOY_PATH}}
 
             echo "📥 Pulling latest code..."
             git fetch origin main
-            git checkout main || git checkout -b main
+            git checkout main
             git reset --hard origin/main
 
             echo "🔨 Building Docker image locally (no-cache for fresh dependencies)..."
@@ -64,7 +64,7 @@ jobs:
           script: |
             set -e
 
-            cd ${{ secrets.DEV_VPS_DEPLOY_PATH || '/root/appointment-setter' }}
+            cd ${{ secrets.DEV_VPS_DEPLOY_PATH }}
 
             echo "📥 Pulling latest code..."
             git fetch origin dev

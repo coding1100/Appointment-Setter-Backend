@@ -3,7 +3,7 @@ Phone number schemas for linking agents with Twilio integrations.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, validator
@@ -49,6 +49,10 @@ class PhoneNumberResponse(BaseModel):
     agent_name: Optional[str] = None  # Populated from agent data
     twilio_integration_id: str
     status: str  # active, inactive
+    usage_role: Literal["voice_agent_inbound", "cold_caller_outbound"] = "voice_agent_inbound"
+    role_status: str = "active"
+    conflict_code: Optional[str] = None
+    conflict_message: Optional[str] = None
     created_at: str
     updated_at: str
 
