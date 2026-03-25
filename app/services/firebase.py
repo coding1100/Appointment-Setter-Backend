@@ -796,6 +796,26 @@ class FirebaseService:
 
         return await self._run_in_executor(_delete)
 
+    async def get_running_cold_campaign_by_outbound_phone_id(
+        self, tenant_id: str, outbound_phone_number_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return running cold campaign using given outbound phone number ID."""
+
+        def _query():
+            campaigns_ref = self.db.collection("cold_campaigns")
+            query = (
+                campaigns_ref.where("tenant_id", "==", tenant_id)
+                .where("status", "==", "running")
+                .where("outbound_phone_number_id", "==", outbound_phone_number_id)
+                .limit(1)
+            )
+            docs = list(query.stream())
+            for doc in docs:
+                return doc.to_dict()
+            return None
+
+        return await self._run_in_executor(_query)
+
     async def batch_get(self, collection: str, doc_ids: List[str]) -> List[Dict[str, Any]]:
         """
         Batch get multiple documents concurrently (highly optimized).

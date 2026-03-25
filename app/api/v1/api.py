@@ -14,6 +14,7 @@ from app.api.v1.routers import (
     email,
     health,
     phone_numbers,
+    telephony,
     tenants,
     twilio_integration,
     voice_agent_unified,
@@ -26,6 +27,7 @@ api_router.include_router(auth.router)
 api_router.include_router(tenants.router)
 api_router.include_router(agents.router)
 api_router.include_router(phone_numbers.router)
+api_router.include_router(telephony.router)
 api_router.include_router(appointments.router)
 api_router.include_router(voice_agent_unified.router)
 api_router.include_router(twilio_integration.router)

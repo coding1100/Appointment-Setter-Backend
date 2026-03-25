@@ -143,6 +143,10 @@ def to_phone_number_response(phone_dict: Dict[str, Any]) -> PhoneNumberResponse:
             agent_name=phone_dict.get("agent_name"),
             twilio_integration_id=phone_dict.get("twilio_integration_id", ""),
             status=phone_dict.get("status", "inactive"),
+            usage_role=phone_dict.get("usage_role") or "voice_agent_inbound",
+            role_status=phone_dict.get("role_status") or "active",
+            conflict_code=phone_dict.get("conflict_code"),
+            conflict_message=phone_dict.get("conflict_message"),
             created_at=phone_dict.get("created_at", ""),
             updated_at=phone_dict.get("updated_at", ""),
         )

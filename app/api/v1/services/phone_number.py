@@ -10,6 +10,13 @@ from app.core.utils import add_timestamps
 from app.services.firebase import firebase_service
 from app.utils.phone_number import normalize_phone_number, normalize_phone_number_safe
 
+VOICE_AGENT_INBOUND_ROLE = "voice_agent_inbound"
+COLD_CALLER_OUTBOUND_ROLE = "cold_caller_outbound"
+ROLE_STATUS_ACTIVE = "active"
+ROLE_STATUS_INACTIVE = "inactive"
+ROLE_STATUS_CONFLICT = "conflict"
+CONFLICT_ROLE_COLLISION = "ROLE_COLLISION"
+
 
 class PhoneNumberService:
     """Service class for phone number operations."""
@@ -17,6 +24,43 @@ class PhoneNumberService:
     def __init__(self):
         """Initialize phone number service."""
         pass
+
+    def _normalize_phone_role_fields(self, phone: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize role and conflict fields for deterministic API responses."""
+        normalized = dict(phone)
+        usage_role = normalized.get("usage_role") or VOICE_AGENT_INBOUND_ROLE
+        status = normalized.get("status", "active")
+        role_status = normalized.get("role_status")
+        conflict_code = normalized.get("conflict_code")
+        conflict_message = normalized.get("conflict_message")
+
+        if not role_status:
+            role_status = ROLE_STATUS_ACTIVE if status == "active" else ROLE_STATUS_INACTIVE
+
+        if usage_role == COLD_CALLER_OUTBOUND_ROLE and normalized.get("agent_id"):
+            role_status = ROLE_STATUS_CONFLICT
+            conflict_code = CONFLICT_ROLE_COLLISION
+            conflict_message = (
+                "Number cannot be cold-caller outbound while also assigned to a voice agent."
+            )
+        elif role_status != ROLE_STATUS_CONFLICT:
+            conflict_code = None
+            conflict_message = None
+
+        normalized["usage_role"] = usage_role
+        normalized["role_status"] = role_status
+        normalized["conflict_code"] = conflict_code
+        normalized["conflict_message"] = conflict_message
+        return normalized
+
+    def _assert_voice_assignment_allowed(self, phone: Dict[str, Any], phone_number: str) -> None:
+        """Hard block assigning a cold-caller outbound number to a voice agent."""
+        usage_role = (phone.get("usage_role") or VOICE_AGENT_INBOUND_ROLE).strip()
+        if usage_role == COLD_CALLER_OUTBOUND_ROLE:
+            raise ValueError(
+                f"Phone number {phone_number} is bound to Cold Caller outbound. "
+                "Unbind it in Telephony Hub before assigning it to a voice agent."
+            )
 
     async def _validate_agent_for_tenant(
         self, agent_id: str, tenant_id: str, agent: Optional[Dict[str, Any]] = None
@@ -91,14 +135,20 @@ class PhoneNumberService:
             "agent_id": phone_data.agent_id,
             "twilio_integration_id": phone_data.twilio_integration_id,
             "status": "active",
+            "usage_role": VOICE_AGENT_INBOUND_ROLE,
+            "role_status": ROLE_STATUS_ACTIVE,
+            "conflict_code": None,
+            "conflict_message": None,
         }
         add_timestamps(phone_dict)
 
-        return await firebase_service.create_phone_number(phone_dict)
+        created = await firebase_service.create_phone_number(phone_dict)
+        return self._normalize_phone_role_fields(created)
 
     async def get_phone_number(self, phone_id: str) -> Optional[Dict[str, Any]]:
         """Get phone number by ID."""
-        return await firebase_service.get_phone_number(phone_id)
+        phone = await firebase_service.get_phone_number(phone_id)
+        return self._normalize_phone_role_fields(phone) if phone else None
 
     async def get_phone_by_number(self, phone_number: str) -> Optional[Dict[str, Any]]:
         """
@@ -110,27 +160,32 @@ class PhoneNumberService:
         if normalized:
             phone_record = await firebase_service.get_phone_by_number(normalized)
             if phone_record:
-                return phone_record
+                return self._normalize_phone_role_fields(phone_record)
 
         # Fallback to original format (for backwards compatibility)
-        return await firebase_service.get_phone_by_number(phone_number)
+        phone_record = await firebase_service.get_phone_by_number(phone_number)
+        return self._normalize_phone_role_fields(phone_record) if phone_record else None
 
     async def get_phone_by_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """Get phone number assigned to an agent."""
-        return await firebase_service.get_phone_by_agent(agent_id)
+        phone = await firebase_service.get_phone_by_agent(agent_id)
+        return self._normalize_phone_role_fields(phone) if phone else None
 
     async def list_phones_by_tenant(self, tenant_id: str) -> List[Dict[str, Any]]:
         """List all phone numbers for a tenant."""
         phones = await firebase_service.list_phones_by_tenant(tenant_id)
 
         # Enrich with agent names
+        normalized_phones: List[Dict[str, Any]] = []
         for phone in phones:
+            phone = self._normalize_phone_role_fields(phone)
             if phone.get("agent_id"):
                 agent = await firebase_service.get_agent(phone["agent_id"])
                 if agent:
                     phone["agent_name"] = agent.get("name")
+            normalized_phones.append(phone)
 
-        return phones
+        return normalized_phones
 
     async def update_phone_number(self, phone_id: str, phone_data: PhoneNumberUpdate) -> Optional[Dict[str, Any]]:
         """Update phone number assignment."""
@@ -150,19 +205,30 @@ class PhoneNumberService:
             update_data["phone_number"] = normalized_phone  # Store normalized format
 
         if phone_data.agent_id is not None:
+            self._assert_voice_assignment_allowed(phone, phone.get("phone_number", ""))
             # Validate agent
             await self._validate_agent_for_tenant(phone_data.agent_id, phone.get("tenant_id"))
             update_data["agent_id"] = phone_data.agent_id
+            update_data["status"] = "active"
+            update_data["usage_role"] = VOICE_AGENT_INBOUND_ROLE
+            update_data["role_status"] = ROLE_STATUS_ACTIVE
+            update_data["conflict_code"] = None
+            update_data["conflict_message"] = None
 
         if phone_data.status is not None:
             update_data["status"] = phone_data.status
+            if phone.get("usage_role") == COLD_CALLER_OUTBOUND_ROLE:
+                update_data["role_status"] = ROLE_STATUS_ACTIVE if phone_data.status == "active" else ROLE_STATUS_INACTIVE
+            elif "role_status" not in update_data:
+                update_data["role_status"] = ROLE_STATUS_ACTIVE if phone_data.status == "active" else ROLE_STATUS_INACTIVE
 
         # Add updated_at timestamp
         from app.core.utils import add_updated_timestamp
 
         add_updated_timestamp(update_data)
 
-        return await firebase_service.update_phone_number(phone_id, update_data)
+        updated = await firebase_service.update_phone_number(phone_id, update_data)
+        return self._normalize_phone_role_fields(updated) if updated else None
 
     async def delete_phone_number(self, phone_id: str) -> bool:
         """Delete phone number assignment."""
@@ -188,6 +254,7 @@ class PhoneNumberService:
             # Verify existing phone belongs to the same tenant
             if existing_phone.get("tenant_id") != tenant_id:
                 raise ValueError(f"Phone number {normalized_phone} is already assigned to a different tenant")
+            self._assert_voice_assignment_allowed(existing_phone, normalized_phone)
             # Update existing assignment with normalized phone number
             phone_data = PhoneNumberUpdate(agent_id=agent_id, phone_number=normalized_phone)
             return await self.update_phone_number(existing_phone["id"], phone_data)
@@ -202,8 +269,115 @@ class PhoneNumberService:
         """Remove phone number assignment from an agent."""
         phone = await self.get_phone_by_agent(agent_id)
         if phone:
-            return await self.delete_phone_number(phone["id"])
+            updated = await firebase_service.update_phone_number(
+                phone["id"],
+                {
+                    "agent_id": "",
+                    "status": "inactive",
+                    "usage_role": VOICE_AGENT_INBOUND_ROLE,
+                    "role_status": ROLE_STATUS_INACTIVE,
+                    "conflict_code": None,
+                    "conflict_message": None,
+                },
+            )
+            return bool(updated)
         return False
+
+    async def bind_cold_caller_outbound_number(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
+        """Bind a tenant-owned number for Cold Caller outbound usage."""
+        normalized_phone = normalize_phone_number(phone_number)
+        phone = await self.get_phone_by_number(normalized_phone)
+        if not phone or phone.get("tenant_id") != tenant_id:
+            raise ValueError(f"Phone number {normalized_phone} not found for this tenant")
+
+        if phone.get("agent_id"):
+            raise ValueError(
+                f"Phone number {normalized_phone} is already assigned to a voice agent. "
+                "Same number cannot be active in both services."
+            )
+
+        if phone.get("usage_role") == COLD_CALLER_OUTBOUND_ROLE and phone.get("role_status") == ROLE_STATUS_ACTIVE:
+            return phone
+
+        updated = await firebase_service.update_phone_number(
+            phone["id"],
+            {
+                "status": "active",
+                "usage_role": COLD_CALLER_OUTBOUND_ROLE,
+                "role_status": ROLE_STATUS_ACTIVE,
+                "conflict_code": None,
+                "conflict_message": None,
+                "agent_id": "",
+            },
+        )
+        if not updated:
+            raise ValueError("Failed to bind outbound number")
+        return self._normalize_phone_role_fields(updated)
+
+    async def unbind_cold_caller_outbound_number(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
+        """Unbind a cold-caller outbound number."""
+        normalized_phone = normalize_phone_number(phone_number)
+        phone = await self.get_phone_by_number(normalized_phone)
+        if not phone or phone.get("tenant_id") != tenant_id:
+            raise ValueError(f"Phone number {normalized_phone} not found for this tenant")
+
+        if phone.get("usage_role") != COLD_CALLER_OUTBOUND_ROLE:
+            raise ValueError(f"Phone number {normalized_phone} is not bound to Cold Caller outbound")
+
+        running_campaign = await firebase_service.get_running_cold_campaign_by_outbound_phone_id(
+            tenant_id=tenant_id, outbound_phone_number_id=phone["id"]
+        )
+        if running_campaign:
+            raise ValueError(
+                f"Phone number {normalized_phone} cannot be unbound while campaign "
+                f"'{running_campaign.get('name', running_campaign.get('id'))}' is running"
+            )
+
+        updated = await firebase_service.update_phone_number(
+            phone["id"],
+            {
+                "status": "inactive",
+                "usage_role": VOICE_AGENT_INBOUND_ROLE,
+                "role_status": ROLE_STATUS_INACTIVE,
+                "conflict_code": None,
+                "conflict_message": None,
+            },
+        )
+        if not updated:
+            raise ValueError("Failed to unbind outbound number")
+        return self._normalize_phone_role_fields(updated)
+
+    async def get_telephony_status(self, tenant_id: str) -> Dict[str, Any]:
+        """Return tenant telephony status and conflicts."""
+        numbers = await self.list_phones_by_tenant(tenant_id)
+        integration = await firebase_service.get_twilio_integration(tenant_id)
+
+        voice_count = len(
+            [
+                n
+                for n in numbers
+                if n.get("usage_role") == VOICE_AGENT_INBOUND_ROLE and n.get("role_status") == ROLE_STATUS_ACTIVE
+            ]
+        )
+        cold_count = len(
+            [
+                n
+                for n in numbers
+                if n.get("usage_role") == COLD_CALLER_OUTBOUND_ROLE and n.get("role_status") == ROLE_STATUS_ACTIVE
+            ]
+        )
+        conflicts = [n for n in numbers if n.get("role_status") == ROLE_STATUS_CONFLICT]
+
+        return {
+            "tenant_id": tenant_id,
+            "has_shared_twilio_credentials": bool(integration),
+            "shared_account_sid": integration.get("account_sid") if integration else None,
+            "total_numbers": len(numbers),
+            "voice_agent_inbound_numbers": voice_count,
+            "cold_caller_outbound_numbers": cold_count,
+            "conflicts_count": len(conflicts),
+            "conflicts": conflicts,
+        }
 
 
 # Global phone number service instance
