@@ -4,7 +4,7 @@ Public chatbot embed runtime endpoints.
 
 from html import escape
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
@@ -147,7 +147,10 @@ async def get_chatbot_embed_loader(
     position = launcher["position"]
     label = launcher["button_label"]
     accent = launcher["accent_color"]
-    panel_url = str(request.url_for("get_chatbot_embed_panel")) + f"?token={escape(token, quote=True)}"
+    panel_query_params = {"token": token}
+    if request_origin and request_origin != "dev://no-origin":
+        panel_query_params["embed_origin"] = request_origin
+    panel_url = f"{request.url_for('get_chatbot_embed_panel')}?{urlencode(panel_query_params)}"
     left = "20px" if position == "bottom-left" else "auto"
     right = "20px" if position == "bottom-right" else "auto"
 
@@ -221,8 +224,12 @@ async def get_chatbot_embed_loader(
 
 
 @router.get("/panel", response_class=HTMLResponse, include_in_schema=False, name="get_chatbot_embed_panel")
-async def get_chatbot_embed_panel(token: str = Query(..., min_length=1)):
+async def get_chatbot_embed_panel(
+    token: str = Query(..., min_length=1),
+    embed_origin: Optional[str] = Query(None),
+):
     safe_token = escape(token, quote=True)
+    safe_embed_origin = escape(_normalize_origin(embed_origin), quote=True)
     html_content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -598,7 +605,12 @@ async def get_chatbot_embed_panel(token: str = Query(..., min_length=1)):
         refreshMicButtonState();
       }};
 
+      const EMBED_ORIGIN = "{safe_embed_origin}";
+
       const getEmbedOrigin = function () {{
+        if (EMBED_ORIGIN) {{
+          return EMBED_ORIGIN;
+        }}
         try {{
           if (document.referrer) {{
             return new URL(document.referrer).origin;
