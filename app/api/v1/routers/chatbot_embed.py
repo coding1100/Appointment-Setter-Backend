@@ -18,14 +18,14 @@ from app.api.v1.schemas.chatbot_agent import (
 from app.chatbot_agents.live_chat_service import chatbot_live_chat_service
 from app.chatbot_agents.service import chatbot_agent_service
 from app.core.async_redis import async_redis_client
-from app.core.config import CHATBOT_DEV_ALLOW_ANY_ORIGIN, ENVIRONMENT
+from app.core.config import CHATBOT_ALLOW_ANY_ORIGIN
 from app.core.security import SecurityService
 
 router = APIRouter(prefix="/chatbot-embed", tags=["chatbot-embed"])
 
 
 def _allow_origin_bypass() -> bool:
-    return str(ENVIRONMENT).strip().lower() == "development" and CHATBOT_DEV_ALLOW_ANY_ORIGIN
+    return CHATBOT_ALLOW_ANY_ORIGIN
 
 
 def _normalize_origin(value: Optional[str]) -> str:
