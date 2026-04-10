@@ -31,6 +31,24 @@ class ChatbotEmbedTokenService:
 
         return {"token": token, "expires_at": expires_at.isoformat()}
 
+    def create_session_token(self, session_id: str, chatbot_id: str, origin: str, visitor_session_id: str) -> Dict[str, str]:
+        """Create short-lived session token for websocket subscriptions."""
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(minutes=CHATBOT_EMBED_TOKEN_TTL_MINUTES)
+
+        payload = {
+            "sub": session_id,
+            "type": "chatbot_embed_session",
+            "chatbot_id": chatbot_id,
+            "origin": origin,
+            "visitor_session_id": visitor_session_id,
+            "iat": int(now.timestamp()),
+            "exp": int(expires_at.timestamp()),
+        }
+        token = jwt.encode(payload, CHATBOT_EMBED_SECRET, algorithm=JWT_ALGORITHM)
+
+        return {"token": token, "expires_at": expires_at.isoformat()}
+
     def verify_token(self, token: str) -> Dict[str, Any]:
         """Verify token signature and claims."""
         try:
@@ -48,6 +66,28 @@ class ChatbotEmbedTokenService:
             raise ValueError("Invalid embed token origin")
         if "ver" not in payload:
             raise ValueError("Invalid embed token version")
+
+        return payload
+
+    def verify_session_token(self, token: str) -> Dict[str, Any]:
+        """Verify widget session token."""
+        try:
+            payload = jwt.decode(token, CHATBOT_EMBED_SECRET, algorithms=[JWT_ALGORITHM])
+        except ExpiredSignatureError as exc:
+            raise ValueError("Session token has expired") from exc
+        except JWTError as exc:
+            raise ValueError("Invalid session token") from exc
+
+        if payload.get("type") != "chatbot_embed_session":
+            raise ValueError("Invalid session token type")
+        if not payload.get("sub"):
+            raise ValueError("Invalid session token subject")
+        if not payload.get("chatbot_id"):
+            raise ValueError("Invalid session token chatbot id")
+        if not payload.get("origin"):
+            raise ValueError("Invalid session token origin")
+        if not payload.get("visitor_session_id"):
+            raise ValueError("Invalid session token visitor session")
 
         return payload
 

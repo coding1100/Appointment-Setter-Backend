@@ -6,12 +6,12 @@ from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.v1.routers.auth import get_current_user_from_token, verify_tenant_access
+from app.api.v1.routers.auth import get_current_user_from_token, require_app_access, verify_tenant_access
 from app.api.v1.schemas.agent import AgentCreate, AgentResponse, AgentUpdate, VoiceListResponse, VoicePreviewRequest
 from app.api.v1.services.agent import agent_service
 from app.core.decorators import handle_router_errors
 
-router = APIRouter(prefix="/agents", tags=["agents"])
+router = APIRouter(prefix="/agents", tags=["agents"], dependencies=[Depends(require_app_access("appointment_setter"))])
 
 
 @router.post("/tenant/{tenant_id}", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)

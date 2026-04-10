@@ -15,6 +15,8 @@ from passlib.context import CryptContext
 from app.api.v1.schemas.auth import LoginRequest, PasswordChangeRequest, UserCreate, UserUpdate
 from app.core.async_redis import async_redis_client
 from app.core.config import JWT_ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
+from app.core.platform_apps import resolve_allowed_app_ids, resolve_default_app_id
+from app.core.platform_apps import resolve_allowed_app_ids, resolve_default_app_id
 from app.core.utils import add_timestamps, add_updated_timestamp, get_current_timestamp
 from app.services.firebase import firebase_service
 
@@ -129,6 +131,8 @@ class AuthService:
             "tenant_id": user_data.tenant_id,
             "last_login": None,
         }
+        user_dict["allowed_app_ids"] = resolve_allowed_app_ids(user_dict)
+        user_dict["default_app_id"] = resolve_default_app_id(user_dict)
 
         return await firebase_service.create_user(user_dict)
 

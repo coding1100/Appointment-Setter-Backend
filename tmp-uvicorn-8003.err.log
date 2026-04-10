@@ -1,0 +1,40 @@
+INFO:app.services.unified_voice_agent:============================================================
+INFO:app.services.unified_voice_agent:VALIDATING LIVEKIT CONFIGURATION
+INFO:app.services.unified_voice_agent:============================================================
+INFO:app.services.unified_voice_agent:LIVEKIT_URL: 'wss://appointment-setter-u2gpzvxc.livekit.cloud'
+INFO:app.services.unified_voice_agent:LIVEKIT_API_KEY: \u2713 SET
+INFO:app.services.unified_voice_agent:LIVEKIT_API_SECRET: \u2713 SET
+INFO:app.services.unified_voice_agent:LIVEKIT_SIP_DOMAIN: 'sip:3nbu801ppzl.sip.livekit.cloud'
+INFO:app.services.unified_voice_agent:\u2713 LIVEKIT_URL is configured
+INFO:app.services.unified_voice_agent:\u2713 LIVEKIT_SIP_DOMAIN is configured
+INFO:app.services.unified_voice_agent:============================================================
+INFO:app.core.env_validator:================================================================================
+INFO:app.core.env_validator:\u2705 All environment variables are properly configured
+INFO:app.core.env_validator:================================================================================
+INFO:     Started server process [8320]
+INFO:     Waiting for application startup.
+INFO:app.main:Starting AI Phone Scheduler API server...
+INFO:app.main:Environment: development
+INFO:app.main:Debug mode: False
+INFO:app.core.env_validator:================================================================================
+INFO:app.core.env_validator:ENVIRONMENT CONFIGURATION SUMMARY
+INFO:app.core.env_validator:================================================================================
+INFO:app.core.env_validator:Environment: development
+INFO:app.core.env_validator:Firebase: \u2705
+INFO:app.core.env_validator:Redis: \u2705
+INFO:app.core.env_validator:LiveKit: \u2705
+INFO:app.core.env_validator:Google AI (Gemini): \u2705
+INFO:app.core.env_validator:Deepgram (STT): \u2705
+INFO:app.core.env_validator:ElevenLabs (TTS): \u2705
+INFO:app.core.env_validator:Email Service: \u2705
+INFO:app.core.env_validator:Secret Key: \u2705
+INFO:app.core.env_validator:================================================================================
+INFO:app.main:Warming up Firebase connection...
+INFO:app.services.firebase_health:\u2705 Firebase connection warmed up successfully
+INFO:app.main:\u2705 Firebase connection ready
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8003 (Press CTRL+C to quit)
+INFO:app.core.async_redis:Async Redis client initialized with connection pool
+WARNING:app.core.security:Rate limiting fallback enabled: Redis unavailable (Timeout connecting to server). Failing open for 30s before retrying.
+C:\Users\hamza\Desktop\Appointment-Setter-Backend\venv\Lib\site-packages\google\cloud\firestore_v1\base_collection.py:317: UserWarning: Detected filter using positional arguments. Prefer using the 'filter' keyword argument instead.
+  return query.where(field_path, op_string, value)

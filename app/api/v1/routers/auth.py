@@ -25,6 +25,8 @@ from app.api.v1.schemas.auth import (
 )
 from app.api.v1.services.auth import auth_service
 from app.core.config import SECRET_KEY
+from app.core.platform_apps import has_app_access as user_has_app_access
+from app.core.platform_apps import has_app_access as user_has_app_access
 from app.core.security import SecurityService
 
 logger = logging.getLogger(__name__)
@@ -127,6 +129,22 @@ def require_admin_role(user: Dict[str, Any]) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied: Admin role required",
         )
+
+
+def enforce_app_access(user: Dict[str, Any], app_id: str) -> None:
+    if not user_has_app_access(user, app_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied: {app_id} is not assigned to this account",
+        )
+
+
+def require_app_access(app_id: str):
+    async def dependency(current_user: Dict[str, Any] = Depends(get_current_user_from_token)) -> Dict[str, Any]:
+        enforce_app_access(current_user, app_id)
+        return current_user
+
+    return dependency
 
 
 def get_client_ip(request: Request) -> str:
@@ -352,8 +370,14 @@ async def reset_password(reset_data: ResetPasswordRequest, request: Request):
 
 
 @router.get("/users", response_model=List[UserResponse])
-async def list_users(request: Request, limit: int = 100, offset: int = 0):
+async def list_users(
+    request: Request,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: Dict[str, Any] = Depends(get_current_user_from_token),
+):
     """List users (admin only)."""
+    require_admin_role(current_user)
     try:
         # Get users from database
         users = await auth_service.list_users(limit, offset)
@@ -368,8 +392,9 @@ async def list_users(request: Request, limit: int = 100, offset: int = 0):
 
 
 @router.get("/users/{user_id}", response_model=UserResponse)
-async def get_user(user_id: str, request: Request):
+async def get_user(user_id: str, request: Request, current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
     """Get user by ID (admin only)."""
+    require_admin_role(current_user)
     try:
         user = await auth_service.get_user(user_id)
         if not user:
@@ -386,8 +411,14 @@ async def get_user(user_id: str, request: Request):
 
 
 @router.put("/users/{user_id}", response_model=UserResponse)
-async def update_user(user_id: str, user_data: UserUpdate, request: Request):
+async def update_user(
+    user_id: str,
+    user_data: UserUpdate,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user_from_token),
+):
     """Update user (admin only)."""
+    require_admin_role(current_user)
     try:
         # Check if user exists
         existing_user = await auth_service.get_user(user_id)
