@@ -40,3 +40,22 @@ def test_verify_embed_token_expired():
 
     with pytest.raises(ValueError, match="expired"):
         service.verify_token(token)
+
+
+def test_create_and_verify_session_token_roundtrip():
+    """Session token should keep websocket chat claims intact."""
+    service = ChatbotEmbedTokenService()
+
+    token_data = service.create_session_token(
+        session_id="session-123",
+        chatbot_id="chatbot-123",
+        origin="https://app.example.com",
+        visitor_session_id="visitor-abc",
+    )
+    claims = service.verify_session_token(token_data["token"])
+
+    assert claims["sub"] == "session-123"
+    assert claims["type"] == "chatbot_embed_session"
+    assert claims["chatbot_id"] == "chatbot-123"
+    assert claims["origin"] == "https://app.example.com"
+    assert claims["visitor_session_id"] == "visitor-abc"

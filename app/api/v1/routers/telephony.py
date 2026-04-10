@@ -6,7 +6,7 @@ from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.v1.routers.auth import get_current_user_from_token, verify_tenant_access
+from app.api.v1.routers.auth import get_current_user_from_token, require_app_access, verify_tenant_access
 from app.api.v1.schemas.telephony import (
     BindColdCallerOutboundRequest,
     TelephonyBindResponse,
@@ -16,7 +16,7 @@ from app.api.v1.schemas.telephony import (
 )
 from app.api.v1.services.telephony import telephony_service
 
-router = APIRouter(prefix="/telephony", tags=["telephony"])
+router = APIRouter(prefix="/telephony", tags=["telephony"], dependencies=[Depends(require_app_access("appointment_setter"))])
 
 
 @router.get("/tenant/{tenant_id}/status", response_model=TelephonyStatusResponse)

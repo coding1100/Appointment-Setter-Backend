@@ -1,16 +1,23 @@
-"""
-Public chatbot embed runtime endpoints.
-"""
+"""Public chatbot embed runtime endpoints."""
 
+import asyncio
 from html import escape
 from typing import Optional
 from urllib.parse import urlencode, urlsplit
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
-from app.api.v1.schemas.chatbot_agent import ChatbotEmbedConfigResponse, ChatbotEmbedStreamRequest
+from app.api.v1.schemas.chatbot_agent import (
+    ChatbotEmbedConfigResponse,
+    ChatbotEmbedStreamRequest,
+    CreateEmbedSessionRequest,
+    CreateEmbedSessionResponse,
+    VisitorMessageRequest,
+)
+from app.chatbot_agents.live_chat_service import chatbot_live_chat_service
 from app.chatbot_agents.service import chatbot_agent_service
+from app.core.async_redis import async_redis_client
 from app.core.config import CHATBOT_DEV_ALLOW_ANY_ORIGIN, ENVIRONMENT
 from app.core.security import SecurityService
 
@@ -45,10 +52,12 @@ async def _enforce_public_rate_limit(request: Request, operation: str, limit: in
     await security_service.enforce_rate_limit(client_ip, limit=limit, window_seconds=window_seconds, operation=operation)
 
 
-def _raise_embed_error(exc: ValueError) -> None:
+def _raise_embed_error(exc: Exception) -> None:
     message = str(exc)
     if "temporarily disabled" in message:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=message) from exc
+    if "not found" in message.lower():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=message) from exc
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=message) from exc
 
 
@@ -118,6 +127,115 @@ async def stream_chatbot_embed_response(
     return StreamingResponse(stream, media_type="text/event-stream", headers=headers)
 
 
+@router.post("/sessions", response_model=CreateEmbedSessionResponse)
+async def create_or_restore_chat_session(
+    request: Request,
+    payload: CreateEmbedSessionRequest,
+    token: str = Query(...),
+    origin: Optional[str] = Header(None, alias="Origin"),
+    embed_origin: Optional[str] = Query(None),
+):
+    await _enforce_public_rate_limit(request, operation="chatbot_embed_sessions", limit=60, window_seconds=60)
+    request_origin = _resolve_request_origin(origin, embed_origin)
+    if not request_origin and not _allow_origin_bypass():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Origin is required")
+    if not request_origin:
+        request_origin = "dev://no-origin"
+
+    try:
+        session_payload = await chatbot_live_chat_service.create_or_restore_session(
+            token=token,
+            request_origin=request_origin,
+            visitor_session_id=payload.visitor_session_id,
+            page_url=payload.page_url,
+            page_title=payload.page_title,
+        )
+    except Exception as exc:
+        _raise_embed_error(exc)
+
+    return CreateEmbedSessionResponse(**session_payload)
+
+
+@router.post("/sessions/{session_id}/messages", response_model=CreateEmbedSessionResponse)
+async def create_widget_message(
+    session_id: str,
+    request: Request,
+    payload: VisitorMessageRequest,
+    token: str = Query(...),
+    origin: Optional[str] = Header(None, alias="Origin"),
+    embed_origin: Optional[str] = Query(None),
+):
+    await _enforce_public_rate_limit(request, operation="chatbot_embed_message", limit=40, window_seconds=60)
+    request_origin = _resolve_request_origin(origin, embed_origin)
+    if not request_origin and not _allow_origin_bypass():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Origin is required")
+    if not request_origin:
+        request_origin = "dev://no-origin"
+
+    try:
+        message = await chatbot_live_chat_service.create_visitor_message(
+            session_id=session_id,
+            token=token,
+            request_origin=request_origin,
+            visitor_session_id=payload.visitor_session_id,
+            message=payload.message,
+        )
+        session = await chatbot_live_chat_service._verify_widget_message_access(
+            session_id=session_id,
+            token=token,
+            request_origin=request_origin,
+            visitor_session_id=payload.visitor_session_id,
+        )
+    except Exception as exc:
+        _raise_embed_error(exc)
+
+    return CreateEmbedSessionResponse(session=session, messages=[message], session_token="")
+
+
+@router.websocket("/live/{session_id}")
+async def chatbot_embed_live_socket(websocket: WebSocket, session_id: str, session_token: str = Query(...)):
+    request_origin = _normalize_origin(websocket.query_params.get("embed_origin"))
+    if not request_origin:
+        request_origin = _normalize_origin(websocket.headers.get("origin")) or "dev://no-origin"
+
+    try:
+        await chatbot_live_chat_service.verify_widget_session(session_id, session_token, request_origin)
+    except Exception as exc:
+        await websocket.close(code=4401, reason=str(exc))
+        return
+
+    await websocket.accept()
+    client = await async_redis_client.get_client()
+    pubsub = client.pubsub()
+    await pubsub.subscribe(chatbot_live_chat_service.session_channel(session_id))
+    await chatbot_live_chat_service._set_presence(session_id, "visitor", session_id)
+
+    async def forward_events():
+        try:
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message and message.get("type") == "message":
+                    await websocket.send_text(message.get("data", "{}"))
+                await asyncio.sleep(0.05)
+        finally:
+            await pubsub.unsubscribe(chatbot_live_chat_service.session_channel(session_id))
+            await pubsub.close()
+
+    task = asyncio.create_task(forward_events())
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        task.cancel()
+        try:
+            await task
+        except Exception:
+            pass
+        await chatbot_live_chat_service._clear_presence(session_id, "visitor", session_id)
+
+
 @router.get("/loader.js", include_in_schema=False)
 async def get_chatbot_embed_loader(
     request: Request,
@@ -128,7 +246,6 @@ async def get_chatbot_embed_loader(
 ):
     await _enforce_public_rate_limit(request, operation="chatbot_embed_loader", limit=120, window_seconds=60)
 
-    # Browsers often omit Origin for script GET requests but include Referer.
     request_origin = _resolve_request_origin(origin, embed_origin, referer)
     if not request_origin and not _allow_origin_bypass():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Origin is required")
@@ -159,58 +276,60 @@ async def get_chatbot_embed_loader(
   if (window.__asChatbotLauncherLoaded) return;
   window.__asChatbotLauncherLoaded = true;
 
-  var root = document.createElement("div");
-  root.id = "as-chatbot-launcher-root";
-  root.style.position = "fixed";
-  root.style.bottom = "20px";
-  root.style.left = "{left}";
-  root.style.right = "{right}";
-  root.style.zIndex = "999999";
-  root.style.fontFamily = "Arial, sans-serif";
+  var root = document.createElement('div');
+  root.id = 'as-chatbot-launcher-root';
+  root.style.position = 'fixed';
+  root.style.bottom = '20px';
+  root.style.left = '{left}';
+  root.style.right = '{right}';
+  root.style.zIndex = '999999';
+  root.style.fontFamily = 'Arial, sans-serif';
 
-  var button = document.createElement("button");
-  button.type = "button";
+  var button = document.createElement('button');
+  button.type = 'button';
   button.textContent = {label!r};
-  button.style.border = "0";
-  button.style.borderRadius = "999px";
-  button.style.padding = "12px 16px";
+  button.style.border = '0';
+  button.style.borderRadius = '999px';
+  button.style.padding = '12px 16px';
   button.style.background = {accent!r};
-  button.style.color = "#fff";
-  button.style.fontWeight = "600";
-  button.style.cursor = "pointer";
-  button.style.boxShadow = "0 8px 24px rgba(2, 6, 23, 0.25)";
+  button.style.color = '#fff';
+  button.style.fontWeight = '600';
+  button.style.cursor = 'pointer';
+  button.style.boxShadow = '0 8px 24px rgba(2, 6, 23, 0.25)';
 
-  var panel = document.createElement("div");
-  panel.style.width = "380px";
-  panel.style.maxWidth = "calc(100vw - 24px)";
-  panel.style.height = "560px";
-  panel.style.maxHeight = "70vh";
-  panel.style.marginBottom = "10px";
-  panel.style.background = "#fff";
-  panel.style.border = "1px solid #d1d5db";
-  panel.style.borderRadius = "14px";
-  panel.style.overflow = "hidden";
-  panel.style.boxShadow = "0 16px 40px rgba(2, 6, 23, 0.26)";
-  panel.style.display = "none";
+  var panel = document.createElement('div');
+  panel.style.width = '380px';
+  panel.style.maxWidth = 'calc(100vw - 24px)';
+  panel.style.height = '560px';
+  panel.style.maxHeight = '70vh';
+  panel.style.marginBottom = '10px';
+  panel.style.background = '#fff';
+  panel.style.border = '1px solid #d1d5db';
+  panel.style.borderRadius = '14px';
+  panel.style.overflow = 'hidden';
+  panel.style.boxShadow = '0 16px 40px rgba(2, 6, 23, 0.26)';
+  panel.style.display = 'none';
 
-  var iframe = document.createElement("iframe");
-  iframe.src = {panel_url!r};
-  iframe.title = "Chatbot Panel";
-  iframe.style.width = "100%";
-  iframe.style.height = "100%";
-  iframe.style.border = "0";
-  iframe.allow = "microphone";
-  iframe.loading = "lazy";
-  iframe.referrerPolicy = "strict-origin-when-cross-origin";
+  var iframe = document.createElement('iframe');
+  var iframeUrl = new URL({panel_url!r});
+  iframeUrl.searchParams.set('page_url', window.location.href || '');
+  iframeUrl.searchParams.set('page_title', document.title || '');
+  iframe.src = iframeUrl.toString();
+  iframe.title = 'Chatbot Panel';
+  iframe.style.width = '100%';
+  iframe.style.height = '100%';
+  iframe.style.border = '0';
+  iframe.loading = 'lazy';
+  iframe.referrerPolicy = 'strict-origin-when-cross-origin';
   panel.appendChild(iframe);
 
-  button.addEventListener("click", function () {{
-    panel.style.display = panel.style.display === "none" ? "block" : "none";
+  button.addEventListener('click', function () {{
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
   }});
 
-  document.addEventListener("keydown", function (event) {{
-    if (event.key === "Escape") {{
-      panel.style.display = "none";
+  document.addEventListener('keydown', function (event) {{
+    if (event.key === 'Escape') {{
+      panel.style.display = 'none';
     }}
   }});
 
@@ -218,615 +337,279 @@ async def get_chatbot_embed_loader(
   root.appendChild(button);
   document.body.appendChild(root);
 }})();
-""".strip()
+"""
 
     return Response(content=script, media_type="application/javascript")
 
 
 @router.get("/panel", response_class=HTMLResponse, include_in_schema=False, name="get_chatbot_embed_panel")
 async def get_chatbot_embed_panel(
-    token: str = Query(..., min_length=1),
+    token: str = Query(...),
     embed_origin: Optional[str] = Query(None),
+    page_url: Optional[str] = Query(None),
+    page_title: Optional[str] = Query(None),
 ):
     safe_token = escape(token, quote=True)
     safe_embed_origin = escape(_normalize_origin(embed_origin), quote=True)
-    html_content = f"""<!doctype html>
+    safe_page_url = escape((page_url or '').strip(), quote=True)
+    safe_page_title = escape((page_title or '').strip(), quote=True)
+
+    html = f"""
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Chatbot Panel</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chatbot</title>
   <style>
     :root {{
       --primary: #2563eb;
       --bg: #ffffff;
       --text: #0f172a;
-      --muted: #64748b;
-      --border: #e2e8f0;
     }}
     * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-    }}
-    .panel {{
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }}
-    .header {{
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--border);
-      background: var(--primary);
-      color: #fff;
-      font-weight: 600;
-    }}
-    .body {{
-      padding: 14px 16px;
-      overflow: hidden;
-      flex: 1;
-      background: var(--bg);
-      color: var(--text);
-    }}
-    .messages {{
-      height: 100%;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }}
-    .message {{
-      max-width: 92%;
-      width: fit-content;
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: #f8fafc;
-      line-height: 1.35;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }}
-    .message.user {{
-      margin-left: auto;
-      background: #e0f2fe;
-      border-color: #bae6fd;
-    }}
-    .message.assistant {{
-      margin-right: auto;
-    }}
-    .message.error {{
-      background: #fee2e2;
-      border-color: #fecaca;
-      color: #b91c1c;
-    }}
-    .footer {{
-      padding: 12px 14px;
-      border-top: 1px solid var(--border);
-      display: flex;
-      gap: 8px;
-      align-items: flex-end;
-      background: #fff;
-    }}
-    .composer {{
-      flex: 1;
-      min-height: 40px;
-      max-height: 120px;
-      resize: vertical;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 12px;
-      font: inherit;
-      color: var(--text);
-      outline: none;
-      background: #fff;
-    }}
-    .composer:focus {{
-      border-color: var(--primary);
-      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
-    }}
-    .send-btn {{
-      border: 0;
-      border-radius: 10px;
-      padding: 10px 14px;
-      background: var(--primary);
-      color: #fff;
-      font-weight: 600;
-      cursor: pointer;
-      min-width: 78px;
-    }}
-    .send-btn:disabled {{
-      opacity: 0.55;
-      cursor: not-allowed;
-    }}
-    .mic-btn {{
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      width: 42px;
-      height: 42px;
-      padding: 0;
-      background: #fff;
-      color: var(--text);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      flex-shrink: 0;
-    }}
-    .mic-btn:hover:not(:disabled) {{
-      border-color: var(--primary);
-      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
-    }}
-    .mic-btn:disabled {{
-      opacity: 0.45;
-      cursor: not-allowed;
-    }}
-    .mic-btn.active {{
-      background: #dc2626;
-      border-color: #dc2626;
-      color: #fff;
-      box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.18);
-    }}
-    .mic-icon {{
-      width: 18px;
-      height: 18px;
-      display: block;
-    }}
-    .sr-only {{
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      border: 0;
-    }}
-    .status {{
-      padding: 0 16px 10px;
-      font-size: 12px;
-      color: var(--muted);
-    }}
+    body {{ margin: 0; font-family: Arial, sans-serif; background: var(--bg); color: var(--text); }}
+    .panel {{ display: flex; flex-direction: column; height: 100vh; background: var(--bg); }}
+    .header {{ padding: 16px 18px; border-bottom: 1px solid #e5e7eb; font-weight: 700; }}
+    .meta {{ padding: 0 18px 12px; font-size: 12px; color: #64748b; border-bottom: 1px solid #eef2f7; }}
+    .messages {{ flex: 1; overflow-y: auto; padding: 16px; background: linear-gradient(180deg, rgba(248,250,252,0.8), rgba(255,255,255,1)); }}
+    .message {{ max-width: 85%; padding: 10px 12px; border-radius: 14px; margin-bottom: 10px; white-space: pre-wrap; line-height: 1.45; font-size: 14px; }}
+    .message.visitor {{ margin-left: auto; background: var(--primary); color: white; border-bottom-right-radius: 6px; }}
+    .message.bot, .message.human {{ margin-right: auto; background: #f1f5f9; color: #0f172a; border-bottom-left-radius: 6px; }}
+    .message.system {{ margin-left: auto; margin-right: auto; background: #e2e8f0; color: #334155; font-size: 12px; text-align: center; }}
+    .status {{ display: none; padding: 8px 18px; font-size: 12px; color: #64748b; border-top: 1px solid #eef2f7; }}
+    .status.is-visible {{ display: block; }}
+    .composer-wrap {{ display: flex; gap: 10px; padding: 14px; border-top: 1px solid #e5e7eb; background: #fff; }}
+    .composer {{ flex: 1; min-height: 44px; max-height: 120px; resize: vertical; border: 1px solid #cbd5e1; border-radius: 12px; padding: 11px 12px; font: inherit; outline: none; }}
+    .composer:focus {{ border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }}
+    .send-btn {{ border: 0; border-radius: 12px; background: var(--primary); color: white; font-weight: 600; padding: 0 18px; cursor: pointer; }}
+    .send-btn:disabled, .composer:disabled {{ opacity: 0.6; cursor: not-allowed; }}
   </style>
 </head>
 <body>
   <div class="panel">
     <div class="header" id="chatbot-title">Loading chatbot...</div>
-    <div class="body">
-      <div class="messages" id="chatbot-messages"></div>
-    </div>
+    <div class="meta" id="chatbot-meta">Preparing live chat...</div>
+    <div class="messages" id="chatbot-messages"></div>
     <div class="status" id="chatbot-status">Initializing chatbot...</div>
-    <div class="footer">
-      <textarea id="chatbot-input" class="composer" placeholder="Type your message..." rows="1"></textarea>
-      <button id="chatbot-mic" class="mic-btn" type="button" aria-label="Start voice input" aria-pressed="false" title="Start voice input" disabled>
-        <span class="sr-only">Mic</span>
-        <svg class="mic-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 1 0 6 0V6a3 3 0 0 0-3-3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-          <path d="M19 11a7 7 0 0 1-14 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          <path d="M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          <path d="M8 21h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-        </svg>
-      </button>
+    <div class="composer-wrap">
+      <textarea id="chatbot-input" class="composer" rows="1" placeholder="Type your message..."></textarea>
       <button id="chatbot-send" class="send-btn" type="button">Send</button>
     </div>
   </div>
-  <script src="/api-static/vendor/annyang.min.js"></script>
   <script>
     (async function () {{
-      const token = "{safe_token}";
-      const title = document.getElementById("chatbot-title");
-      const messages = document.getElementById("chatbot-messages");
-      const status = document.getElementById("chatbot-status");
-      const input = document.getElementById("chatbot-input");
-      const micButton = document.getElementById("chatbot-mic");
-      const sendButton = document.getElementById("chatbot-send");
-      let chatHistory = [];
-      let isSending = false;
-      let speechEnabled = false;
-      let speechBlockedReason = "";
-      let isListening = false;
-      let speechFinalTranscript = "";
-      let preListenInputValue = "";
-      let recognition = null;
+      const token = {safe_token!r};
+      const embedOrigin = {safe_embed_origin!r};
+      const pageUrl = {safe_page_url!r};
+      const pageTitle = {safe_page_title!r};
+      const title = document.getElementById('chatbot-title');
+      const meta = document.getElementById('chatbot-meta');
+      const messages = document.getElementById('chatbot-messages');
+      const status = document.getElementById('chatbot-status');
+      const input = document.getElementById('chatbot-input');
+      const sendButton = document.getElementById('chatbot-send');
+      const messageIds = new Set();
+      let session = null;
+      let sessionToken = '';
+      let socket = null;
+      let reconnectTimer = null;
+      const hiddenSystemMessages = new Set([
+        'A team member joined the chat.',
+        'The chatbot is back in the conversation.'
+      ]);
 
-      const appendMessage = function (role, text, extraClass) {{
-        const el = document.createElement("div");
-        let className = "message " + role;
-        if (extraClass) {{
-          className += " " + extraClass;
-        }}
-        el.className = className;
-        el.textContent = text || "";
-        messages.appendChild(el);
-        messages.scrollTop = messages.scrollHeight;
-        return el;
+      const setStatus = function(message, visible) {{
+        status.textContent = message || '';
+        status.classList.toggle('is-visible', Boolean(visible && message));
       }};
 
-      const setComposerDisabled = function (disabled) {{
+      const getVisitorKey = function(chatbotId) {{
+        return 'samai-chatbot-visitor:' + chatbotId + ':' + (embedOrigin || 'unknown');
+      }};
+
+      const generateVisitorId = function() {{
+        return 'visitor-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      }};
+
+      const getWsBase = function() {{
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return wsProtocol + '//' + window.location.host;
+      }};
+
+      const setComposerDisabled = function(disabled) {{
         input.disabled = disabled;
         sendButton.disabled = disabled;
-        if (micButton && !isListening) {{
-          micButton.disabled = disabled || !speechEnabled;
-        }}
       }};
 
-      const isLocalhost = function () {{
-        const host = window.location.hostname;
-        return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+      const renderStatus = function() {{
+        if (!session) {{
+          setStatus('', false);
+          return;
+        }}
+        if (session.status === 'closed') {{
+          setStatus('This chat has been closed.', true);
+          setComposerDisabled(true);
+          return;
+        }}
+        setStatus('', false);
       }};
 
-      const isSpeechSecureContext = function () {{
-        return window.isSecureContext || isLocalhost();
+      const appendMessage = function(message) {{
+        if (!message || !message.id || messageIds.has(message.id)) {{
+          return;
+        }}
+        if (message.sender_type === 'system' && hiddenSystemMessages.has(message.content || '')) {{
+          messageIds.add(message.id);
+          return;
+        }}
+        messageIds.add(message.id);
+        const el = document.createElement('div');
+        el.className = 'message ' + message.sender_type;
+        el.textContent = message.content || '';
+        messages.appendChild(el);
+        messages.scrollTop = messages.scrollHeight;
       }};
 
-      const setReadyStatus = function () {{
-        if (speechBlockedReason) {{
-          status.textContent = "Ready | Voice disabled: " + speechBlockedReason;
-          return;
+      const connectSocket = function() {{
+        if (!session || !sessionToken) return;
+        if (socket) {{
+          socket.close();
         }}
-        status.textContent = "Ready";
+        const wsUrl = new URL(getWsBase() + '/api/v1/chatbot-embed/live/' + session.id);
+        wsUrl.searchParams.set('session_token', sessionToken);
+        if (embedOrigin) {{
+          wsUrl.searchParams.set('embed_origin', embedOrigin);
+        }}
+        socket = new WebSocket(wsUrl.toString());
+        socket.onmessage = function(event) {{
+          try {{
+            const payload = JSON.parse(event.data || '{{}}');
+            if (payload.type === 'message.created' && payload.message) {{
+              appendMessage(payload.message);
+            }}
+            if ((payload.type === 'session.state_changed' || payload.type === 'takeover.started' || payload.type === 'takeover.released' || payload.type === 'chat.closed') && payload.session) {{
+              session = payload.session;
+              renderStatus();
+            }}
+          }} catch (_error) {{}}
+        }};
+        socket.onclose = function() {{
+          if (session && session.status === 'open') {{
+            reconnectTimer = window.setTimeout(connectSocket, 1500);
+          }}
+        }};
       }};
 
-      const refreshMicButtonState = function () {{
-        if (!micButton) {{
-          return;
-        }}
-
-        micButton.classList.toggle("active", isListening);
-        micButton.setAttribute("aria-pressed", isListening ? "true" : "false");
-        micButton.setAttribute("aria-label", isListening ? "Stop voice input" : "Start voice input");
-
-        if (isListening) {{
-          micButton.title = "Stop voice input";
-          return;
-        }}
-
-        if (speechEnabled) {{
-          micButton.title = "Start voice input";
-          return;
-        }}
-
-        micButton.title = speechBlockedReason ? "Voice disabled: " + speechBlockedReason : "Voice input unavailable";
-      }};
-
-      const disableSpeech = function (reason) {{
-        speechEnabled = false;
-        speechBlockedReason = reason || "unsupported";
-        isListening = false;
-        if (micButton) {{
-          micButton.disabled = true;
-        }}
-        refreshMicButtonState();
-      }};
-
-      const initializeSpeechRecognition = function () {{
-        if (!micButton) {{
-          return;
-        }}
-        if (!isSpeechSecureContext()) {{
-          disableSpeech("requires HTTPS");
-          return;
-        }}
-        if (!window.annyang || typeof window.annyang.getSpeechRecognizer !== "function") {{
-          disableSpeech("library not loaded");
-          return;
-        }}
-
+      const submitMessage = async function() {{
+        const text = (input.value || '').trim();
+        if (!text || !session) return;
+        sendButton.disabled = true;
         try {{
-          window.annyang.init({{}}, false);
-        }} catch (_error) {{
-          disableSpeech("browser not supported");
-          return;
+          const url = new URL('./sessions/' + session.id + '/messages', window.location.href);
+          url.searchParams.set('token', token);
+          if (embedOrigin) {{
+            url.searchParams.set('embed_origin', embedOrigin);
+          }}
+          const visitorSessionId = window.localStorage.getItem(getVisitorKey(session.chatbot_id));
+          const response = await fetch(url.toString(), {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json', 'Accept': 'application/json' }},
+            body: JSON.stringify({{ visitor_session_id: visitorSessionId, message: text }})
+          }});
+        const payload = await response.json();
+        if (!response.ok) {{
+          throw new Error(payload?.detail || 'Unable to send message');
         }}
-
-        recognition = window.annyang.getSpeechRecognizer();
-        if (!recognition) {{
-          disableSpeech("browser not supported");
-          return;
+        input.value = '';
+        setStatus('', false);
+      }} catch (error) {{
+          setStatus(error?.message || 'Unable to send message', true);
+      }} finally {{
+          sendButton.disabled = false;
+          input.focus();
         }}
-
-        recognition.continuous = false;
-        recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
-        recognition.lang = "en-US";
-
-        recognition.onstart = function () {{
-          isListening = true;
-          refreshMicButtonState();
-          status.textContent = "Listening...";
-        }};
-
-        recognition.onerror = function (event) {{
-          const errorCode = event && event.error ? event.error : "unknown";
-          if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {{
-            disableSpeech("microphone permission denied");
-            status.textContent = "Voice input blocked by browser permissions.";
-            return;
-          }}
-          status.textContent = "Voice input error: " + errorCode;
-        }};
-
-        recognition.onresult = function (event) {{
-          if (!event || !event.results) {{
-            return;
-          }}
-          let finalChunk = "";
-          let interimChunk = "";
-          for (let i = event.resultIndex; i < event.results.length; i += 1) {{
-            const result = event.results[i];
-            const transcript = result && result[0] && result[0].transcript ? result[0].transcript : "";
-            if (!transcript) {{
-              continue;
-            }}
-            if (result.isFinal) {{
-              finalChunk += transcript + " ";
-            }} else {{
-              interimChunk += transcript;
-            }}
-          }}
-
-          if (finalChunk) {{
-            speechFinalTranscript += finalChunk;
-          }}
-
-          const composed = (speechFinalTranscript + interimChunk).trim();
-          if (composed) {{
-            input.value = composed;
-          }}
-        }};
-
-        recognition.onend = function () {{
-          const spokenText = (input.value || speechFinalTranscript || "").trim();
-          const shouldSubmit = Boolean(spokenText) && !isSending;
-
-          isListening = false;
-          speechFinalTranscript = "";
-          refreshMicButtonState();
-
-          if (!shouldSubmit) {{
-            if (!spokenText) {{
-              input.value = preListenInputValue;
-            }}
-            setReadyStatus();
-            return;
-          }}
-
-          input.value = spokenText;
-          submitMessage();
-        }};
-
-        speechEnabled = true;
-        speechBlockedReason = "";
-        if (!isSending) {{
-          micButton.disabled = false;
-        }}
-        refreshMicButtonState();
-      }};
-
-      const EMBED_ORIGIN = "{safe_embed_origin}";
-
-      const getEmbedOrigin = function () {{
-        if (EMBED_ORIGIN) {{
-          return EMBED_ORIGIN;
-        }}
-        try {{
-          if (document.referrer) {{
-            return new URL(document.referrer).origin;
-          }}
-        }} catch (_error) {{
-          return "";
-        }}
-        return "";
       }};
 
       if (!token) {{
-        status.textContent = "Missing token.";
+        setStatus('Missing token.', true);
         setComposerDisabled(true);
         return;
       }}
 
       try {{
-        const embedOrigin = getEmbedOrigin();
-        const configUrl = new URL("./config", window.location.href);
-        configUrl.searchParams.set("token", token);
+        const configUrl = new URL('./config', window.location.href);
+        configUrl.searchParams.set('token', token);
         if (embedOrigin) {{
-          configUrl.searchParams.set("embed_origin", embedOrigin);
+          configUrl.searchParams.set('embed_origin', embedOrigin);
+        }}
+        const configResponse = await fetch(configUrl.toString(), {{ method: 'GET', headers: {{ 'Accept': 'application/json' }} }});
+        const configPayload = await configResponse.json();
+        if (!configResponse.ok) {{
+          throw new Error(configPayload?.detail || 'Failed to load chatbot config');
         }}
 
-        const response = await fetch(configUrl.toString(), {{
-          method: "GET",
-          headers: {{ "Accept": "application/json" }},
+        title.textContent = configPayload.name || 'Chatbot';
+        document.documentElement.style.setProperty('--primary', configPayload.theme?.primary_color || '#2563eb');
+        document.documentElement.style.setProperty('--bg', configPayload.theme?.background_color || '#ffffff');
+        document.documentElement.style.setProperty('--text', configPayload.theme?.text_color || '#0f172a');
+        meta.textContent = embedOrigin || pageUrl || 'Live website chat';
+
+        const visitorStorageKey = getVisitorKey(configPayload.chatbot_id);
+        let visitorSessionId = window.localStorage.getItem(visitorStorageKey);
+        if (!visitorSessionId) {{
+          visitorSessionId = generateVisitorId();
+          window.localStorage.setItem(visitorStorageKey, visitorSessionId);
+        }}
+
+        const sessionUrl = new URL('./sessions', window.location.href);
+        sessionUrl.searchParams.set('token', token);
+        if (embedOrigin) {{
+          sessionUrl.searchParams.set('embed_origin', embedOrigin);
+        }}
+        const sessionResponse = await fetch(sessionUrl.toString(), {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json', 'Accept': 'application/json' }},
+          body: JSON.stringify({{ visitor_session_id: visitorSessionId, page_url: pageUrl, page_title: pageTitle }})
         }});
-        const payload = await response.json();
-        if (!response.ok) {{
-          throw new Error(payload?.detail || "Failed to load chatbot config");
+        const sessionPayload = await sessionResponse.json();
+        if (!sessionResponse.ok) {{
+          throw new Error(sessionPayload?.detail || 'Failed to create chat session');
         }}
 
-        title.textContent = payload.name || "Chatbot";
-        document.documentElement.style.setProperty("--primary", payload.theme?.primary_color || "#2563eb");
-        document.documentElement.style.setProperty("--bg", payload.theme?.background_color || "#ffffff");
-        document.documentElement.style.setProperty("--text", payload.theme?.text_color || "#0f172a");
-        messages.innerHTML = "";
-        const welcomeText = payload.welcome_message || "Hello!";
-        appendMessage("assistant", welcomeText, "");
-        chatHistory.push({{ role: "assistant", content: welcomeText }});
+        session = sessionPayload.session;
+        sessionToken = sessionPayload.session_token;
+        messages.innerHTML = '';
+        (sessionPayload.messages || []).forEach(appendMessage);
+        renderStatus();
         setComposerDisabled(false);
-        initializeSpeechRecognition();
-        setReadyStatus();
+        connectSocket();
         input.focus();
       }} catch (error) {{
-        messages.innerHTML = "";
-        appendMessage("assistant", error?.message || "Unable to initialize chatbot.", "error");
-        status.textContent = "Initialization failed";
+        messages.innerHTML = '';
+        const el = document.createElement('div');
+        el.className = 'message system';
+        el.textContent = error?.message || 'Unable to initialize chatbot.';
+        messages.appendChild(el);
         setComposerDisabled(true);
+        setStatus('Initialization failed', true);
         return;
       }}
 
-      const parseSseChunk = function (rawEvent) {{
-        const lines = rawEvent
-          .split("\\n")
-          .map(function (line) {{ return line.trim(); }})
-          .filter(function (line) {{ return line.indexOf("data:") === 0; }})
-          .map(function (line) {{ return line.slice(5).trim(); }});
-        if (!lines.length) {{
-          return null;
-        }}
-        try {{
-          return JSON.parse(lines.join("\\n"));
-        }} catch (_error) {{
-          return null;
-        }}
-      }};
-
-      const streamAssistantReply = async function (userText) {{
-        if (isSending) {{
-          return;
-        }}
-        isSending = true;
-        setComposerDisabled(true);
-        status.textContent = "Generating response...";
-
-        appendMessage("user", userText, "");
-        chatHistory.push({{ role: "user", content: userText }});
-        const assistantNode = appendMessage("assistant", "", "");
-        let assistantText = "";
-
-        try {{
-          const embedOrigin = getEmbedOrigin();
-          const streamUrl = new URL("./stream", window.location.href);
-          streamUrl.searchParams.set("token", token);
-          if (embedOrigin) {{
-            streamUrl.searchParams.set("embed_origin", embedOrigin);
-          }}
-
-          const response = await fetch(streamUrl.toString(), {{
-            method: "POST",
-            headers: {{
-              "Content-Type": "application/json",
-              "Accept": "text/event-stream"
-            }},
-            body: JSON.stringify({{
-              message: userText,
-              history: chatHistory
-            }})
-          }});
-
-          if (!response.ok || !response.body) {{
-            let detail = "Unable to generate response";
-            try {{
-              const errorPayload = await response.json();
-              if (errorPayload && errorPayload.detail) {{
-                detail = errorPayload.detail;
-              }}
-            }} catch (_error) {{}}
-            throw new Error(detail);
-          }}
-
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder("utf-8");
-          let buffer = "";
-
-          while (true) {{
-            const readState = await reader.read();
-            if (readState.done) {{
-              break;
-            }}
-            buffer += decoder.decode(readState.value, {{ stream: true }});
-
-            let separatorIndex = buffer.indexOf("\\n\\n");
-            while (separatorIndex !== -1) {{
-              const rawEvent = buffer.slice(0, separatorIndex);
-              buffer = buffer.slice(separatorIndex + 2);
-              separatorIndex = buffer.indexOf("\\n\\n");
-
-              const event = parseSseChunk(rawEvent);
-              if (!event) {{
-                continue;
-              }}
-
-              if (event.type === "delta") {{
-                assistantText += event.text || "";
-                assistantNode.textContent = assistantText;
-                messages.scrollTop = messages.scrollHeight;
-                continue;
-              }}
-
-              if (event.type === "error") {{
-                assistantNode.textContent = event.message || "Unable to generate response.";
-                assistantNode.classList.add("error");
-                continue;
-              }}
-
-              if (event.type === "done") {{
-                if (!assistantText && event.full_text) {{
-                  assistantText = event.full_text;
-                  assistantNode.textContent = assistantText;
-                }}
-              }}
-            }}
-          }}
-        }} catch (error) {{
-          assistantNode.textContent = error?.message || "Unable to generate response.";
-          assistantNode.classList.add("error");
-        }} finally {{
-          const cleanAssistant = (assistantText || "").trim();
-          if (cleanAssistant) {{
-            chatHistory.push({{ role: "assistant", content: cleanAssistant }});
-          }}
-          isSending = false;
-          setComposerDisabled(false);
-          setReadyStatus();
-          input.focus();
-          messages.scrollTop = messages.scrollHeight;
-        }}
-      }};
-
-      const submitMessage = async function () {{
-        const text = (input.value || "").trim();
-        if (!text || isSending) {{
-          return;
-        }}
-        input.value = "";
-        await streamAssistantReply(text);
-      }};
-
-      sendButton.addEventListener("click", function () {{
-        submitMessage();
-      }});
-
-      if (micButton) {{
-        micButton.addEventListener("click", function () {{
-          if (!speechEnabled || isSending || !window.annyang) {{
-            return;
-          }}
-
-          if (isListening) {{
-            window.annyang.abort();
-            return;
-          }}
-
-          preListenInputValue = (input.value || "").trim();
-          speechFinalTranscript = "";
-          input.value = "";
-
-          try {{
-            window.annyang.start({{ autoRestart: false, continuous: false }});
-          }} catch (_error) {{
-            status.textContent = "Unable to start microphone.";
-          }}
-        }});
-      }}
-
-      input.addEventListener("keydown", function (event) {{
-        if (event.key === "Enter" && !event.shiftKey) {{
+      sendButton.addEventListener('click', submitMessage);
+      input.addEventListener('keydown', function(event) {{
+        if (event.key === 'Enter' && !event.shiftKey) {{
           event.preventDefault();
           submitMessage();
         }}
       }});
+      window.addEventListener('beforeunload', function() {{
+        if (reconnectTimer) window.clearTimeout(reconnectTimer);
+        if (socket) socket.close();
+      }});
     }})();
   </script>
 </body>
-</html>"""
-    return HTMLResponse(content=html_content, status_code=status.HTTP_200_OK)
+</html>
+"""
+    return HTMLResponse(content=html)

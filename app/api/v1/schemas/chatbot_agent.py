@@ -1,5 +1,5 @@
 """
-Schemas for multi-domain chatbot agent configuration and launcher embedding.
+Schemas for multi-domain chatbot agent configuration, live chat, and launcher embedding.
 """
 
 from datetime import datetime
@@ -333,3 +333,94 @@ class ChatbotRuntimeControlResponse(BaseModel):
     enabled: bool
     updated_at: datetime
     updated_by: str
+
+
+class CreateEmbedSessionRequest(BaseModel):
+    visitor_session_id: str = Field(..., min_length=1, max_length=200)
+    page_url: Optional[str] = Field(None, max_length=2000)
+    page_title: Optional[str] = Field(None, max_length=300)
+
+    @validator("visitor_session_id", "page_url", "page_title", pre=True)
+    def trim_optional_fields(cls, value):
+        if value is None:
+            return value
+        return str(value).strip()
+
+
+class VisitorMessageRequest(BaseModel):
+    visitor_session_id: str = Field(..., min_length=1, max_length=200)
+    message: str = Field(..., min_length=1, max_length=4000)
+
+    @validator("visitor_session_id", "message")
+    def trim_visitor_message_fields(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Field cannot be empty")
+        return cleaned
+
+
+class OperatorMessageRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=4000)
+
+    @validator("content")
+    def trim_operator_content(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Content cannot be empty")
+        return cleaned
+
+
+class ChatMessageResponse(BaseModel):
+    id: str
+    session_id: str
+    chatbot_id: str
+    sender_type: Literal["visitor", "bot", "human", "system"]
+    sender_id: Optional[str] = None
+    content: str
+    created_at: datetime
+
+
+class ChatSessionResponse(BaseModel):
+    id: str
+    chatbot_id: str
+    owner_user_id: str
+    origin: str
+    page_url: str
+    page_title: str = ""
+    visitor_session_id: str
+    visitor_label: str
+    status: Literal["open", "closed"]
+    control_mode: Literal["bot", "human"]
+    assigned_operator_id: Optional[str] = None
+    assigned_operator_name: Optional[str] = None
+    started_at: datetime
+    last_activity_at: datetime
+    taken_over_at: Optional[datetime] = None
+    released_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+    last_message_preview: Optional[str] = None
+
+
+class CreateEmbedSessionResponse(BaseModel):
+    session: ChatSessionResponse
+    messages: List[ChatMessageResponse]
+    session_token: str
+
+
+class LiveChatListItem(BaseModel):
+    session: ChatSessionResponse
+
+
+class LiveChatDetailResponse(BaseModel):
+    session: ChatSessionResponse
+    messages: List[ChatMessageResponse]
+
+
+class TakeoverResponse(BaseModel):
+    session: ChatSessionResponse
+    message: ChatMessageResponse
+
+
+class ReleaseResponse(BaseModel):
+    session: ChatSessionResponse
+    message: ChatMessageResponse

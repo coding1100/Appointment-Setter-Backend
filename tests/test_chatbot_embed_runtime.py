@@ -1,6 +1,4 @@
-"""
-Tests for chatbot embed loader/panel runtime scripts.
-"""
+"""Tests for chatbot embed loader/panel runtime scripts."""
 
 import pytest
 
@@ -21,19 +19,25 @@ class _DummyRequest:
 
 
 @pytest.mark.asyncio
-async def test_chatbot_embed_panel_includes_voice_input_runtime():
-    response = await chatbot_embed_router.get_chatbot_embed_panel(token="token-123")
+async def test_chatbot_embed_panel_includes_session_bootstrap_runtime():
+    response = await chatbot_embed_router.get_chatbot_embed_panel(
+        token="token-123",
+        embed_origin=None,
+        page_url=None,
+        page_title=None,
+    )
     body = response.body.decode("utf-8")
 
-    assert 'id="chatbot-mic"' in body
-    assert "/api-static/vendor/annyang.min.js" in body
-    assert "window.annyang.init({}, false);" in body
-    assert "window.annyang.start" in body
-    assert "initializeSpeechRecognition" in body
+    assert "samai-chatbot-visitor:" in body
+    assert "create chat session" in body.lower()
+    assert "new URL('./sessions', window.location.href)" in body
+    assert "new WebSocket(wsUrl.toString())" in body
+    assert "A team member joined the chat" in body
+    assert "payload.type === 'takeover.released'" in body
 
 
 @pytest.mark.asyncio
-async def test_chatbot_embed_loader_sets_microphone_iframe_permission(monkeypatch):
+async def test_chatbot_embed_loader_passes_page_context_into_iframe(monkeypatch):
     async def _noop_rate_limit(*_args, **_kwargs):
         return None
 
@@ -65,4 +69,6 @@ async def test_chatbot_embed_loader_sets_microphone_iframe_permission(monkeypatc
     )
     script = response.body.decode("utf-8")
 
-    assert 'iframe.allow = "microphone";' in script
+    assert "iframeUrl.searchParams.set('page_url', window.location.href || '');" in script
+    assert "iframeUrl.searchParams.set('page_title', document.title || '');" in script
+    assert "button.addEventListener('click'" in script

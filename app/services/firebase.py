@@ -709,6 +709,111 @@ class FirebaseService:
 
         return await self._run_in_executor(_update)
 
+    async def create_chatbot_chat_session(self, session_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a chatbot live chat session."""
+        add_timestamps(session_data)
+
+        def _create():
+            doc_ref = self.db.collection("chatbot_chat_sessions").document(session_data["id"])
+            doc_ref.set(session_data)
+            return session_data
+
+        return await self._run_in_executor(_create)
+
+    async def get_chatbot_chat_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get chatbot live chat session by id."""
+
+        def _get():
+            doc_ref = self.db.collection("chatbot_chat_sessions").document(session_id)
+            doc = doc_ref.get()
+            return doc.to_dict() if doc.exists else None
+
+        return await self._run_in_executor(_get)
+
+    async def update_chatbot_chat_session(self, session_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update chatbot live chat session."""
+        add_updated_timestamp(update_data)
+
+        def _update():
+            doc_ref = self.db.collection("chatbot_chat_sessions").document(session_id)
+            doc_ref.set(update_data, merge=True)
+            doc = doc_ref.get()
+            return doc.to_dict() if doc.exists else None
+
+        return await self._run_in_executor(_update)
+
+    async def find_open_chatbot_chat_session(
+        self, chatbot_id: str, visitor_session_id: str, origin: str
+    ) -> Optional[Dict[str, Any]]:
+        """Find latest open chat session for a visitor on a specific chatbot/origin."""
+
+        def _find():
+            sessions_ref = self.db.collection("chatbot_chat_sessions")
+            docs = sessions_ref.where("visitor_session_id", "==", visitor_session_id).stream()
+            matches = []
+            normalized_origin = origin.rstrip("/")
+            for doc in docs:
+                data = doc.to_dict()
+                if not data:
+                    continue
+                if data.get("chatbot_id") != chatbot_id:
+                    continue
+                if str(data.get("origin", "")).rstrip("/") != normalized_origin:
+                    continue
+                if data.get("status") != "open":
+                    continue
+                matches.append(data)
+            matches.sort(key=lambda entry: entry.get("last_activity_at") or entry.get("updated_at") or "", reverse=True)
+            return matches[0] if matches else None
+
+        return await self._run_in_executor(_find)
+
+    async def list_chatbot_chat_sessions_by_owner(self, owner_user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """List live chat sessions for an owner."""
+
+        def _list():
+            sessions_ref = self.db.collection("chatbot_chat_sessions")
+            docs = sessions_ref.where("owner_user_id", "==", owner_user_id).stream()
+            items = [doc.to_dict() for doc in docs if doc.to_dict()]
+            items.sort(key=lambda entry: entry.get("last_activity_at") or entry.get("updated_at") or "", reverse=True)
+            return items[:limit]
+
+        return await self._run_in_executor(_list)
+
+    async def list_chatbot_chat_sessions(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """List all live chat sessions."""
+
+        def _list():
+            sessions_ref = self.db.collection("chatbot_chat_sessions")
+            docs = sessions_ref.stream()
+            items = [doc.to_dict() for doc in docs if doc.to_dict()]
+            items.sort(key=lambda entry: entry.get("last_activity_at") or entry.get("updated_at") or "", reverse=True)
+            return items[:limit]
+
+        return await self._run_in_executor(_list)
+
+    async def create_chatbot_chat_message(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create chatbot chat message entry."""
+        add_timestamps(message_data)
+
+        def _create():
+            doc_ref = self.db.collection("chatbot_chat_messages").document(message_data["id"])
+            doc_ref.set(message_data)
+            return message_data
+
+        return await self._run_in_executor(_create)
+
+    async def list_chatbot_chat_messages(self, session_id: str, limit: int = 250) -> List[Dict[str, Any]]:
+        """List chat messages for a live chat session."""
+
+        def _list():
+            messages_ref = self.db.collection("chatbot_chat_messages")
+            docs = messages_ref.where("session_id", "==", session_id).stream()
+            items = [doc.to_dict() for doc in docs if doc.to_dict()]
+            items.sort(key=lambda entry: entry.get("created_at") or "")
+            return items[:limit]
+
+        return await self._run_in_executor(_list)
     # Phone number operations
     async def create_phone_number(self, phone_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new phone number assignment."""
@@ -858,3 +963,4 @@ def get_firebase_service() -> FirebaseService:
 
 # Initialize immediately for production use (will fail gracefully in test mode)
 firebase_service = get_firebase_service()
+

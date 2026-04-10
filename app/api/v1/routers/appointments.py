@@ -8,12 +8,12 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.v1.routers.auth import get_current_user_from_token, verify_tenant_access
+from app.api.v1.routers.auth import get_current_user_from_token, require_app_access, verify_tenant_access
 from app.api.v1.services.appointment import appointment_service
 from app.api.v1.services.auth import auth_service
 from app.api.v1.services.scheduling import scheduling_service
 
-router = APIRouter(prefix="/appointments", tags=["appointments"])
+router = APIRouter(prefix="/appointments", tags=["appointments"], dependencies=[Depends(require_app_access("appointment_setter"))])
 
 
 @router.post("/")
