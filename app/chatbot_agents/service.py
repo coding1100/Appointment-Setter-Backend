@@ -15,10 +15,9 @@ from app.chatbot_agents.llm_providers import get_chatbot_llm_provider
 from app.chatbot_agents.repository import chatbot_agent_repository
 from app.chatbot_agents.token_service import chatbot_embed_token_service
 from app.core.config import (
-    CHATBOT_DEV_ALLOW_ANY_ORIGIN,
+    CHATBOT_ALLOW_ANY_ORIGIN,
     CHATBOT_LOADER_BASE_URL,
     CHATBOT_RUNTIME_ENABLED,
-    ENVIRONMENT,
 )
 
 
@@ -32,7 +31,7 @@ class ChatbotAgentService:
 
     @staticmethod
     def _is_dev_origin_bypass_enabled() -> bool:
-        return str(ENVIRONMENT).strip().lower() == "development" and CHATBOT_DEV_ALLOW_ANY_ORIGIN
+        return CHATBOT_ALLOW_ANY_ORIGIN
 
     @staticmethod
     def _build_url(base_url: str, token: str, embed_origin: Optional[str] = None) -> str:

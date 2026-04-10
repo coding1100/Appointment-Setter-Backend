@@ -101,6 +101,7 @@ CHATBOT_LOADER_BASE_URL = os.environ.get("CHATBOT_LOADER_BASE_URL", "")
 CHATBOT_LLM_PROVIDER = os.environ.get("CHATBOT_LLM_PROVIDER", "gemini")
 CHATBOT_STREAM_TIMEOUT_SECONDS = int(os.environ.get("CHATBOT_STREAM_TIMEOUT_SECONDS", "60"))
 CHATBOT_DEV_ALLOW_ANY_ORIGIN = os.environ.get("CHATBOT_DEV_ALLOW_ANY_ORIGIN", "false").lower() == "true"
+CHATBOT_ALLOW_ANY_ORIGIN = os.environ.get("CHATBOT_ALLOW_ANY_ORIGIN", os.environ.get("CHATBOT_DEV_ALLOW_ANY_ORIGIN", "false")).lower() == "true"
 CHATBOT_RUNTIME_ENABLED = os.environ.get("CHATBOT_RUNTIME_ENABLED", "true").lower() == "true"
 
 # Home Services voice mapping
