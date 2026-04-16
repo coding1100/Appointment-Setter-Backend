@@ -32,18 +32,20 @@ jobs:
 
             cd ${{ secrets.PROD_VPS_DEPLOY_PATH}}
 
-            echo "📥 Pulling latest code..."
+            echo "Ã°Å¸â€œÂ¥ Pulling latest code..."
             git fetch origin main
             git checkout main
             git reset --hard origin/main
 
-            echo "🔨 Building Docker image locally (no-cache for fresh dependencies)..."
-            docker compose up -d --build --remove-orphans
+            echo "Ã°Å¸â€Â¨ Building Docker image locally (no-cache for fresh dependencies)..."
+            export COMPOSE_BAKE=false
+            docker compose build --no-cache
+            docker compose up -d --remove-orphans
 
-            echo "🧹 Cleaning up old images..."
+            echo "Ã°Å¸Â§Â¹ Cleaning up old images..."
             docker image prune -f
 
-            echo "✅ Deployment complete. Container status:"
+            echo "Ã¢Å“â€¦ Deployment complete. Container status:"
             docker compose ps
 
   deploy-development:
@@ -66,16 +68,18 @@ jobs:
 
             cd ${{ secrets.DEV_VPS_DEPLOY_PATH }}
 
-            echo "📥 Pulling latest code..."
+            echo "Ã°Å¸â€œÂ¥ Pulling latest code..."
             git fetch origin dev
             git checkout dev || git checkout -b dev
             git reset --hard origin/dev
 
-            echo "🔨 Building Docker image locally (no-cache for fresh dependencies)..."
-            docker compose up -d --build --remove-orphans
+            echo "Ã°Å¸â€Â¨ Building Docker image locally (no-cache for fresh dependencies)..."
+            export COMPOSE_BAKE=false
+            docker compose build --no-cache
+            docker compose up -d --remove-orphans
 
-            echo "🧹 Cleaning up old images..."
+            echo "Ã°Å¸Â§Â¹ Cleaning up old images..."
             docker image prune -f
 
-            echo "✅ Deployment complete. Container status:"
+            echo "Ã¢Å“â€¦ Deployment complete. Container status:"
             docker compose ps
