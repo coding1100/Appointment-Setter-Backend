@@ -199,14 +199,7 @@ async def get_tenant_sessions(tenant_id: str, active_only: bool = True):
         active_only: If True, returns only active sessions. If False, returns all sessions.
     """
     try:
-        sessions = []
-
-        for session_id, session_data in unified_voice_agent_service.active_sessions.items():
-            if session_data["tenant_id"] == tenant_id:
-                if active_only and session_data["status"] == "ended":
-                    continue
-                sessions.append({"session_id": session_id, **session_data})
-
+        sessions = await unified_voice_agent_service.list_tenant_sessions(tenant_id=tenant_id, active_only=active_only)
         return {"tenant_id": tenant_id, "sessions": sessions, "count": len(sessions)}
 
     except Exception as e:
@@ -226,31 +219,7 @@ async def get_tenant_agent_stats(tenant_id: str):
     - Total sessions
     """
     try:
-        # Count agent instances for this tenant
-        agent_instances = []
-        for key, agent_data in unified_voice_agent_service.tenant_agents.items():
-            if agent_data["tenant_id"] == tenant_id:
-                agent_instances.append(
-                    {"service_type": agent_data["service_type"], "created_at": agent_data["created_at"].isoformat()}
-                )
-
-        # Count sessions
-        active_sessions = 0
-        total_sessions = 0
-
-        for session_data in unified_voice_agent_service.active_sessions.values():
-            if session_data["tenant_id"] == tenant_id:
-                total_sessions += 1
-                if session_data["status"] != "ended":
-                    active_sessions += 1
-
-        return {
-            "tenant_id": tenant_id,
-            "agent_instances": agent_instances,
-            "agent_count": len(agent_instances),
-            "active_sessions": active_sessions,
-            "total_sessions": total_sessions,
-        }
+        return await unified_voice_agent_service.get_tenant_agent_stats(tenant_id=tenant_id)
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get agent stats: {str(e)}")

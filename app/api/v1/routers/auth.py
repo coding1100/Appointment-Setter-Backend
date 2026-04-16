@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from jose import JWTError, jwt
 
 from app.api.v1.schemas.auth import (
@@ -15,6 +15,7 @@ from app.api.v1.schemas.auth import (
     LogoutRequest,
     PasswordChange,
     PermissionCreate,
+    RefreshTokenRequest,
     ResetPasswordRequest,
     RoleCreate,
     TokenResponse,
@@ -24,11 +25,69 @@ from app.api.v1.schemas.auth import (
     UserUpdate,
 )
 from app.api.v1.services.auth import auth_service
-from app.core.config import SECRET_KEY
+from app.core.config import (
+    ACCESS_TOKEN_COOKIE_NAME,
+    AUTH_COOKIE_DOMAIN,
+    AUTH_COOKIE_SAMESITE,
+    AUTH_COOKIE_SECURE,
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS,
+    REFRESH_TOKEN_COOKIE_NAME,
+    SECRET_KEY,
+)
+from app.core.platform_apps import has_app_access as user_has_app_access
+from app.core.platform_apps import has_app_access as user_has_app_access
 from app.core.security import SecurityService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+
+def _cookie_domain_or_none() -> Optional[str]:
+    return AUTH_COOKIE_DOMAIN.strip() or None
+
+
+def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    access_max_age = JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    refresh_max_age = JWT_REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+
+    response.set_cookie(
+        key=ACCESS_TOKEN_COOKIE_NAME,
+        value=access_token,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+        max_age=access_max_age,
+        domain=_cookie_domain_or_none(),
+        path="/",
+    )
+    response.set_cookie(
+        key=REFRESH_TOKEN_COOKIE_NAME,
+        value=refresh_token,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+        max_age=refresh_max_age,
+        domain=_cookie_domain_or_none(),
+        path="/",
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie(
+        key=ACCESS_TOKEN_COOKIE_NAME,
+        domain=_cookie_domain_or_none(),
+        path="/",
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+    )
+    response.delete_cookie(
+        key=REFRESH_TOKEN_COOKIE_NAME,
+        domain=_cookie_domain_or_none(),
+        path="/",
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+    )
 
 
 def get_security_service() -> SecurityService:
@@ -39,20 +98,20 @@ def get_security_service() -> SecurityService:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Security service unavailable: {str(e)}")
 
 
-async def get_current_user_from_token(authorization: str = Header(None)) -> Dict[str, Any]:
+async def get_current_user_from_token(request: Request, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
     """Get current user from JWT token."""
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization header missing",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
     try:
-        # Remove "Bearer " prefix if present
-        token = authorization
-        if token.startswith("Bearer "):
-            token = token[7:]
+        token: Optional[str] = None
+        if authorization:
+            token = authorization[7:] if authorization.startswith("Bearer ") else authorization
+        if not token:
+            token = request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authorization token missing",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
         # Decode JWT token
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
@@ -180,7 +239,7 @@ async def register_user(user_data: UserCreate, request: Request):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login_user(login_data: UserLogin, request: Request):
+async def login_user(login_data: UserLogin, request: Request, response: Response):
     """Authenticate user and return tokens."""
     # Rate limiting: 10 requests per minute per IP
     security_service = get_security_service()
@@ -205,6 +264,7 @@ async def login_user(login_data: UserLogin, request: Request):
 
         # Create user session
         await auth_service.create_user_session(user.get("id", ""), refresh_token)
+        _set_auth_cookies(response, access_token, refresh_token)
 
         from app.core.response_mappers import to_user_response
 
@@ -223,7 +283,11 @@ async def login_user(login_data: UserLogin, request: Request):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(refresh_token: str, request: Request):
+async def refresh_token(
+    request: Request,
+    response: Response,
+    refresh_data: Optional[RefreshTokenRequest] = None,
+):
     """
     Refresh access token using refresh token.
 
@@ -236,8 +300,16 @@ async def refresh_token(refresh_token: str, request: Request):
     await security_service.enforce_rate_limit(client_ip, limit=10, window_seconds=60, operation="auth_refresh")
 
     try:
+        presented_refresh_token = (
+            refresh_data.refresh_token
+            if refresh_data and refresh_data.refresh_token
+            else request.cookies.get(REFRESH_TOKEN_COOKIE_NAME)
+        )
+        if not presented_refresh_token:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token missing")
+
         # Get user session from Redis (validates session is active and not expired)
-        session = await auth_service.get_user_session(refresh_token)
+        session = await auth_service.get_user_session(presented_refresh_token)
         if not session:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
 
@@ -251,7 +323,7 @@ async def refresh_token(refresh_token: str, request: Request):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
         # Revoke old session
-        await auth_service.revoke_user_session(refresh_token)
+        await auth_service.revoke_user_session(presented_refresh_token)
 
         # Create new tokens
         access_token = auth_service.create_access_token({"sub": user_id})
@@ -259,6 +331,7 @@ async def refresh_token(refresh_token: str, request: Request):
 
         # Create new session with new refresh token
         await auth_service.create_user_session(user_id, new_refresh_token)
+        _set_auth_cookies(response, access_token, new_refresh_token)
 
         from app.core.response_mappers import to_user_response
 
@@ -277,17 +350,27 @@ async def refresh_token(refresh_token: str, request: Request):
 
 
 @router.post("/logout")
-async def logout_user(logout_data: LogoutRequest, request: Request):
+async def logout_user(request: Request, response: Response, logout_data: Optional[LogoutRequest] = None):
     """
     Logout user and invalidate refresh token.
 
     Revokes the session in Redis, making the refresh token unusable.
     """
     try:
+        refresh_token = (
+            logout_data.refresh_token
+            if logout_data and logout_data.refresh_token
+            else request.cookies.get(REFRESH_TOKEN_COOKIE_NAME)
+        )
+        if not refresh_token:
+            _clear_auth_cookies(response)
+            return {"message": "Successfully logged out"}
+
         # Revoke refresh token (deletes session from Redis)
-        success = await auth_service.revoke_user_session(logout_data.refresh_token)
+        success = await auth_service.revoke_user_session(refresh_token)
         if not success:
             logger.warning(f"Failed to revoke session for refresh token (may already be revoked)")
+        _clear_auth_cookies(response)
 
         return {"message": "Successfully logged out"}
 

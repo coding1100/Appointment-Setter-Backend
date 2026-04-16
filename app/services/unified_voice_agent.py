@@ -6,7 +6,7 @@ Handles both browser-based testing and Twilio phone call integration.
 ARCHITECTURE (LiveKit Official Telephony Flow):
 ===============================================
 INBOUND CALL FLOW:
-1. Twilio PSTN → Backend webhook (/twilio/webhook)
+1. Twilio PSTN â†’ Backend webhook (/twilio/webhook)
 2. Backend identifies tenant from called phone number (To)
 3. Backend generates unique call_id for this call
 4. Backend stores config under: tenant_config:<tenant_id>:<call_id>
@@ -36,19 +36,14 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from livekit import api
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm, stt, tts
 from livekit.agents.voice.agent import Agent
-from livekit.plugins import deepgram, elevenlabs, google, silero
-from livekit.plugins.elevenlabs import tts as elevenlabs_tts
+from livekit.plugins import deepgram, google, silero
 from twilio.rest import Client
 from twilio.twiml.voice_response import Dial, VoiceResponse
 
 from app.core.async_redis import async_redis_client
 from app.core.config import (
     CALL_CONFIG_TTL_SECONDS,
-    DEEPGRAM_API_KEY,
-    ELEVEN_API_KEY,
-    GOOGLE_API_KEY,
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
     LIVEKIT_SIP_DOMAIN,
@@ -63,6 +58,7 @@ from app.core.utils import get_current_timestamp
 from app.services.dialog_manager import dialog_manager
 from app.services.firebase import firebase_service
 from app.utils.phone_number import normalize_phone_number_safe
+from app.services.tts_provider import build_tts_with_fallback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -73,7 +69,7 @@ class UnifiedVoiceAgentService:
     """
     Unified voice agent service that handles both:
     1. Browser-based testing (direct LiveKit connection)
-    2. Phone calls (Twilio SIP → LiveKit bridge)
+    2. Phone calls (Twilio SIP â†’ LiveKit bridge)
 
     IMPORTANT: For inbound phone calls, this service:
     - Does NOT create LiveKit rooms (dispatch rule creates them)
@@ -87,9 +83,116 @@ class UnifiedVoiceAgentService:
         self.active_sessions = {}  # session_id -> session_data (for tracking)
         self._livekit_api = None
         self._vad = None  # Shared Silero VAD instance (lazy-loaded)
+        self._session_ttl_seconds = max(CALL_CONFIG_TTL_SECONDS, 24 * 60 * 60)
 
         # Validate LiveKit configuration at startup
         self._validate_livekit_config()
+
+    @staticmethod
+    def _session_key(session_id: str) -> str:
+        return f"voice_session:{session_id}"
+
+    @staticmethod
+    def _tenant_session_set_key(tenant_id: str) -> str:
+        return f"voice_tenant_sessions:{tenant_id}"
+
+    @staticmethod
+    def _callsid_session_key(twilio_call_sid: str) -> str:
+        return f"voice_callsid_session:{twilio_call_sid}"
+
+    async def _store_session(self, session_id: str, session_data: Dict[str, Any]) -> None:
+        """Store session in Redis (authoritative) and mirror in memory as cache."""
+        await async_redis_client.set_json(self._session_key(session_id), session_data, ttl=self._session_ttl_seconds)
+        tenant_id = session_data.get("tenant_id")
+        if tenant_id:
+            tenant_set = self._tenant_session_set_key(str(tenant_id))
+            await async_redis_client.sadd(tenant_set, session_id)
+            await async_redis_client.expire(tenant_set, self._session_ttl_seconds)
+        twilio_call_sid = session_data.get("twilio_call_sid")
+        if twilio_call_sid:
+            await async_redis_client.set(
+                self._callsid_session_key(str(twilio_call_sid)), session_id, ttl=self._session_ttl_seconds
+            )
+        self.active_sessions[session_id] = session_data
+
+    async def _get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get session from Redis first, fallback to memory cache."""
+        data = await async_redis_client.get_json(self._session_key(session_id))
+        if data:
+            self.active_sessions[session_id] = data
+            return data
+        return self.active_sessions.get(session_id)
+
+    async def _update_session(self, session_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Patch and persist a session."""
+        existing = await self._get_session(session_id)
+        if not existing:
+            return None
+        merged = {**existing, **updates}
+        await self._store_session(session_id, merged)
+        return merged
+
+    async def _delete_session(self, session_id: str) -> None:
+        """Delete session and secondary indexes from Redis and memory."""
+        existing = await self._get_session(session_id)
+        await async_redis_client.delete(self._session_key(session_id))
+        if existing:
+            tenant_id = existing.get("tenant_id")
+            if tenant_id:
+                await async_redis_client.srem(self._tenant_session_set_key(str(tenant_id)), session_id)
+            twilio_call_sid = existing.get("twilio_call_sid")
+            if twilio_call_sid:
+                await async_redis_client.delete(self._callsid_session_key(str(twilio_call_sid)))
+        self.active_sessions.pop(session_id, None)
+
+    async def _find_session_by_twilio_call_sid(self, call_sid: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not call_sid:
+            return None
+        mapped_session_id = await async_redis_client.get(self._callsid_session_key(call_sid))
+        if mapped_session_id:
+            return await self._get_session(mapped_session_id)
+        for _, sess_data in self.active_sessions.items():
+            if sess_data.get("twilio_call_sid") == call_sid:
+                return sess_data
+        return None
+
+    async def list_tenant_sessions(self, tenant_id: str, active_only: bool = True) -> List[Dict[str, Any]]:
+        """List tenant sessions from Redis-backed session store."""
+        session_ids = await async_redis_client.smembers(self._tenant_session_set_key(tenant_id))
+        sessions: List[Dict[str, Any]] = []
+        for session_id in session_ids:
+            session = await self._get_session(session_id)
+            if not session:
+                continue
+            if active_only and session.get("status") == "ended":
+                continue
+            sessions.append({"session_id": session_id, **session})
+        sessions.sort(key=lambda row: row.get("created_at") or "", reverse=True)
+        return sessions
+
+    async def get_tenant_agent_stats(self, tenant_id: str) -> Dict[str, Any]:
+        """Aggregate tenant stats from Redis-backed sessions + in-memory agent cache."""
+        agent_instances = []
+        for key, agent_data in self.tenant_agents.items():
+            if agent_data["tenant_id"] == tenant_id:
+                created_at = agent_data.get("created_at")
+                agent_instances.append(
+                    {
+                        "service_type": agent_data["service_type"],
+                        "created_at": created_at if isinstance(created_at, str) else created_at.isoformat(),
+                    }
+                )
+
+        all_sessions = await self.list_tenant_sessions(tenant_id, active_only=False)
+        active_count = len([s for s in all_sessions if s.get("status") != "ended"])
+
+        return {
+            "tenant_id": tenant_id,
+            "agent_instances": agent_instances,
+            "agent_count": len(agent_instances),
+            "active_sessions": active_count,
+            "total_sessions": len(all_sessions),
+        }
 
     def _validate_livekit_config(self):
         """Validate LiveKit configuration at startup."""
@@ -97,21 +200,21 @@ class UnifiedVoiceAgentService:
         logger.info("VALIDATING LIVEKIT CONFIGURATION")
         logger.info("=" * 60)
         logger.info(f"LIVEKIT_URL: '{LIVEKIT_URL}'")
-        logger.info(f"LIVEKIT_API_KEY: {'✓ SET' if LIVEKIT_API_KEY else '✗ NOT SET'}")
-        logger.info(f"LIVEKIT_API_SECRET: {'✓ SET' if LIVEKIT_API_SECRET else '✗ NOT SET'}")
+        logger.info(f"LIVEKIT_API_KEY: {'âœ“ SET' if LIVEKIT_API_KEY else 'âœ— NOT SET'}")
+        logger.info(f"LIVEKIT_API_SECRET: {'âœ“ SET' if LIVEKIT_API_SECRET else 'âœ— NOT SET'}")
         logger.info(f"LIVEKIT_SIP_DOMAIN: '{LIVEKIT_SIP_DOMAIN}'")
 
         if not LIVEKIT_URL or LIVEKIT_URL.strip() == "":
-            logger.error("⚠️ CRITICAL: LIVEKIT_URL is not configured!")
+            logger.error("âš ï¸ CRITICAL: LIVEKIT_URL is not configured!")
             logger.error("Please set LIVEKIT_URL in your .env file")
         else:
-            logger.info(f"✓ LIVEKIT_URL is configured")
+            logger.info(f"âœ“ LIVEKIT_URL is configured")
 
         if not LIVEKIT_SIP_DOMAIN or LIVEKIT_SIP_DOMAIN.strip() == "":
-            logger.error("⚠️ CRITICAL: LIVEKIT_SIP_DOMAIN is not configured!")
+            logger.error("âš ï¸ CRITICAL: LIVEKIT_SIP_DOMAIN is not configured!")
             logger.error("Please set LIVEKIT_SIP_DOMAIN in your .env file")
         else:
-            logger.info(f"✓ LIVEKIT_SIP_DOMAIN is configured")
+            logger.info(f"âœ“ LIVEKIT_SIP_DOMAIN is configured")
 
         logger.info("=" * 60)
 
@@ -173,22 +276,12 @@ class UnifiedVoiceAgentService:
             if self._vad is None:
                 self._vad = silero.VAD.load(sample_rate=8000)
 
-            # Configure ElevenLabs TTS with voice_id if provided
-            if voice_id:
-                try:
-                    language_code = "en"
-                    if agent_config and "language" in agent_config:
-                        language_code = agent_config.get("language", "en-US").split("-")[0]
+            language_code = "en"
+            if agent_config and "language" in agent_config:
+                language_code = agent_config.get("language", "en-US").split("-")[0]
 
-                    tts_service = elevenlabs.TTS(
-                        voice_id=voice_id, model="eleven_turbo_v2_5", language=language_code, enable_ssml_parsing=False
-                    )
-                    logger.info(f"✓ Created ElevenLabs TTS with voice_id={voice_id}")
-                except Exception as e:
-                    logger.error(f"✗ FAILED to create TTS with voice_id: {e}")
-                    tts_service = elevenlabs.TTS()
-            else:
-                tts_service = elevenlabs.TTS()
+            tts_service = build_tts_with_fallback(voice_id=voice_id, language_code=language_code)
+            logger.info("TTS configured with Gemini primary + ElevenLabs fallback (voice_id=%s)", voice_id)
 
             agent = Agent(
                 vad=self._vad,
@@ -207,9 +300,9 @@ class UnifiedVoiceAgentService:
                 "agent_id": agent_id,
             }
 
-            logger.info(f"✓ Agent instance created and cached successfully")
+            logger.info(f"âœ“ Agent instance created and cached successfully")
         else:
-            logger.info(f"✓ Using cached agent instance")
+            logger.info(f"âœ“ Using cached agent instance")
 
         return self.tenant_agents[agent_key]["agent"]
 
@@ -343,7 +436,7 @@ class UnifiedVoiceAgentService:
                     "message": f"Calling {phone_number}...",
                 }
 
-            self.active_sessions[session_id] = session_data
+            await self._store_session(session_id, session_data)
             return result
 
         except ValueError:
@@ -355,17 +448,18 @@ class UnifiedVoiceAgentService:
     async def end_session(self, session_id: str) -> bool:
         """End a voice agent session."""
         try:
-            if session_id not in self.active_sessions:
+            session = await self._get_session(session_id)
+            if not session:
                 logger.warning(f"Session {session_id} not found")
                 return False
 
-            session = self.active_sessions[session_id]
             room_name = session.get("room_name")
 
             logger.info(f"Ending session {session_id}")
 
-            session["status"] = "ended"
-            session["ended_at"] = get_current_timestamp()
+            session = await self._update_session(
+                session_id, {"status": "ended", "ended_at": get_current_timestamp()}
+            ) or session
 
             # Delete LiveKit room if it exists
             if room_name:
@@ -375,7 +469,7 @@ class UnifiedVoiceAgentService:
             if not session["test_mode"] and "twilio_call_sid" in session:
                 await self._hangup_twilio_call(session["tenant_id"], session["twilio_call_sid"])
 
-            del self.active_sessions[session_id]
+            await self._delete_session(session_id)
             return True
 
         except Exception as e:
@@ -384,7 +478,7 @@ class UnifiedVoiceAgentService:
 
     async def get_session_status(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get session status."""
-        return self.active_sessions.get(session_id)
+        return await self._get_session(session_id)
 
     async def clear_agent_cache(self, tenant_id: Optional[str] = None, agent_id: Optional[str] = None) -> Dict[str, Any]:
         """Clear cached agent instances."""
@@ -429,11 +523,7 @@ class UnifiedVoiceAgentService:
             logger.info(f"[TWILIO WEBHOOK] Inbound call: CallSid={call_sid}, From={from_number}, To={to_number}")
 
             # Check if this is an outbound call we initiated (session already exists)
-            existing_session = None
-            for sess_id, sess_data in self.active_sessions.items():
-                if sess_data.get("twilio_call_sid") == call_sid:
-                    existing_session = sess_data
-                    break
+            existing_session = await self._find_session_by_twilio_call_sid(call_sid)
 
             if existing_session:
                 # OUTBOUND CALL: Use existing session (room was pre-created)
@@ -448,8 +538,10 @@ class UnifiedVoiceAgentService:
                 dial.sip(sip_uri)
                 response.append(dial)
                 
-                existing_session["status"] = "connecting"
-                existing_session["started_at"] = get_current_timestamp()
+                await self._update_session(
+                    existing_session.get("session_id", ""),
+                    {"status": "connecting", "started_at": get_current_timestamp()},
+                )
                 return response
 
             # ========================================
@@ -474,7 +566,7 @@ class UnifiedVoiceAgentService:
                 logger.error(f"[TWILIO WEBHOOK] Phone number {normalized_to_number} not found in database")
                 return self._error_response("This number is not configured. Please contact support.")
 
-            logger.info(f"[TWILIO WEBHOOK] ✓ Found phone record: ID={phone_record.get('id')}, AgentID={phone_record.get('agent_id')}")
+            logger.info(f"[TWILIO WEBHOOK] âœ“ Found phone record: ID={phone_record.get('id')}, AgentID={phone_record.get('agent_id')}")
 
             # Step 3: Validate phone record has required fields
             agent_id = phone_record.get("agent_id")
@@ -494,7 +586,7 @@ class UnifiedVoiceAgentService:
                 logger.error(f"[TWILIO WEBHOOK] Agent {agent_id} not found")
                 return self._error_response("Agent configuration not found. Please contact support.")
 
-            logger.info(f"[TWILIO WEBHOOK] ✓ Found agent: Name={agent.get('name')}, ServiceType={agent.get('service_type')}")
+            logger.info(f"[TWILIO WEBHOOK] âœ“ Found agent: Name={agent.get('name')}, ServiceType={agent.get('service_type')}")
 
             # Voice safety: inbound phone calls can only target voice agents.
             # Legacy agents without an explicit type are treated as voice.
@@ -540,7 +632,7 @@ class UnifiedVoiceAgentService:
                 logger.error(f"[TWILIO WEBHOOK] Failed to store tenant config")
                 return self._error_response("Unable to initialize call. Please try again later.")
 
-            logger.info(f"[TWILIO WEBHOOK] ✓ Stored config: call_config:{call_sid}")
+            logger.info(f"[TWILIO WEBHOOK] âœ“ Stored config: call_config:{call_sid}")
 
             # Step 9 & 10: Build SIP URI WITH original Twilio CallSid
             # CRITICAL: Twilio creates a NEW CallSid when dialing LiveKit via SIP
@@ -555,9 +647,12 @@ class UnifiedVoiceAgentService:
             dial.sip(sip_uri)
             response.append(dial)
 
-            # Step 12: Track session for status callbacks
-            self.active_sessions[call_sid] = {
-                "session_id": call_sid,
+            # Step 12: Track session for status callbacks (Redis-backed store)
+            session_id = f"inbound-{call_sid}"
+            await self._store_session(
+                session_id,
+                {
+                "session_id": session_id,
                 "room_name": None,  # Room is created by LiveKit, not us
                 "agent_id": agent_id,
                 "tenant_id": tenant_id,
@@ -569,9 +664,10 @@ class UnifiedVoiceAgentService:
                 "to_number": to_number,
                 "created_at": get_current_timestamp(),
                 "started_at": get_current_timestamp(),
-            }
+                },
+            )
 
-            logger.info(f"[TWILIO WEBHOOK] ✓ Inbound call setup complete: tenant={tenant_id}, agent={agent.get('name')}")
+            logger.info(f"[TWILIO WEBHOOK] âœ“ Inbound call setup complete: tenant={tenant_id}, agent={agent.get('name')}")
             return response
 
         except Exception as e:
@@ -586,38 +682,46 @@ class UnifiedVoiceAgentService:
 
             logger.info(f"[TWILIO STATUS] CallSid={call_sid}, Status={call_status}")
 
-            # Find and update session
-            for session in self.active_sessions.values():
-                if session.get("twilio_call_sid") == call_sid:
-                    session["twilio_status"] = call_status
+            session = await self._find_session_by_twilio_call_sid(call_sid)
+            if not session:
+                return
 
-                    if call_status in ["completed", "failed", "busy", "no-answer"]:
-                        session["status"] = "ended"
-                        session["ended_at"] = get_current_timestamp()
-                        
-                        # Cleanup: Delete configs from Redis
-                        tenant_id = session.get("tenant_id")
-                        call_id = session.get("call_id")
-                        twilio_call_sid = session.get("twilio_call_sid")
-                        
-                        # Delete call_config (primary lookup key by Twilio CallSid)
-                        if twilio_call_sid:
-                            try:
-                                call_config_key = f"call_config:{twilio_call_sid}"
-                                await async_redis_client.delete(call_config_key)
-                                logger.info(f"[CLEANUP] Deleted config: {call_config_key}")
-                            except Exception as e:
-                                logger.warning(f"[CLEANUP] Failed to delete call_config: {e}")
-                        
-                        # Delete tenant_config (backup key)
-                        if tenant_id and call_id:
-                            try:
-                                tenant_config_key = f"tenant_config:{tenant_id}:{call_id}"
-                                await async_redis_client.delete(tenant_config_key)
-                                logger.info(f"[CLEANUP] Deleted config: {tenant_config_key}")
-                            except Exception as e:
-                                logger.warning(f"[CLEANUP] Failed to delete tenant_config: {e}")
-                    break
+            session_id = session.get("session_id")
+            if not session_id:
+                return
+
+            updates: Dict[str, Any] = {"twilio_status": call_status}
+            if call_status in ["completed", "failed", "busy", "no-answer"]:
+                updates["status"] = "ended"
+                updates["ended_at"] = get_current_timestamp()
+
+            updated = await self._update_session(session_id, updates)
+            if not updated:
+                return
+
+            if call_status in ["completed", "failed", "busy", "no-answer"]:
+                # Cleanup: Delete configs from Redis
+                tenant_id = updated.get("tenant_id")
+                call_id = updated.get("call_id")
+                twilio_call_sid = updated.get("twilio_call_sid")
+
+                # Delete call_config (primary lookup key by Twilio CallSid)
+                if twilio_call_sid:
+                    try:
+                        call_config_key = f"call_config:{twilio_call_sid}"
+                        await async_redis_client.delete(call_config_key)
+                        logger.info(f"[CLEANUP] Deleted config: {call_config_key}")
+                    except Exception as e:
+                        logger.warning(f"[CLEANUP] Failed to delete call_config: {e}")
+
+                # Delete tenant_config (backup key)
+                if tenant_id and call_id:
+                    try:
+                        tenant_config_key = f"tenant_config:{tenant_id}:{call_id}"
+                        await async_redis_client.delete(tenant_config_key)
+                        logger.info(f"[CLEANUP] Deleted config: {tenant_config_key}")
+                    except Exception as e:
+                        logger.warning(f"[CLEANUP] Failed to delete tenant_config: {e}")
 
         except Exception as e:
             logger.error(f"[TWILIO STATUS] Error: {e}")
@@ -671,14 +775,14 @@ class UnifiedVoiceAgentService:
             # Verify storage
             verify_data = await async_redis_client.get(config_key)
             if verify_data:
-                logger.info(f"[REDIS STORE] ✓ Successfully stored and verified config")
+                logger.info(f"[REDIS STORE] âœ“ Successfully stored and verified config")
                 return True
             else:
-                logger.error(f"[REDIS STORE] ✗ Failed to verify config storage")
+                logger.error(f"[REDIS STORE] âœ— Failed to verify config storage")
                 return False
                 
         except Exception as exc:
-            logger.error(f"[REDIS STORE] ✗ Error storing config: {exc}", exc_info=True)
+            logger.error(f"[REDIS STORE] âœ— Error storing config: {exc}", exc_info=True)
             return False
 
     async def _store_room_config(
@@ -702,14 +806,14 @@ class UnifiedVoiceAgentService:
             # Verify storage
             verify_data = await async_redis_client.get(config_key)
             if verify_data:
-                logger.info(f"[REDIS STORE] ✓ Successfully stored config by room name")
+                logger.info(f"[REDIS STORE] âœ“ Successfully stored config by room name")
                 return True
             else:
-                logger.error(f"[REDIS STORE] ✗ Failed to verify config storage by room name")
+                logger.error(f"[REDIS STORE] âœ— Failed to verify config storage by room name")
                 return False
                 
         except Exception as exc:
-            logger.error(f"[REDIS STORE] ✗ Error storing config by room name: {exc}", exc_info=True)
+            logger.error(f"[REDIS STORE] âœ— Error storing config by room name: {exc}", exc_info=True)
             return False
 
     async def _store_config_by_twilio_callsid(
@@ -736,14 +840,14 @@ class UnifiedVoiceAgentService:
             # Verify storage
             verify_data = await async_redis_client.get(config_key)
             if verify_data:
-                logger.info(f"[REDIS STORE] ✓ Successfully stored config by Twilio CallSid")
+                logger.info(f"[REDIS STORE] âœ“ Successfully stored config by Twilio CallSid")
                 return True
             else:
-                logger.error(f"[REDIS STORE] ✗ Failed to verify config storage by Twilio CallSid")
+                logger.error(f"[REDIS STORE] âœ— Failed to verify config storage by Twilio CallSid")
                 return False
                 
         except Exception as exc:
-            logger.error(f"[REDIS STORE] ✗ Error storing config by Twilio CallSid: {exc}", exc_info=True)
+            logger.error(f"[REDIS STORE] âœ— Error storing config by Twilio CallSid: {exc}", exc_info=True)
             return False
 
     def _build_sip_uri_with_callsid(self, twilio_call_sid: str, tenant_id: str, called_number: str) -> str:

@@ -12,13 +12,12 @@ import logging
 from typing import Any, Dict, Optional
 
 from livekit import agents
-from livekit.agents import Agent, AgentSession, function_tool
-from livekit.plugins import deepgram, elevenlabs, google, silero
+from livekit.agents import Agent, AgentSession, function_tool, tts
+from livekit.plugins import deepgram, google, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from app.core.async_redis import async_redis_client
 from app.core.config import (
-    ELEVEN_API_KEY,
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
     LIVEKIT_URL,
@@ -30,11 +29,12 @@ from app.core.config import (
     LIVEKIT_SIP_HEADER_CALLED_NUMBER,
 )
 from app.core.prompts import get_template
+from app.services.tts_provider import build_tts_with_fallback
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VoiceAgentWorker")
 
-TTS_CACHE: Dict[str, elevenlabs.TTS] = {}
+TTS_CACHE: Dict[str, tts.TTS] = {}
 DEFAULT_TTS_CACHE_KEY = "__default__"
 MAX_HISTORY_LOG_LINES = 40
 
@@ -65,25 +65,15 @@ def prewarm_vad(proc: agents.JobProcess):
 # =========================================================
 # TTS CACHE
 # =========================================================
-def get_tts_service(voice_id: Optional[str], language_code: str) -> elevenlabs.TTS:
+def get_tts_service(voice_id: Optional[str], language_code: str) -> tts.TTS:
     cache_key = voice_id or DEFAULT_TTS_CACHE_KEY
 
     if cache_key in TTS_CACHE:
         return TTS_CACHE[cache_key]
 
-    if voice_id:
-        tts = elevenlabs.TTS(
-            api_key=ELEVEN_API_KEY,
-            voice_id=voice_id,
-            model="eleven_turbo_v2_5",
-            language=language_code,
-            enable_ssml_parsing=False,
-        )
-    else:
-        tts = elevenlabs.TTS(api_key=ELEVEN_API_KEY)
-
-    TTS_CACHE[cache_key] = tts
-    return tts
+    tts_service = build_tts_with_fallback(voice_id=voice_id, language_code=language_code)
+    TTS_CACHE[cache_key] = tts_service
+    return tts_service
 
 
 # =========================================================

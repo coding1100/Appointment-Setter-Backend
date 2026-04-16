@@ -107,7 +107,8 @@ services:
       context: .
       dockerfile: Dockerfile
     image: appointment-setter-backend:latest
-    container_name: appointment-setter-voice-worker
+    # Do not pin container_name so this service can be scaled horizontally:
+    # docker compose up -d --scale voice-worker=3
     restart: unless-stopped
 
     # Required: inference subprocess runs as root
