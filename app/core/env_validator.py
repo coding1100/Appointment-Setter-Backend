@@ -47,6 +47,12 @@ OPTIONAL_ENV_VARS = {
     "MAIL_USERNAME": email_settings.MAIL_USERNAME,
     "MAIL_PASSWORD": email_settings.MAIL_PASSWORD,
     "MAIL_SERVER": email_settings.MAIL_SERVER,
+    "CORS_ALLOW_ORIGINS": os.environ.get("CORS_ALLOW_ORIGINS", ""),
+    "ACCESS_TOKEN_COOKIE_NAME": os.environ.get("ACCESS_TOKEN_COOKIE_NAME", ""),
+    "REFRESH_TOKEN_COOKIE_NAME": os.environ.get("REFRESH_TOKEN_COOKIE_NAME", ""),
+    "AUTH_COOKIE_DOMAIN": os.environ.get("AUTH_COOKIE_DOMAIN", ""),
+    "AUTH_COOKIE_SECURE": os.environ.get("AUTH_COOKIE_SECURE", ""),
+    "AUTH_COOKIE_SAMESITE": os.environ.get("AUTH_COOKIE_SAMESITE", ""),
 }
 
 

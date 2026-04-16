@@ -582,6 +582,18 @@ class FirebaseService:
 
         return await self._run_in_executor(_delete)
 
+    # Contact/lead operations
+    async def create_contact(self, contact_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new contact/lead submission."""
+        add_timestamps(contact_data)
+
+        def _create():
+            doc_ref = self.db.collection("contacts").document(contact_data["id"])
+            doc_ref.set(contact_data)
+            return contact_data
+
+        return await self._run_in_executor(_create)
+
     # Chatbot agent operations (independent from voice agents)
     async def create_chatbot_agent(self, chatbot_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new chatbot agent."""

@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.api import api_router
-from app.core.config import API_HOST, API_PORT, DEBUG, ENVIRONMENT, LOG_LEVEL
+from app.core.config import API_HOST, API_PORT, CORS_ALLOW_ORIGINS, DEBUG, ENVIRONMENT, LOG_LEVEL
 from app.core.env_validator import print_environment_summary, validate_environment_variables
 from app.core.exceptions import (
     AppException,
@@ -99,10 +99,14 @@ app = FastAPI(
 
 # Add CORS middleware FIRST (becomes outermost, wraps all responses)
 # FastAPI's CORSMiddleware fully handles OPTIONS preflight requests with all required headers
+raw_cors_origins = [origin.strip() for origin in CORS_ALLOW_ORIGINS.split(",") if origin.strip()]
+cors_origins = raw_cors_origins if raw_cors_origins else ["*"]
+allow_credentials = not (len(cors_origins) == 1 and cors_origins[0] == "*")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=False,  # Must be False when using ["*"]
+    allow_origins=cors_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],  # Allows all methods (GET, POST, PUT, DELETE, OPTIONS, etc.)
     allow_headers=["*"],  # Allows all headers
     expose_headers=["*"],  # Expose all headers to browser
