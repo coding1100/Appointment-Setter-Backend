@@ -35,8 +35,6 @@ from app.core.config import (
     REFRESH_TOKEN_COOKIE_NAME,
     SECRET_KEY,
 )
-from app.core.platform_apps import has_app_access as user_has_app_access
-from app.core.platform_apps import has_app_access as user_has_app_access
 from app.core.security import SecurityService
 
 logger = logging.getLogger(__name__)
@@ -435,9 +433,15 @@ async def reset_password(reset_data: ResetPasswordRequest, request: Request):
 
 
 @router.get("/users", response_model=List[UserResponse])
-async def list_users(request: Request, limit: int = 100, offset: int = 0):
+async def list_users(
+    request: Request,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: Dict[str, Any] = Depends(get_current_user_from_token),
+):
     """List users (admin only)."""
     try:
+        require_admin_role(current_user)
         # Get users from database
         users = await auth_service.list_users(limit, offset)
 
@@ -451,9 +455,10 @@ async def list_users(request: Request, limit: int = 100, offset: int = 0):
 
 
 @router.get("/users/{user_id}", response_model=UserResponse)
-async def get_user(user_id: str, request: Request):
+async def get_user(user_id: str, request: Request, current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
     """Get user by ID (admin only)."""
     try:
+        require_admin_role(current_user)
         user = await auth_service.get_user(user_id)
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -469,9 +474,15 @@ async def get_user(user_id: str, request: Request):
 
 
 @router.put("/users/{user_id}", response_model=UserResponse)
-async def update_user(user_id: str, user_data: UserUpdate, request: Request):
+async def update_user(
+    user_id: str,
+    user_data: UserUpdate,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user_from_token),
+):
     """Update user (admin only)."""
     try:
+        require_admin_role(current_user)
         # Check if user exists
         existing_user = await auth_service.get_user(user_id)
         if not existing_user:

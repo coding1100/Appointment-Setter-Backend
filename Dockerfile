@@ -44,6 +44,7 @@ COPY app/core/config.py app/core/
 COPY app/core/async_redis.py app/core/
 COPY app/core/prompts.py app/core/
 COPY app/core/voice_metadata.py app/core/
+COPY app/core/platform_apps.py app/core/
 COPY app/services/__init__.py app/services/
 COPY app/services/tts_provider.py app/services/
 

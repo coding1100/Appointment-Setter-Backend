@@ -69,6 +69,8 @@ def to_user_response(user_dict: Dict[str, Any]) -> UserResponse:
             role=user_dict.get("role", "user"),
             status=user_dict.get("status", "active"),
             tenant_id=tenant_id,
+            allowed_app_ids=user_dict.get("allowed_app_ids", []) or [],
+            default_app_id=user_dict.get("default_app_id"),
             is_email_verified=user_dict.get("is_email_verified", False),
             last_login=last_login,
             created_at=created_at or datetime.now(timezone.utc),
