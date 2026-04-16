@@ -127,6 +127,8 @@ class AuthService:
             "is_verified": False,
             "is_email_verified": False,
             "tenant_id": user_data.tenant_id,
+            "allowed_app_ids": [],
+            "default_app_id": None,
             "last_login": None,
         }
 
@@ -171,6 +173,12 @@ class AuthService:
             update_data["tenant_id"] = user_data.tenant_id
 
         return await firebase_service.update_user(user_id, update_data)
+
+    async def update_user_fields(self, user_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update arbitrary user fields for internal platform operations."""
+        payload = dict(update_data)
+        add_updated_timestamp(payload)
+        return await firebase_service.update_user(user_id, payload)
 
     async def authenticate_user(self, email: str, password: str) -> Optional[Dict[str, Any]]:
         """Authenticate user with email and password (optimized)."""

@@ -64,6 +64,8 @@ class UserResponse(BaseModel):
     role: UserRole
     status: UserStatus
     tenant_id: Optional[UUID]
+    allowed_app_ids: List[str] = Field(default_factory=list)
+    default_app_id: Optional[str] = None
     is_email_verified: bool
     last_login: Optional[datetime]
     created_at: datetime
