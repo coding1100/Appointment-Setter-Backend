@@ -55,6 +55,11 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
 ELEVEN_API_KEY = os.environ.get("ELEVEN_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+VOICE_TTS_PRIMARY_PROVIDER = os.environ.get("VOICE_TTS_PRIMARY_PROVIDER", "gemini")
+GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
+GEMINI_TTS_VOICE_MALE = os.environ.get("GEMINI_TTS_VOICE_MALE", "Orus")
+GEMINI_TTS_VOICE_FEMALE = os.environ.get("GEMINI_TTS_VOICE_FEMALE", "Aoede")
+ELEVEN_TTS_MODEL = os.environ.get("ELEVEN_TTS_MODEL", "eleven_turbo_v2_5")
 
 
 # Email Settings (FastAPI-Mail)
@@ -83,10 +88,22 @@ API_HOST = os.environ.get("API_HOST", "0.0.0.0")  # nosec B104 - Intentional: Se
 API_PORT = int(os.environ.get("API_PORT", "8000"))
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 
+# CORS settings
+# Comma-separated origins, e.g. "https://app.example.com,https://admin.example.com"
+# Use "*" only for local development.
+CORS_ALLOW_ORIGINS = os.environ.get("CORS_ALLOW_ORIGINS", "*")
+
 # JWT settings
 JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 JWT_REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+
+# Auth cookie settings (for HttpOnly session rollout)
+ACCESS_TOKEN_COOKIE_NAME = os.environ.get("ACCESS_TOKEN_COOKIE_NAME", "access_token")
+REFRESH_TOKEN_COOKIE_NAME = os.environ.get("REFRESH_TOKEN_COOKIE_NAME", "refresh_token")
+AUTH_COOKIE_DOMAIN = os.environ.get("AUTH_COOKIE_DOMAIN", "")
+AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "true").lower() == "true"
+AUTH_COOKIE_SAMESITE = os.environ.get("AUTH_COOKIE_SAMESITE", "lax").lower()
 
 # Security settings
 SECRET_KEY = os.environ.get("SECRET_KEY", "")
@@ -103,6 +120,14 @@ CHATBOT_STREAM_TIMEOUT_SECONDS = int(os.environ.get("CHATBOT_STREAM_TIMEOUT_SECO
 CHATBOT_DEV_ALLOW_ANY_ORIGIN = os.environ.get("CHATBOT_DEV_ALLOW_ANY_ORIGIN", "false").lower() == "true"
 CHATBOT_ALLOW_ANY_ORIGIN = os.environ.get("CHATBOT_ALLOW_ANY_ORIGIN", os.environ.get("CHATBOT_DEV_ALLOW_ANY_ORIGIN", "false")).lower() == "true"
 CHATBOT_RUNTIME_ENABLED = os.environ.get("CHATBOT_RUNTIME_ENABLED", "true").lower() == "true"
+
+# MindRind platform branding defaults
+PLATFORM_BRAND_NAME = os.environ.get("PLATFORM_BRAND_NAME", "MindRind")
+PLATFORM_BRAND_LOGO_URL = os.environ.get("PLATFORM_BRAND_LOGO_URL", "")
+PLATFORM_BRAND_PRIMARY_COLOR = os.environ.get("PLATFORM_BRAND_PRIMARY_COLOR", "#0f172a")
+PLATFORM_BRAND_SECONDARY_COLOR = os.environ.get("PLATFORM_BRAND_SECONDARY_COLOR", "#ffffff")
+PLATFORM_BRAND_ACCENT_COLOR = os.environ.get("PLATFORM_BRAND_ACCENT_COLOR", "#f59e0b")
+PLATFORM_APP_BASE_URL = os.environ.get("PLATFORM_APP_BASE_URL", "http://localhost:3000")
 
 # Home Services voice mapping
 VOICE_MAP: Dict[str, str] = {

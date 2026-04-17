@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
+from app.api.v1.routers.auth import get_current_user_from_token, require_admin_role, verify_tenant_access
 from app.api.v1.schemas.voice_agent import TwilioCredentialTest, TwilioCredentialTestResponse, TwilioIntegrationConfig
 from app.api.v1.services.twilio_integration import twilio_integration_service
 from app.core import config
@@ -17,7 +18,9 @@ router = APIRouter(prefix="/twilio-integration", tags=["twilio-integration"])
 
 
 @router.post("/test-credentials")
-async def test_twilio_credentials(credentials: TwilioCredentialTest):
+async def test_twilio_credentials(
+    credentials: TwilioCredentialTest, current_user: Dict = Depends(get_current_user_from_token)
+):
     """Test Twilio credentials and return account information."""
     try:
         result = await twilio_integration_service.test_credentials(credentials)
@@ -34,9 +37,12 @@ async def test_twilio_credentials(credentials: TwilioCredentialTest):
 
 
 @router.post("/tenant/{tenant_id}/create")
-async def create_twilio_integration(tenant_id: str, config: TwilioIntegrationConfig):
+async def create_twilio_integration(
+    tenant_id: str, config: TwilioIntegrationConfig, current_user: Dict = Depends(get_current_user_from_token)
+):
     """Create Twilio integration for a tenant."""
     try:
+        verify_tenant_access(current_user, tenant_id)
         result = await twilio_integration_service.create_integration(tenant_id, config)
 
         return {"message": "Twilio integration created successfully", "integration": result}
@@ -51,9 +57,12 @@ async def create_twilio_integration(tenant_id: str, config: TwilioIntegrationCon
 
 
 @router.put("/tenant/{tenant_id}/update")
-async def update_twilio_integration(tenant_id: str, config: TwilioIntegrationConfig):
+async def update_twilio_integration(
+    tenant_id: str, config: TwilioIntegrationConfig, current_user: Dict = Depends(get_current_user_from_token)
+):
     """Update Twilio integration for a tenant."""
     try:
+        verify_tenant_access(current_user, tenant_id)
         result = await twilio_integration_service.update_integration(tenant_id, config)
 
         return {"message": "Twilio integration updated successfully", "integration": result}
@@ -65,9 +74,10 @@ async def update_twilio_integration(tenant_id: str, config: TwilioIntegrationCon
 
 
 @router.get("/tenant/{tenant_id}")
-async def get_twilio_integration(tenant_id: str):
+async def get_twilio_integration(tenant_id: str, current_user: Dict = Depends(get_current_user_from_token)):
     """Get Twilio integration for a tenant."""
     try:
+        verify_tenant_access(current_user, tenant_id)
         integration = await twilio_integration_service.get_integration(tenant_id)
 
         if not integration:
@@ -96,9 +106,10 @@ async def get_twilio_integration(tenant_id: str):
 
 
 @router.delete("/tenant/{tenant_id}")
-async def delete_twilio_integration(tenant_id: str):
+async def delete_twilio_integration(tenant_id: str, current_user: Dict = Depends(get_current_user_from_token)):
     """Delete Twilio integration for a tenant."""
     try:
+        verify_tenant_access(current_user, tenant_id)
         success = await twilio_integration_service.delete_integration(tenant_id)
 
         if not success:
@@ -117,9 +128,12 @@ async def delete_twilio_integration(tenant_id: str):
 
 
 @router.post("/account/{account_sid}/phone-numbers")
-async def get_available_phone_numbers(account_sid: str, credentials: TwilioCredentialTest):
+async def get_available_phone_numbers(
+    account_sid: str, credentials: TwilioCredentialTest, current_user: Dict = Depends(get_current_user_from_token)
+):
     """Get available phone numbers from Twilio account."""
     try:
+        require_admin_role(current_user)
         # Verify credentials first
         test_result = await twilio_integration_service.test_credentials(credentials)
 
@@ -140,7 +154,7 @@ async def get_available_phone_numbers(account_sid: str, credentials: TwilioCrede
 
 
 @router.post("/validate-webhook")
-async def validate_webhook_url(webhook_data: Dict[str, str]):
+async def validate_webhook_url(webhook_data: Dict[str, str], current_user: Dict = Depends(get_current_user_from_token)):
     """Validate webhook URL format and accessibility."""
     try:
         webhook_url = webhook_data.get("webhook_url")
@@ -162,37 +176,13 @@ async def validate_webhook_url(webhook_data: Dict[str, str]):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to validate webhook: {str(e)}")
 
 
-@router.get("/tenant/{tenant_id}/status")
-async def get_integration_status(tenant_id: str):
-    """Get the status of Twilio integration for a tenant."""
-    try:
-        integration = await twilio_integration_service.get_integration(tenant_id)
-
-        if not integration:
-            return {"has_integration": False, "status": "not_configured", "message": "No Twilio integration found"}
-
-        # Check if integration is active
-        is_active = integration.get("status") == "active"
-
-        return {
-            "has_integration": True,
-            "status": integration.get("status"),
-            "is_active": is_active,
-            "phone_number": integration.get("phone_number"),
-            "account_sid": integration.get("account_sid"),
-            "message": "Integration is active" if is_active else "Integration is inactive",
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get integration status: {str(e)}"
-        )
-
-
 @router.get("/tenant/{tenant_id}/unassigned")
-async def list_unassigned_numbers_for_tenant(tenant_id: str):
+async def list_unassigned_numbers_for_tenant(
+    tenant_id: str, current_user: Dict = Depends(get_current_user_from_token)
+):
     """List Twilio numbers owned by tenant's Twilio account that are not assigned in our DB."""
     try:
+        verify_tenant_access(current_user, tenant_id)
         integration = await twilio_integration_service.get_integration(tenant_id)
         if not integration:
             raise HTTPException(
@@ -212,9 +202,12 @@ async def list_unassigned_numbers_for_tenant(tenant_id: str):
 
 
 @router.get("/system/unassigned")
-async def list_unassigned_numbers_from_system(tenant_id: str):
+async def list_unassigned_numbers_from_system(
+    tenant_id: str, current_user: Dict = Depends(get_current_user_from_token)
+):
     """List numbers from system Twilio account not present in any tenant pool (best-effort)."""
     try:
+        require_admin_role(current_user)
         if not config.TWILIO_ACCOUNT_SID or not config.TWILIO_AUTH_TOKEN:
             raise HTTPException(status_code=400, detail="System Twilio credentials not configured")
 
@@ -247,7 +240,7 @@ async def list_unassigned_numbers_from_system(tenant_id: str):
 
 
 @router.post("/search-available")
-async def search_available_numbers(payload: Dict[str, Any]):
+async def search_available_numbers(payload: Dict[str, Any], current_user: Dict = Depends(get_current_user_from_token)):
     """Search available numbers using either tenant or system credentials.
 
     Expected payload: {
@@ -268,12 +261,14 @@ async def search_available_numbers(payload: Dict[str, Any]):
         if mode == "tenant":
             if not tenant_id:
                 raise HTTPException(status_code=400, detail="tenant_id is required for tenant mode")
+            verify_tenant_access(current_user, tenant_id)
             integration = await twilio_integration_service.get_integration(tenant_id)
             if not integration:
                 raise HTTPException(status_code=400, detail="Twilio integration not configured for this tenant")
             account_sid = integration["account_sid"]
             auth_token = integration["auth_token"]
         else:
+            require_admin_role(current_user)
             if not config.TWILIO_ACCOUNT_SID or not config.TWILIO_AUTH_TOKEN:
                 raise HTTPException(status_code=400, detail="System Twilio credentials not configured")
             account_sid = config.TWILIO_ACCOUNT_SID
@@ -292,12 +287,15 @@ async def search_available_numbers(payload: Dict[str, Any]):
 
 
 @router.post("/tenant/{tenant_id}/purchase")
-async def purchase_number_for_tenant(tenant_id: str, payload: Dict[str, Any]):
+async def purchase_number_for_tenant(
+    tenant_id: str, payload: Dict[str, Any], current_user: Dict = Depends(get_current_user_from_token)
+):
     """Purchase a number using tenant's Twilio credentials and add to tenant pool.
 
     Payload: { "phone_number": "+1...", "webhook_url"?: str, "status_callback_url"?: str }
     """
     try:
+        verify_tenant_access(current_user, tenant_id)
         phone_number = payload.get("phone_number")
         if not phone_number:
             raise HTTPException(status_code=400, detail="phone_number is required")
@@ -325,12 +323,13 @@ async def purchase_number_for_tenant(tenant_id: str, payload: Dict[str, Any]):
 
 
 @router.post("/system/purchase")
-async def purchase_number_from_system(payload: Dict[str, Any]):
+async def purchase_number_from_system(payload: Dict[str, Any], current_user: Dict = Depends(get_current_user_from_token)):
     """Purchase a number using system credentials and add to a tenant's pool.
 
     Payload: { "tenant_id": str, "phone_number": "+1...", "webhook_url"?: str, "status_callback_url"?: str }
     """
     try:
+        require_admin_role(current_user)
         if not config.TWILIO_ACCOUNT_SID or not config.TWILIO_AUTH_TOKEN:
             raise HTTPException(status_code=400, detail="System Twilio credentials not configured")
 

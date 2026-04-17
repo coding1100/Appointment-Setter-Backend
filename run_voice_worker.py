@@ -35,6 +35,7 @@ from app.agents.voice_worker import entrypoint, prewarm_vad
 from app.core.config import LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
 
 AGENT_NAME = "voice-agent"
+NUM_IDLE_PROCESSES = int(os.environ.get("LIVEKIT_WORKER_IDLE_PROCESSES", "1"))
 
 
 if __name__ == "__main__":
@@ -77,6 +78,7 @@ if __name__ == "__main__":
         print(f"  LIVEKIT_API_KEY set: {'yes' if LIVEKIT_API_KEY else 'no'}")
         print(f"  LIVEKIT_API_SECRET set: {'yes' if LIVEKIT_API_SECRET else 'no'}")
         print(f"  Agent Name: {AGENT_NAME}")
+        print(f"  num_idle_processes: {NUM_IDLE_PROCESSES}")
         print("=" * 70)
 
         # -------------------------------------------------
@@ -90,7 +92,7 @@ if __name__ == "__main__":
                 api_secret=LIVEKIT_API_SECRET,
                 ws_url=LIVEKIT_URL,
                 agent_name=AGENT_NAME,
-                num_idle_processes=1,  # Prevent VAD contention
+                num_idle_processes=NUM_IDLE_PROCESSES,
             )
         )
 
