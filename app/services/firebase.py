@@ -4,6 +4,7 @@ Uses thread pool executor for non-blocking async operations (10-50x performance 
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import firebase_admin
 from firebase_admin import credentials, firestore
+from google.api_core.exceptions import AlreadyExists
 
 from app.core.config import FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY, FIREBASE_PROJECT_ID
 from app.core.utils import add_timestamps, add_updated_timestamp
@@ -160,6 +162,19 @@ class FirebaseService:
 
         return await self._run_in_executor(_update)
 
+    async def delete_user(self, user_id: str) -> bool:
+        """Delete user by ID."""
+
+        def _delete():
+            doc_ref = self.db.collection("users").document(user_id)
+            doc = doc_ref.get()
+            if not doc.exists:
+                return False
+            doc_ref.delete()
+            return True
+
+        return await self._run_in_executor(_delete)
+
     # Tenant operations
     async def create_tenant(self, tenant_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new tenant."""
@@ -242,6 +257,401 @@ class FirebaseService:
             return None
 
         return await self._run_in_executor(_query)
+
+    # Organization operations
+    async def create_org(self, org_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new organization document."""
+        add_timestamps(org_data)
+
+        def _create():
+            doc_ref = self.db.collection("orgs").document(org_data["id"])
+            doc_ref.set(org_data)
+            return org_data
+
+        return await self._run_in_executor(_create)
+
+    async def get_org(self, org_id: str) -> Optional[Dict[str, Any]]:
+        """Get organization by ID."""
+
+        def _get():
+            doc_ref = self.db.collection("orgs").document(org_id)
+            doc = doc_ref.get()
+            return doc.to_dict() if doc.exists else None
+
+        return await self._run_in_executor(_get)
+
+    async def list_orgs(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """List organizations with pagination."""
+
+        def _list():
+            orgs_ref = self.db.collection("orgs")
+            docs = orgs_ref.limit(limit).offset(offset).stream()
+            return [doc.to_dict() for doc in docs]
+
+        return await self._run_in_executor(_list)
+
+    async def update_org(self, org_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update organization document."""
+        add_updated_timestamp(update_data)
+
+        def _update():
+            doc_ref = self.db.collection("orgs").document(org_id)
+            doc = doc_ref.get()
+            if not doc.exists:
+                return None
+            doc_ref.update(update_data)
+            refreshed = doc_ref.get()
+            return refreshed.to_dict() if refreshed.exists else None
+
+        return await self._run_in_executor(_update)
+
+    async def delete_org(self, org_id: str) -> bool:
+        """Delete organization by ID."""
+
+        def _delete():
+            doc_ref = self.db.collection("orgs").document(org_id)
+            doc = doc_ref.get()
+            if not doc.exists:
+                return False
+            doc_ref.delete()
+            return True
+
+        return await self._run_in_executor(_delete)
+
+    @staticmethod
+    def _idempotency_doc_id(scope: str, key: str) -> str:
+        """Build deterministic doc id for idempotency records."""
+        return hashlib.sha256(f"{scope}:{key}".encode("utf-8")).hexdigest()
+
+    async def acquire_idempotency_key(
+        self,
+        *,
+        scope: str,
+        key: str,
+        request_hash: str,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Acquire an idempotency key for a request.
+
+        Returns:
+            {"state": "acquired" | "completed" | "in_progress" | "conflict", "record": {...}}
+        """
+
+        def _acquire():
+            doc_id = self._idempotency_doc_id(scope=scope, key=key)
+            doc_ref = self.db.collection("idempotency_keys").document(doc_id)
+            payload = {
+                "id": doc_id,
+                "scope": scope,
+                "key": key,
+                "request_hash": request_hash,
+                "status": "in_progress",
+                "user_id": user_id,
+                "response_payload": None,
+            }
+            add_timestamps(payload)
+
+            try:
+                doc_ref.create(payload)
+                return {"state": "acquired", "record": payload}
+            except AlreadyExists:
+                existing = doc_ref.get()
+                if not existing.exists:
+                    return {"state": "in_progress", "record": {}}
+                record = existing.to_dict() or {}
+                existing_hash = str(record.get("request_hash", ""))
+                if existing_hash and existing_hash != request_hash:
+                    return {"state": "conflict", "record": record}
+                existing_status = str(record.get("status", "in_progress")).lower()
+                if existing_status == "completed":
+                    return {"state": "completed", "record": record}
+                if existing_status == "failed":
+                    return {"state": "failed", "record": record}
+                return {"state": "in_progress", "record": record}
+
+        return await self._run_in_executor(_acquire)
+
+    async def complete_idempotency_key(
+        self,
+        *,
+        scope: str,
+        key: str,
+        response_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Mark idempotency key as completed and store response payload."""
+
+        def _complete():
+            doc_id = self._idempotency_doc_id(scope=scope, key=key)
+            doc_ref = self.db.collection("idempotency_keys").document(doc_id)
+            update_data = {
+                "status": "completed",
+                "response_payload": response_payload,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            add_updated_timestamp(update_data)
+            doc_ref.set(update_data, merge=True)
+            refreshed = doc_ref.get()
+            return refreshed.to_dict() if refreshed.exists else update_data
+
+        return await self._run_in_executor(_complete)
+
+    async def fail_idempotency_key(
+        self,
+        *,
+        scope: str,
+        key: str,
+        error_message: str,
+    ) -> Dict[str, Any]:
+        """Mark idempotency key as failed so retries can be handled explicitly."""
+
+        def _fail():
+            doc_id = self._idempotency_doc_id(scope=scope, key=key)
+            doc_ref = self.db.collection("idempotency_keys").document(doc_id)
+            update_data = {
+                "status": "failed",
+                "error_message": error_message[:500],
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            add_updated_timestamp(update_data)
+            doc_ref.set(update_data, merge=True)
+            refreshed = doc_ref.get()
+            return refreshed.to_dict() if refreshed.exists else update_data
+
+        return await self._run_in_executor(_fail)
+
+    # Platform role operations
+    async def create_platform_role(self, role_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create platform role."""
+        add_timestamps(role_data)
+
+        def _create():
+            doc_ref = self.db.collection("platform_roles").document(role_data["id"])
+            doc_ref.set(role_data)
+            return role_data
+
+        return await self._run_in_executor(_create)
+
+    async def get_platform_role(self, role_id: str) -> Optional[Dict[str, Any]]:
+        """Get platform role by ID."""
+
+        def _get():
+            doc_ref = self.db.collection("platform_roles").document(role_id)
+            doc = doc_ref.get()
+            return doc.to_dict() if doc.exists else None
+
+        return await self._run_in_executor(_get)
+
+    async def get_platform_role_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
+        """Get platform role by slug."""
+
+        def _query():
+            roles_ref = self.db.collection("platform_roles")
+            query = roles_ref.where("slug", "==", slug).limit(1)
+            docs = list(query.stream())
+            for doc in docs:
+                return doc.to_dict()
+            return None
+
+        return await self._run_in_executor(_query)
+
+    async def list_platform_roles(self, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
+        """List platform roles."""
+
+        def _list():
+            roles_ref = self.db.collection("platform_roles")
+            docs = roles_ref.limit(limit).offset(offset).stream()
+            return [doc.to_dict() for doc in docs]
+
+        return await self._run_in_executor(_list)
+
+    async def update_platform_role(self, role_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update platform role."""
+        add_updated_timestamp(update_data)
+
+        def _update():
+            doc_ref = self.db.collection("platform_roles").document(role_id)
+            doc = doc_ref.get()
+            if not doc.exists:
+                return None
+            doc_ref.update(update_data)
+            refreshed = doc_ref.get()
+            return refreshed.to_dict() if refreshed.exists else None
+
+        return await self._run_in_executor(_update)
+
+    async def get_org_by_legacy_tenant_id(
+        self, legacy_tenant_id: str, prefer_customer: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Get org by legacy tenant ID compatibility field."""
+
+        def _query():
+            orgs_ref = self.db.collection("orgs")
+            query = orgs_ref.where("legacy_tenant_id", "==", legacy_tenant_id)
+            docs = [doc.to_dict() for doc in query.stream()]
+            if not docs:
+                return None
+            if not prefer_customer:
+                return docs[0]
+            customer = next((doc for doc in docs if doc.get("org_type") == "customer"), None)
+            return customer or docs[0]
+
+        return await self._run_in_executor(_query)
+
+    async def list_descendant_orgs(self, org_id: str) -> List[Dict[str, Any]]:
+        """Return all descendant orgs for a parent org."""
+
+        def _query():
+            queue = [org_id]
+            descendants: List[Dict[str, Any]] = []
+
+            while queue:
+                parent_id = queue.pop(0)
+                orgs_ref = self.db.collection("orgs")
+                query = orgs_ref.where("parent_org_id", "==", parent_id)
+                children = [doc.to_dict() for doc in query.stream()]
+                descendants.extend(children)
+                queue.extend([child.get("id") for child in children if child.get("id")])
+
+            return descendants
+
+        return await self._run_in_executor(_query)
+
+    # Org membership operations
+    async def upsert_org_membership(self, membership_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Upsert org membership."""
+        existing_id = membership_data.get("id")
+        if not existing_id:
+            raise ValueError("Membership id is required")
+
+        def _upsert():
+            doc_ref = self.db.collection("org_memberships").document(existing_id)
+            existing_doc = doc_ref.get()
+            payload = dict(membership_data)
+            if existing_doc.exists:
+                add_updated_timestamp(payload)
+                doc_ref.set(payload, merge=True)
+            else:
+                add_timestamps(payload)
+                doc_ref.set(payload)
+            doc = doc_ref.get()
+            return doc.to_dict() if doc.exists else payload
+
+        return await self._run_in_executor(_upsert)
+
+    async def get_org_membership(self, org_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get membership for (org_id, user_id)."""
+
+        def _query():
+            memberships_ref = self.db.collection("org_memberships")
+            query = memberships_ref.where("org_id", "==", org_id).where("user_id", "==", user_id).limit(1)
+            docs = list(query.stream())
+            for doc in docs:
+                return doc.to_dict()
+            return None
+
+        return await self._run_in_executor(_query)
+
+    async def list_org_memberships_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+        """List memberships for a user."""
+
+        def _query():
+            memberships_ref = self.db.collection("org_memberships")
+            query = memberships_ref.where("user_id", "==", user_id)
+            docs = query.stream()
+            return [doc.to_dict() for doc in docs]
+
+        return await self._run_in_executor(_query)
+
+    async def list_org_memberships_for_org(self, org_id: str) -> List[Dict[str, Any]]:
+        """List memberships for an org."""
+
+        def _query():
+            memberships_ref = self.db.collection("org_memberships")
+            query = memberships_ref.where("org_id", "==", org_id)
+            docs = query.stream()
+            return [doc.to_dict() for doc in docs]
+
+        return await self._run_in_executor(_query)
+
+    async def delete_org_membership(self, org_id: str, user_id: str) -> bool:
+        """Delete org membership for (org_id, user_id)."""
+
+        def _delete():
+            memberships_ref = self.db.collection("org_memberships")
+            query = memberships_ref.where("org_id", "==", org_id).where("user_id", "==", user_id).limit(1)
+            docs = list(query.stream())
+            if not docs:
+                return False
+            docs[0].reference.delete()
+            return True
+
+        return await self._run_in_executor(_delete)
+
+    # Partner entitlement operations
+    async def get_partner_entitlements(self, partner_org_id: str) -> Optional[Dict[str, Any]]:
+        """Get partner entitlements by partner org id."""
+
+        def _get():
+            doc_ref = self.db.collection("partner_entitlements").document(partner_org_id)
+            doc = doc_ref.get()
+            return doc.to_dict() if doc.exists else None
+
+        return await self._run_in_executor(_get)
+
+    async def upsert_partner_entitlements(self, partner_org_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Upsert partner entitlements."""
+
+        def _upsert():
+            doc_ref = self.db.collection("partner_entitlements").document(partner_org_id)
+            existing_doc = doc_ref.get()
+            record = {"partner_org_id": partner_org_id, **payload}
+            if existing_doc.exists:
+                add_updated_timestamp(record)
+                doc_ref.set(record, merge=True)
+            else:
+                add_timestamps(record)
+                doc_ref.set(record)
+            refreshed = doc_ref.get()
+            return refreshed.to_dict() if refreshed.exists else record
+
+        return await self._run_in_executor(_upsert)
+
+    async def delete_partner_entitlements(self, partner_org_id: str) -> bool:
+        """Delete partner entitlements record."""
+
+        def _delete():
+            doc_ref = self.db.collection("partner_entitlements").document(partner_org_id)
+            doc = doc_ref.get()
+            if not doc.exists:
+                return False
+            doc_ref.delete()
+            return True
+
+        return await self._run_in_executor(_delete)
+
+    # Audit log operations
+    async def create_audit_log(self, log_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create audit log entry."""
+        add_timestamps(log_data)
+
+        def _create():
+            doc_ref = self.db.collection("audit_logs").document(log_data["id"])
+            doc_ref.set(log_data)
+            return log_data
+
+        return await self._run_in_executor(_create)
+
+    async def list_audit_logs(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """List audit logs ordered by creation timestamp descending."""
+
+        def _list():
+            logs_ref = self.db.collection("audit_logs")
+            query = logs_ref.order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit).offset(offset)
+            docs = query.stream()
+            return [doc.to_dict() for doc in docs]
+
+        return await self._run_in_executor(_list)
 
     # Appointment operations
     async def create_appointment(self, appointment_data: Dict[str, Any]) -> Dict[str, Any]:
