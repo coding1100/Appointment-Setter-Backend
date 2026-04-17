@@ -3,7 +3,7 @@ Authentication schemas for API requests and responses.
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, validator
@@ -64,8 +64,11 @@ class UserResponse(BaseModel):
     role: UserRole
     status: UserStatus
     tenant_id: Optional[UUID]
-    allowed_app_ids: List[str] = []
+    platform_role_id: Optional[str] = None
+    allowed_app_ids: List[str] = Field(default_factory=list)
     default_app_id: Optional[str] = None
+    org_memberships: List[Dict[str, Any]] = Field(default_factory=list)
+    active_org_id: Optional[str] = None
     is_email_verified: bool
     last_login: Optional[datetime]
     created_at: datetime
@@ -147,7 +150,7 @@ class EmailVerificationRequest(BaseModel):
 class RefreshTokenRequest(BaseModel):
     """Schema for refresh token request."""
 
-    refresh_token: str
+    refresh_token: Optional[str] = None
 
 
 # Permission schemas
@@ -250,6 +253,18 @@ class ResetPasswordRequest(BaseModel):
         return validate_password(v, field_name="New password")
 
 
+class SetupPasswordConfirmRequest(BaseModel):
+    """Schema for first-time setup password confirmation."""
+
+    token: str
+    new_password: str = Field(..., min_length=8, max_length=72)
+
+    @validator("new_password")
+    def validate_new_password(cls, v):
+        """Validate new password strength."""
+        return validate_password(v, field_name="New password")
+
+
 class PermissionCreate(BaseModel):
     """Schema for creating a permission."""
 
@@ -262,7 +277,7 @@ class PermissionCreate(BaseModel):
 class LogoutRequest(BaseModel):
     """Schema for logout request."""
 
-    refresh_token: str
+    refresh_token: Optional[str] = None
 
 
 class RoleCreate(BaseModel):

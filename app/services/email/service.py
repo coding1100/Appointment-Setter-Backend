@@ -164,3 +164,92 @@ class EmailService:
         except Exception as e:
             logging.error(f"Error sending appointment reschedule email: {e}", exc_info=True)
             return False
+
+    async def send_partner_owner_invite(
+        self,
+        *,
+        owner_email: str,
+        owner_name: str,
+        partner_name: str,
+        setup_password_url: str,
+        login_url: str,
+        expires_in_hours: int = 48,
+        platform_name: str = "MindRind",
+    ) -> bool:
+        """Send onboarding invite email for partner owner."""
+        try:
+            subject, html = EmailTemplates.partner_owner_invite(
+                {
+                    "owner_name": owner_name,
+                    "owner_email": owner_email,
+                    "partner_name": partner_name,
+                    "setup_password_url": setup_password_url,
+                    "login_url": login_url,
+                    "expires_in_hours": expires_in_hours,
+                    "platform_name": platform_name,
+                }
+            )
+            await self._send(subject, [owner_email], html)
+            return True
+        except Exception as e:
+            logging.error(f"Error sending partner owner invite email: {e}", exc_info=True)
+            return False
+
+    async def send_user_setup_invite(
+        self,
+        *,
+        recipient_email: str,
+        recipient_name: str,
+        workspace_name: str,
+        setup_password_url: str,
+        login_url: str,
+        expires_in_hours: int = 48,
+        platform_name: str = "MindRind",
+    ) -> bool:
+        """Send setup invite email for a newly onboarded workspace user."""
+        try:
+            subject, html = EmailTemplates.user_setup_invite(
+                {
+                    "recipient_email": recipient_email,
+                    "recipient_name": recipient_name,
+                    "workspace_name": workspace_name,
+                    "setup_password_url": setup_password_url,
+                    "login_url": login_url,
+                    "expires_in_hours": expires_in_hours,
+                    "platform_name": platform_name,
+                }
+            )
+            await self._send(subject, [recipient_email], html)
+            return True
+        except Exception as e:
+            logging.error(f"Error sending user setup invite email: {e}", exc_info=True)
+            return False
+
+    async def send_password_reset_email(
+        self,
+        *,
+        recipient_email: str,
+        recipient_name: str,
+        reset_password_url: str,
+        expires_in_minutes: int = 60,
+        platform_name: str = "MindRind",
+    ) -> bool:
+        """Send password reset email."""
+        try:
+            subject, html = EmailTemplates.password_reset(
+                {
+                    "recipient_email": recipient_email,
+                    "recipient_name": recipient_name,
+                    "reset_password_url": reset_password_url,
+                    "expires_in_minutes": expires_in_minutes,
+                    "platform_name": platform_name,
+                }
+            )
+            await self._send(subject, [recipient_email], html)
+            return True
+        except Exception as e:
+            logging.error(f"Error sending password reset email: {e}", exc_info=True)
+            return False
+
+
+email_service = EmailService()

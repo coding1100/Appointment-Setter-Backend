@@ -16,7 +16,8 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 FROM python:3.11-slim
 
 # Runtime OS deps
-RUN apt-get update && apt-get install -y \
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     procps \
     && rm -rf /var/lib/apt/lists/*
@@ -42,6 +43,10 @@ COPY app/core/__init__.py app/core/
 COPY app/core/config.py app/core/
 COPY app/core/async_redis.py app/core/
 COPY app/core/prompts.py app/core/
+COPY app/core/voice_metadata.py app/core/
+COPY app/core/platform_apps.py app/core/
+COPY app/services/__init__.py app/services/
+COPY app/services/tts_provider.py app/services/
 
 # Download models/plugins at build time per LiveKit docs
 RUN mkdir -p /root/.cache/huggingface && \

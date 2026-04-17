@@ -10,8 +10,6 @@ from uuid import UUID
 
 from app.api.v1.schemas.agent import AgentResponse
 from app.api.v1.schemas.auth import UserResponse
-from app.core.platform_apps import resolve_allowed_app_ids, resolve_default_app_id
-from app.core.platform_apps import resolve_allowed_app_ids, resolve_default_app_id
 from app.api.v1.schemas.phone_number import PhoneNumberResponse
 from app.api.v1.schemas.tenant import TenantResponse
 
@@ -71,8 +69,11 @@ def to_user_response(user_dict: Dict[str, Any]) -> UserResponse:
             role=user_dict.get("role", "user"),
             status=user_dict.get("status", "active"),
             tenant_id=tenant_id,
-            allowed_app_ids=resolve_allowed_app_ids(user_dict),
-            default_app_id=resolve_default_app_id(user_dict),
+            platform_role_id=user_dict.get("platform_role_id"),
+            allowed_app_ids=user_dict.get("allowed_app_ids", []) or [],
+            default_app_id=user_dict.get("default_app_id"),
+            org_memberships=user_dict.get("org_memberships", []) or [],
+            active_org_id=user_dict.get("active_org_id"),
             is_email_verified=user_dict.get("is_email_verified", False),
             last_login=last_login,
             created_at=created_at or datetime.now(timezone.utc),

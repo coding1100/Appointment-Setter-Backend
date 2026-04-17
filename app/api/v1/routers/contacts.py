@@ -3,12 +3,13 @@ Contact/Lead submission API routes.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.v1.schemas.contact import ContactCreate, ContactResponse
+from app.services.firebase import firebase_service
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -24,24 +25,23 @@ async def create_contact(contact_data: ContactCreate):
     try:
         # Generate a unique ID for the contact
         contact_id = uuid.uuid4()
+        created_at = datetime.now(timezone.utc)
 
         # Create contact record
-        contact = {
+        contact_record: Dict[str, str | None] = {
             "id": str(contact_id),
-            "email": contact_data.email,
+            "email": str(contact_data.email) if contact_data.email else None,
             "phone_number": contact_data.phone_number,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": created_at.isoformat(),
         }
 
-        # TODO: Save to database (Firebase Firestore)
-        # For now, we'll just return the contact data
-        # Example: await contact_service.create_contact(contact_data)
+        await firebase_service.create_contact(contact_record)
 
         return ContactResponse(
             id=contact_id,
-            email=contact_data.email,
+            email=str(contact_data.email) if contact_data.email else None,
             phone_number=contact_data.phone_number,
-            created_at=datetime.utcnow(),
+            created_at=created_at,
         )
 
     except ValueError as e:
