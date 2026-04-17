@@ -49,9 +49,12 @@ class AppointmentService:
                 raise ValueError(error_message)
 
             # Create appointment
+            customer_org = await firebase_service.get_org_by_legacy_tenant_id(tenant_id, prefer_customer=True)
             appointment_dict = {
                 "id": str(uuid.uuid4()),
                 "tenant_id": tenant_id,
+                "legacy_tenant_id": tenant_id,
+                "customer_org_id": customer_org.get("id") if customer_org else None,
                 "call_id": call_id,
                 "customer_name": customer_name,
                 "customer_phone": customer_phone,

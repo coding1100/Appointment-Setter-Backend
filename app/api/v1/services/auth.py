@@ -5,6 +5,7 @@ Authentication service for user management and JWT token handling using Firebase
 import logging
 import secrets
 import uuid
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -94,6 +95,24 @@ class AuthService:
         to_encode.update({"exp": expire, "type": "refresh"})
         return jwt.encode(to_encode, SECRET_KEY, algorithm=JWT_ALGORITHM)
 
+    def create_setup_password_token(self, user_id: str, expires_hours: int = 48) -> str:
+        """Create one-time setup-password token for onboarding."""
+        to_encode: Dict[str, Any] = {
+            "sub": user_id,
+            "type": "setup_password",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=expires_hours),
+        }
+        return jwt.encode(to_encode, SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+    def create_password_reset_token(self, user_id: str, expires_minutes: int = 60) -> str:
+        """Create password reset token."""
+        to_encode: Dict[str, Any] = {
+            "sub": user_id,
+            "type": "password_reset",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=expires_minutes),
+        }
+        return jwt.encode(to_encode, SECRET_KEY, algorithm=JWT_ALGORITHM)
+
     def verify_token(self, token: str, token_type: str = "access") -> Optional[Dict[str, Any]]:
         """Verify and decode a JWT token."""
         try:
@@ -106,21 +125,68 @@ class AuthService:
         except JWTError:
             return None
 
+    def verify_setup_password_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """Verify setup-password JWT token."""
+        return self.verify_token(token, token_type="setup_password")
+
+    def verify_password_reset_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """Verify password-reset JWT token."""
+        return self.verify_token(token, token_type="password_reset")
+
+    @staticmethod
+    def _token_fingerprint(token: str) -> str:
+        """Generate non-reversible token fingerprint for Redis storage."""
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    async def consume_one_time_token(self, token: str, token_type: str, exp_unix: Optional[int] = None) -> bool:
+        """
+        Mark a one-time token as consumed.
+
+        Returns True on first consumption, False if already used or on error.
+        """
+        try:
+            token_fp = self._token_fingerprint(token)
+            key = f"used_token:{token_type}:{token_fp}"
+            now_ts = int(datetime.now(timezone.utc).timestamp())
+            ttl_seconds = 3600
+            if isinstance(exp_unix, int):
+                ttl_seconds = max(60, exp_unix - now_ts)
+
+            client = await async_redis_client.get_client()
+            # NX ensures only first consumer succeeds.
+            result = await client.set(key, "1", ex=ttl_seconds, nx=True)
+            return bool(result)
+        except Exception as exc:
+            logger.warning("Token one-time consumption unavailable, continuing without strict enforcement: %s", exc)
+            return True
+
+    async def is_one_time_token_consumed(self, token: str, token_type: str) -> bool:
+        """Check whether one-time token is already consumed."""
+        try:
+            token_fp = self._token_fingerprint(token)
+            key = f"used_token:{token_type}:{token_fp}"
+            return await async_redis_client.exists(key)
+        except Exception as exc:
+            logger.warning("Token consumption check unavailable: %s", exc)
+            return False
+
     # User management
     async def create_user(self, user_data: UserCreate) -> Dict[str, Any]:
         """Create a new user."""
         # Hash the password
         hashed_password = self.get_password_hash(user_data.password)
+        normalized_email = str(user_data.email).strip().lower()
+        normalized_username = str(user_data.username).strip()
 
         # Prepare user data for Firebase
         user_dict = {
             "id": str(uuid.uuid4()),
-            "email": user_data.email,
-            "username": user_data.username,
+            "email": normalized_email,
+            "username": normalized_username,
             "hashed_password": hashed_password,
-            "first_name": user_data.first_name,
-            "last_name": user_data.last_name,
-            "full_name": f"{user_data.first_name} {user_data.last_name}",
+            "first_name": str(user_data.first_name).strip(),
+            "last_name": str(user_data.last_name).strip(),
+            "full_name": f"{str(user_data.first_name).strip()} {str(user_data.last_name).strip()}".strip(),
             "role": user_data.role.value if user_data.role else "user",
             "status": "active",
             "is_active": True,
@@ -136,7 +202,7 @@ class AuthService:
 
     async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         """Get user by email."""
-        return await firebase_service.get_user_by_email(email)
+        return await firebase_service.get_user_by_email(str(email).strip().lower())
 
     async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get user by ID."""
@@ -182,7 +248,7 @@ class AuthService:
 
     async def authenticate_user(self, email: str, password: str) -> Optional[Dict[str, Any]]:
         """Authenticate user with email and password (optimized)."""
-        user = await self.get_user_by_email(email)
+        user = await self.get_user_by_email(str(email).strip().lower())
         if not user:
             return None
 
@@ -213,6 +279,21 @@ class AuthService:
         add_updated_timestamp(update_data)
         await firebase_service.update_user(user_id, update_data)
 
+        return True
+
+    async def set_user_password(self, user_id: str, new_password: str) -> bool:
+        """Set password directly (for onboarding/reset flows)."""
+        user = await self.get_user(user_id)
+        if not user:
+            return False
+        new_hashed_password = self.get_password_hash(new_password)
+        update_data = {
+            "hashed_password": new_hashed_password,
+            "is_active": True,
+            "status": "active",
+        }
+        add_updated_timestamp(update_data)
+        await firebase_service.update_user(user_id, update_data)
         return True
 
     async def create_user_session(self, user_id: str, refresh_token: str) -> Dict[str, Any]:
@@ -326,14 +407,25 @@ class AuthService:
         if not user:
             return []
 
+        custom_permissions: List[str] = []
+        platform_role_id = user.get("platform_role_id")
+        if isinstance(platform_role_id, str) and platform_role_id:
+            role_doc = await firebase_service.get_platform_role(platform_role_id)
+            if role_doc:
+                raw_permissions = role_doc.get("permissions", []) or []
+                custom_permissions = [str(permission).strip() for permission in raw_permissions if str(permission).strip()]
+
         # For now, return basic permissions based on role
         role = user.get("role", "user")
         if role == "admin":
-            return ["admin:all"]
+            base = ["admin:all"]
+            return sorted(set(base + custom_permissions))
         elif role == "tenant_admin":
-            return ["tenant:manage", "appointment:manage", "user:view"]
+            base = ["tenant:manage", "appointment:manage", "user:view"]
+            return sorted(set(base + custom_permissions))
         else:
-            return ["appointment:view"]
+            base = ["appointment:view"]
+            return sorted(set(base + custom_permissions))
 
     async def has_permission(self, user_id: str, permission: str) -> bool:
         """Check if user has a specific permission."""

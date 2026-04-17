@@ -120,6 +120,14 @@ CHATBOT_STREAM_TIMEOUT_SECONDS = int(os.environ.get("CHATBOT_STREAM_TIMEOUT_SECO
 CHATBOT_DEV_ALLOW_ANY_ORIGIN = os.environ.get("CHATBOT_DEV_ALLOW_ANY_ORIGIN", "false").lower() == "true"
 CHATBOT_RUNTIME_ENABLED = os.environ.get("CHATBOT_RUNTIME_ENABLED", "true").lower() == "true"
 
+# MindRind platform branding defaults
+PLATFORM_BRAND_NAME = os.environ.get("PLATFORM_BRAND_NAME", "MindRind")
+PLATFORM_BRAND_LOGO_URL = os.environ.get("PLATFORM_BRAND_LOGO_URL", "")
+PLATFORM_BRAND_PRIMARY_COLOR = os.environ.get("PLATFORM_BRAND_PRIMARY_COLOR", "#0f172a")
+PLATFORM_BRAND_SECONDARY_COLOR = os.environ.get("PLATFORM_BRAND_SECONDARY_COLOR", "#ffffff")
+PLATFORM_BRAND_ACCENT_COLOR = os.environ.get("PLATFORM_BRAND_ACCENT_COLOR", "#f59e0b")
+PLATFORM_APP_BASE_URL = os.environ.get("PLATFORM_APP_BASE_URL", "http://localhost:3000")
+
 # Home Services voice mapping
 VOICE_MAP: Dict[str, str] = {
     "Home Services": "en_us_006",

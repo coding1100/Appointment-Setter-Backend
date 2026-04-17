@@ -17,6 +17,7 @@ from app.api.v1.schemas.tenant import (
 from app.core.prompts import prompt_map
 from app.core.utils import add_timestamps, add_updated_timestamp
 from app.services.firebase import firebase_service
+from app.services.org_service import org_service
 
 class TenantService:
     """Service class for tenant operations using Firebase."""
@@ -44,7 +45,57 @@ class TenantService:
         }
         add_timestamps(tenant_dict)
 
-        return await firebase_service.create_tenant(tenant_dict)
+        created_tenant = await firebase_service.create_tenant(tenant_dict)
+        await self.ensure_org_mapping_for_tenant(created_tenant)
+        return created_tenant
+
+    async def ensure_org_mapping_for_tenant(self, tenant: Dict[str, Any]) -> None:
+        """Ensure partner/customer org hierarchy exists for a legacy tenant."""
+        tenant_id = str(tenant.get("id", "")).strip()
+        tenant_name = str(tenant.get("name", "")).strip() or "Tenant"
+        if not tenant_id:
+            return
+
+        await org_service.ensure_platform_org_exists()
+        platform_org_id = "mindrind-platform"
+        partner_org_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"mindrind:partner:{tenant_id}"))
+        customer_org_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"mindrind:customer:{tenant_id}"))
+
+        partner_org = await firebase_service.get_org(partner_org_id)
+        if not partner_org:
+            await firebase_service.create_org(
+                {
+                    "id": partner_org_id,
+                    "org_type": "partner",
+                    "parent_org_id": platform_org_id,
+                    "name": f"{tenant_name} Partner",
+                    "status": "active",
+                    "branding": {"brand_name": tenant_name},
+                    "legacy_tenant_id": tenant_id,
+                }
+            )
+
+        customer_org = await firebase_service.get_org(customer_org_id)
+        if not customer_org:
+            await firebase_service.create_org(
+                {
+                    "id": customer_org_id,
+                    "org_type": "customer",
+                    "parent_org_id": partner_org_id,
+                    "name": tenant_name,
+                    "status": "active",
+                    "branding": {},
+                    "legacy_tenant_id": tenant_id,
+                }
+            )
+
+        await firebase_service.upsert_partner_entitlements(
+            partner_org_id=partner_org_id,
+            payload={
+                "appointment_setter_enabled": True,
+                "approval_notes": "Auto-approved for legacy tenant continuity",
+            },
+        )
 
     async def get_tenant(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Get tenant by ID (with caching)."""

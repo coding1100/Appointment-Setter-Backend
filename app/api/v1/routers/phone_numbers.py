@@ -8,7 +8,7 @@ from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.v1.routers.auth import get_current_user_from_token, verify_tenant_access
+from app.api.v1.routers.auth import get_current_user_from_token, require_admin_role, verify_tenant_access
 from app.api.v1.schemas.phone_number import AgentPhoneAssignment, PhoneNumberCreate, PhoneNumberResponse, PhoneNumberUpdate
 from app.api.v1.services.phone_number import phone_number_service
 
@@ -285,7 +285,7 @@ async def unassign_phone_from_agent(agent_id: str, current_user: Dict = Depends(
 
 
 @router.get("/debug/redis-caller-configs")
-async def debug_redis_caller_configs():
+async def debug_redis_caller_configs(current_user: Dict = Depends(get_current_user_from_token)):
     """
     Debug endpoint to list all configs stored in Redis.
     This helps diagnose if configs are being stored correctly.
@@ -301,6 +301,7 @@ async def debug_redis_caller_configs():
     from app.core.async_redis import async_redis_client
     
     try:
+        require_admin_role(current_user)
         # PRIMARY: Tenant config keys (new architecture)
         tenant_keys = await async_redis_client.keys("tenant_config:*")
         

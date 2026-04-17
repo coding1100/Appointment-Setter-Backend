@@ -15,6 +15,59 @@ class EmailTemplates:
         </div>
         """
 
+    @staticmethod
+    def partner_owner_invite(data: Dict[str, Any]) -> tuple[str, str]:
+        subject = f"Welcome to {data.get('platform_name', 'MindRind')} - Set Your Password"
+        content = f"""
+            <p>Hello {data.get('owner_name', 'there')},</p>
+            <p>Your partner workspace <strong>{data.get('partner_name', 'Partner')}</strong> is ready.</p>
+            <p>To activate your account, set your password using the secure link below:</p>
+            <div class="details-box">
+                <p><a href="{data.get('setup_password_url', '#')}" target="_blank" rel="noopener">Set password</a></p>
+                <p><strong>Login Email:</strong> {data.get('owner_email', 'N/A')}</p>
+                <p><strong>Link Expiry:</strong> {data.get('expires_in_hours', 48)} hours</p>
+            </div>
+            <p>If the button/link doesn't open, copy and paste this URL in your browser:</p>
+            <p>{data.get('setup_password_url', '#')}</p>
+            <p>After setting your password, sign in here:</p>
+            <p><a href="{data.get('login_url', '#')}" target="_blank" rel="noopener">{data.get('login_url', '#')}</a></p>
+        """
+        return subject, EmailTemplates._create_html_wrapper("Partner Onboarding", content, header_color="#0f172a")
+
+    @staticmethod
+    def user_setup_invite(data: Dict[str, Any]) -> tuple[str, str]:
+        subject = f"Welcome to {data.get('platform_name', 'MindRind')} - Activate Your Account"
+        content = f"""
+            <p>Hello {data.get('recipient_name', 'there')},</p>
+            <p>You were added to <strong>{data.get('workspace_name', 'your workspace')}</strong>.</p>
+            <p>Set your password to activate your account:</p>
+            <div class="details-box">
+                <p><a href="{data.get('setup_password_url', '#')}" target="_blank" rel="noopener">Set password</a></p>
+                <p><strong>Login Email:</strong> {data.get('recipient_email', 'N/A')}</p>
+                <p><strong>Link Expiry:</strong> {data.get('expires_in_hours', 48)} hours</p>
+            </div>
+            <p>If needed, paste this URL in your browser:</p>
+            <p>{data.get('setup_password_url', '#')}</p>
+            <p>Login URL: <a href="{data.get('login_url', '#')}" target="_blank" rel="noopener">{data.get('login_url', '#')}</a></p>
+        """
+        return subject, EmailTemplates._create_html_wrapper("Account Invitation", content, header_color="#0f172a")
+
+    @staticmethod
+    def password_reset(data: Dict[str, Any]) -> tuple[str, str]:
+        subject = f"{data.get('platform_name', 'MindRind')} Password Reset"
+        content = f"""
+            <p>Hello {data.get('recipient_name', 'there')},</p>
+            <p>We received a request to reset your password.</p>
+            <div class="details-box">
+                <p><a href="{data.get('reset_password_url', '#')}" target="_blank" rel="noopener">Reset password</a></p>
+                <p><strong>Link Expiry:</strong> {data.get('expires_in_minutes', 60)} minutes</p>
+            </div>
+            <p>If you did not request this, you can ignore this email.</p>
+            <p>Direct URL:</p>
+            <p>{data.get('reset_password_url', '#')}</p>
+        """
+        return subject, EmailTemplates._create_html_wrapper("Password Reset", content, header_color="#1d4ed8")
+
 
     # --- Appointment Templates (Ported) ---
 

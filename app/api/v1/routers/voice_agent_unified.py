@@ -6,10 +6,11 @@ Handles both browser testing and phone call sessions using a single service.
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from twilio.request_validator import RequestValidator
 
+from app.api.v1.routers.auth import get_current_user_from_token, require_admin_role
 from app.core import config
 from app.core.encryption import encryption_service
 from app.core.security import SecurityService
@@ -391,7 +392,11 @@ async def twilio_status_callback(request: Request):
 
 
 @router.delete("/cache/clear")
-async def clear_agent_cache(tenant_id: Optional[str] = None, agent_id: Optional[str] = None):
+async def clear_agent_cache(
+    tenant_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    current_user: Dict = Depends(get_current_user_from_token),
+):
     """
     Clear cached agent instances.
 
@@ -403,6 +408,7 @@ async def clear_agent_cache(tenant_id: Optional[str] = None, agent_id: Optional[
     - If no parameters provided, clears ALL cached agents
     """
     try:
+        require_admin_role(current_user)
         result = await unified_voice_agent_service.clear_agent_cache(tenant_id=tenant_id, agent_id=agent_id)
         return result
 
