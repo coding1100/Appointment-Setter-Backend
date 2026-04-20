@@ -165,9 +165,8 @@ async def get_current_user_from_token(request: Request, authorization: Optional[
             token = request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)
         if not token:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authorization token missing",
-                headers={"WWW-Authenticate": "Bearer"},
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authenticated",
             )
 
         # Decode JWT token
