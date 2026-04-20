@@ -7,7 +7,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from livekit import api
 from twilio.base.exceptions import TwilioException
@@ -18,8 +18,6 @@ from app.core.config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
     LIVEKIT_URL,
-    TWILIO_ACCOUNT_SID,
-    TWILIO_AUTH_TOKEN,
     TWILIO_WEBHOOK_BASE_URL,
 )
 from app.core.encryption import encryption_service
@@ -383,7 +381,7 @@ class ProvisioningService:
                 return sip_domains[0]
 
             # Run Twilio operation in thread pool
-            sip_domain = await asyncio.to_thread(_get_sip_domain_sync)
+            await asyncio.to_thread(_get_sip_domain_sync)
 
             # Create credential list for authentication (if needed)
             # Create IP access control list to allow LiveKit servers

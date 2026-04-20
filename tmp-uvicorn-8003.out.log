@@ -1,3 +1,0 @@
-INFO:     127.0.0.1:59340 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59341 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59348 - "POST /api/v1/chatbot-embed/sessions?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0MDk2YTBjZC1mNzRmLTQ4Y2YtYjE5Yi1lZjFkYjVlMzczNDgiLCJ0eXBlIjoiY2hhdGJvdF9lbWJlZCIsIm9yaWdpbiI6Imh0dHA6Ly8xMjcuMC4wLjE6ODA5MCIsInZlciI6MSwiaWF0IjoxNzc1ODAwODkzLCJleHAiOjE3NzU4MDgwOTN9.5_d3CPqBUvxRq5kMTkpXWeZqJGy4fJOcGlc4ZQ0vV7Q&embed_origin=http%3A%2F%2F127.0.0.1%3A8090 HTTP/1.1" 401 Unauthorized

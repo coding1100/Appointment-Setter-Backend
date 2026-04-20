@@ -1,5 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends
-from app.schemas.email import *
+from fastapi import APIRouter
 from app.services.email.service import EmailService
 
 router = APIRouter()

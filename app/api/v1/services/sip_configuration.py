@@ -15,13 +15,12 @@ ARCHITECTURE:
 import asyncio
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 from livekit import api
 from twilio.base.exceptions import TwilioException
 from twilio.rest import Client
 
-from app.api.v1.services.tenant import tenant_service
 from app.core.config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
@@ -325,7 +324,7 @@ class SIPConfigurationService:
                     sip_trunk_id = inbound_trunk_info
                 
                 if not sip_trunk_id:
-                    logger.error(f"Failed to extract trunk ID from LiveKit response")
+                    logger.error("Failed to extract trunk ID from LiveKit response")
                     raise Exception("Could not extract trunk ID from LiveKit API response")
 
                 logger.info(f"[TRUNK] ✓ Created SIP inbound trunk: {sip_trunk_id} (for {normalized_phone})")
@@ -357,7 +356,7 @@ class SIPConfigurationService:
                                 return conflicting_trunk_id
                     else:
                         # Could not extract trunk ID - try to find by phone number
-                        logger.warning(f"[TRUNK] Could not extract trunk ID from conflict, trying to find by phone number...")
+                        logger.warning("[TRUNK] Could not extract trunk ID from conflict, trying to find by phone number...")
                         existing_trunk_id = await self._find_trunk_id_by_number(livekit_api, phone_number)
                         if existing_trunk_id:
                             logger.info(f"[TRUNK] Found existing trunk by phone number, reusing: {existing_trunk_id}")
@@ -424,7 +423,7 @@ class SIPConfigurationService:
                     )
                     rule_name_attr = getattr(rule, "name", None) or "unnamed"
                     logger.info(f"[DISPATCH] ✓ Found existing rule {rule_id} (name: {rule_name_attr}) that already has trunk {trunk_id}")
-                    logger.info(f"[DISPATCH] Reusing existing rule to avoid conflict")
+                    logger.info("[DISPATCH] Reusing existing rule to avoid conflict")
                     return rule_id
             
             # 3️⃣ No rule has this trunk - find or create global rule by name
@@ -436,7 +435,7 @@ class SIPConfigurationService:
             
             # 4️⃣ Create global rule if not found
             if target_rule is None:
-                logger.info(f"[DISPATCH] Creating global dispatch rule (will handle all phone numbers)...")
+                logger.info("[DISPATCH] Creating global dispatch rule (will handle all phone numbers)...")
                 
                 if not hasattr(livekit_api.sip, "create_sip_dispatch_rule"):
                     logger.error("[DISPATCH] LiveKit SDK missing create_sip_dispatch_rule method")
@@ -503,7 +502,7 @@ class SIPConfigurationService:
                         logger.info(f"[DISPATCH] Rule ready: agent={agent_name}, trunk={trunk_id} (will add more trunks as needed)")
                         return rule_id
                     else:
-                        logger.error(f"[DISPATCH] Failed to extract rule_id from creation response")
+                        logger.error("[DISPATCH] Failed to extract rule_id from creation response")
                         return None
                 except Exception as create_error:
                     error_msg = str(create_error)
@@ -539,7 +538,7 @@ class SIPConfigurationService:
             )
             
             if not rule_id:
-                logger.error(f"[DISPATCH] Found rule but could not extract rule_id")
+                logger.error("[DISPATCH] Found rule but could not extract rule_id")
                 return None
             
             # Check if trunk is already attached
@@ -620,7 +619,7 @@ class SIPConfigurationService:
             
             # Find the rule by name
             if not hasattr(livekit_api.sip, "list_sip_dispatch_rule"):
-                logger.warning(f"[CLEANUP] Cannot list dispatch rules")
+                logger.warning("[CLEANUP] Cannot list dispatch rules")
                 return True
             
             response = await livekit_api.sip.list_sip_dispatch_rule(api.ListSIPDispatchRuleRequest())
@@ -644,7 +643,7 @@ class SIPConfigurationService:
             )
             
             if not rule_id:
-                logger.warning(f"[CLEANUP] Found rule but could not extract rule_id")
+                logger.warning("[CLEANUP] Found rule but could not extract rule_id")
                 return True
             
             # Delete the dispatch rule
@@ -774,7 +773,7 @@ class SIPConfigurationService:
                 if dispatch_rule_id:
                     logger.info(f"[SIP SETUP] ✓ Trunk attached to dispatch rule {dispatch_rule_id}")
                 else:
-                    logger.warning(f"[SIP SETUP] ✗ Failed to attach trunk to dispatch rule")
+                    logger.warning("[SIP SETUP] ✗ Failed to attach trunk to dispatch rule")
             except Exception as dispatch_error:
                 logger.warning(f"[SIP SETUP] Failed to setup dispatch rule: {dispatch_error}")
 
@@ -810,7 +809,7 @@ class SIPConfigurationService:
         """
         try:
             logger.info(f"[CLEANUP] Phone number {phone_number} unassigned - trunks and dispatch rule remain for reuse")
-            logger.info(f"[CLEANUP] ✓ Cleanup completed (no deletion - resources preserved)")
+            logger.info("[CLEANUP] ✓ Cleanup completed (no deletion - resources preserved)")
             return True
 
         except Exception as e:

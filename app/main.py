@@ -5,11 +5,9 @@ Main FastAPI application.
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Any, Dict
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.exceptions import HTTPException as FastAPIHTTPException
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -43,8 +41,6 @@ warnings.filterwarnings("ignore", category=UserWarning, module="passlib.handlers
 warnings.filterwarnings("ignore", message=".*bcrypt.*")
 
 # Suppress passlib bcrypt logging warnings
-import logging
-
 logging.getLogger("passlib.handlers.bcrypt").setLevel(logging.ERROR)
 logging.getLogger("passlib").setLevel(logging.ERROR)
 

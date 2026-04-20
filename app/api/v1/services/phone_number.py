@@ -125,7 +125,7 @@ class PhoneNumberService:
         # Verify twilio integration exists and belongs to tenant
         twilio_integration = await firebase_service.get_twilio_integration(tenant_id)
         if not twilio_integration:
-            raise ValueError(f"Twilio integration not found for this tenant")
+            raise ValueError("Twilio integration not found for this tenant")
 
         # Store normalized phone number
         phone_dict = {

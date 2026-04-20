@@ -2,23 +2,18 @@
 Tenant management API routes using Firebase.
 """
 
-import uuid
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.v1.routers.auth import get_current_user_from_token, require_admin_role, require_app_access, verify_tenant_access
 from app.api.v1.schemas.tenant import (
     AgentSettingsCreate,
-    AgentSettingsUpdate,
     BusinessInfoCreate,
-    BusinessInfoUpdate,
-    ServiceTypeCreate,
     TenantCreate,
     TenantResponse,
     TenantUpdate,
 )
-from app.api.v1.services.auth import auth_service
 from app.api.v1.services.tenant import tenant_service
 
 router = APIRouter(prefix="/tenants", tags=["tenants"], dependencies=[Depends(require_app_access("appointment_setter"))])

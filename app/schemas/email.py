@@ -1,5 +1,6 @@
-from pydantic import BaseModel, EmailStr, Field
-from typing import List, Optional
+from typing import Optional
+
+from pydantic import BaseModel, EmailStr
 
 class SubmitEmailDto(BaseModel):
     phoneNumber: Optional[str] = None

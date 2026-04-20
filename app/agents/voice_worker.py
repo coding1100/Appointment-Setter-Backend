@@ -9,7 +9,7 @@ This worker connects to LiveKit and handles voice agent sessions for inbound tel
 import asyncio
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, function_tool, tts
@@ -21,12 +21,6 @@ from app.core.config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
     LIVEKIT_URL,
-    LIVEKIT_SIP_ATTRIBUTE_TENANT_ID,
-    LIVEKIT_SIP_ATTRIBUTE_CALL_ID,
-    LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER,
-    LIVEKIT_SIP_HEADER_TENANT_ID,
-    LIVEKIT_SIP_HEADER_CALL_ID,
-    LIVEKIT_SIP_HEADER_CALLED_NUMBER,
 )
 from app.core.prompts import get_template
 from app.services.tts_provider import build_tts_with_fallback
