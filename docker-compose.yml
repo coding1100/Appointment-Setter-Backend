@@ -103,9 +103,6 @@ services:
       retries: 5
 
   voice-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: appointment-setter-backend:latest
     # Do not pin container_name so this service can be scaled horizontally:
     # docker compose up -d --scale voice-worker=3
