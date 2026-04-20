@@ -7,7 +7,7 @@ import asyncio
 import logging
 import time
 from functools import wraps
-from typing import Any, Callable, Optional, Tuple, Type
+from typing import Callable, Optional, Tuple, Type
 
 # Configure logging
 logger = logging.getLogger(__name__)

@@ -638,7 +638,7 @@ class TwilioIntegrationService:
                 return incoming
 
             # Run Twilio purchase operation in thread pool
-            incoming = await _run_twilio_sync(_purchase_phone_number_sync)
+            await _run_twilio_sync(_purchase_phone_number_sync)
 
             # Handle integration linking
             integration = await firebase_service.get_twilio_integration(tenant_id)
@@ -651,7 +651,7 @@ class TwilioIntegrationService:
                 # or use a system-level marker. For now, we'll use empty string.
                 # TODO: Consider creating a system-level integration entry
                 integration_id = "system"
-                logger.info(f"System purchase: No tenant integration found, using system marker")
+                logger.info("System purchase: No tenant integration found, using system marker")
             else:
                 # For tenant purchases, require integration
                 raise Exception(

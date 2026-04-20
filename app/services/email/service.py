@@ -1,9 +1,11 @@
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
+from datetime import datetime
+import logging
+from typing import Optional
+
+from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
+
 from app.core.config import email_settings
 from app.services.email.templates import EmailTemplates
-from datetime import datetime
-from typing import Optional, List
-import logging
 
 class EmailService:
     def __init__(self):

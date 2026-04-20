@@ -3,9 +3,7 @@ Firebase connection health check and connection pool management.
 This helps prevent slow queries by pre-warming connections.
 """
 
-import asyncio
 import logging
-from typing import Optional
 
 from app.core.utils import get_current_timestamp
 

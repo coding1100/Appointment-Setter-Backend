@@ -6,10 +6,8 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from app.api.v1.schemas.tenant import (
-    AgentPolicyCreate,
     AgentSettingsCreate,
     BusinessInfoCreate,
-    ServiceTypeCreate,
     TenantCreate,
     TenantUpdate,
     TwilioIntegrationCreate,

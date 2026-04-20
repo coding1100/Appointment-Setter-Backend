@@ -3,13 +3,12 @@ Twilio Integration API routes for managing user's Twilio credentials and phone n
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
 
 from app.api.v1.routers.auth import get_current_user_from_token, require_admin_role, verify_tenant_access
-from app.api.v1.schemas.voice_agent import TwilioCredentialTest, TwilioCredentialTestResponse, TwilioIntegrationConfig
+from app.api.v1.schemas.voice_agent import TwilioCredentialTest, TwilioIntegrationConfig
 from app.api.v1.services.twilio_integration import twilio_integration_service
 from app.core import config
 
@@ -212,17 +211,6 @@ async def list_unassigned_numbers_from_system(
             raise HTTPException(status_code=400, detail="System Twilio credentials not configured")
 
         owned = await twilio_integration_service.get_owned_numbers(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN)
-
-        # Best-effort: exclude numbers already present in tenant's pool
-        try:
-            phones_for_tenant = await twilio_integration_service.get_unassigned_numbers_for_tenant(
-                tenant_id=tenant_id,
-                account_sid=config.TWILIO_ACCOUNT_SID,
-                auth_token=config.TWILIO_AUTH_TOKEN,
-            )
-            # phones_for_tenant are unassigned for tenant; to exclude numbers in DB at all, fetch all phones by tenant is needed
-        except Exception:
-            phones_for_tenant = []
 
         # We will not exclude globally assigned numbers due to lack of global list here; return owned as-is
         return {"phone_numbers": owned, "total": len(owned)}

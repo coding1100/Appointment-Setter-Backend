@@ -1374,7 +1374,7 @@ def get_firebase_service() -> FirebaseService:
     if _firebase_service is None:
         try:
             _firebase_service = FirebaseService()
-        except (ValueError, Exception) as e:
+        except (ValueError, Exception):
             # In test mode, create a dummy instance that won't be used
             if os.environ.get("ENVIRONMENT") == "test" or os.environ.get("PYTEST_CURRENT_TEST"):
                 _firebase_service = FirebaseService()

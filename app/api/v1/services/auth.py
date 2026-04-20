@@ -3,7 +3,6 @@ Authentication service for user management and JWT token handling using Firebase
 """
 
 import logging
-import secrets
 import uuid
 import hashlib
 from datetime import datetime, timedelta, timezone
@@ -13,11 +12,11 @@ from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
 from passlib.context import CryptContext
 
-from app.api.v1.schemas.auth import LoginRequest, PasswordChangeRequest, UserCreate, UserUpdate
+from app.api.v1.schemas.auth import PasswordChangeRequest, UserCreate, UserUpdate
 from app.core.async_redis import async_redis_client
 from app.core.config import JWT_ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
 from app.core.platform_apps import resolve_allowed_app_ids, resolve_default_app_id
-from app.core.utils import add_timestamps, add_updated_timestamp, get_current_timestamp
+from app.core.utils import add_updated_timestamp, get_current_timestamp
 from app.services.firebase import firebase_service
 
 # Password hashing

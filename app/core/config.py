@@ -3,7 +3,7 @@ Core configuration settings for the AI Phone Scheduler SaaS platform.
 """
 
 import os
-from typing import Any, Dict
+from typing import Dict
 
 from dotenv import load_dotenv
 

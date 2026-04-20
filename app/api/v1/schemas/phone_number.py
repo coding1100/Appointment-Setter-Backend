@@ -2,9 +2,7 @@
 Phone number schemas for linking agents with Twilio integrations.
 """
 
-from datetime import datetime
 from typing import Literal, Optional
-from uuid import UUID
 
 from pydantic import BaseModel, Field, validator
 

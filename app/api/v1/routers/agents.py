@@ -4,10 +4,10 @@ Agent management API routes.
 
 from typing import Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.v1.routers.auth import get_current_user_from_token, require_app_access, verify_tenant_access
-from app.api.v1.schemas.agent import AgentCreate, AgentResponse, AgentUpdate, VoiceListResponse, VoicePreviewRequest
+from app.api.v1.schemas.agent import AgentCreate, AgentResponse, AgentUpdate, VoiceListResponse
 from app.api.v1.services.agent import agent_service
 from app.core.decorators import handle_router_errors
 
@@ -190,7 +190,7 @@ async def get_voice_preview_url(voice_id: str):
         if not os.path.exists(audio_path):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Audio file not found. Please run 'python generate_voice_samples.py' to generate voice samples.",
+                detail="Audio file not found. Please run 'python generate_voice_samples.py' to generate voice samples.",
             )
 
         # Return the static file URL

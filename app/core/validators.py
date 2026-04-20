@@ -2,8 +2,6 @@
 Shared validation functions for schemas and services.
 """
 
-from typing import List
-
 # Service type constants
 VALID_SERVICE_TYPES = ["Home Services", "Plumbing", "Electrician", "Painter", "Carpenter", "Maids"]
 

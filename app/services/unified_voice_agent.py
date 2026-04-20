@@ -32,7 +32,6 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from livekit import api
@@ -55,7 +54,6 @@ from app.core.config import (
 )
 from app.core.encryption import encryption_service
 from app.core.utils import get_current_timestamp
-from app.services.dialog_manager import dialog_manager
 from app.services.firebase import firebase_service
 from app.utils.phone_number import normalize_phone_number_safe
 from app.services.tts_provider import build_tts_with_fallback
@@ -208,13 +206,13 @@ class UnifiedVoiceAgentService:
             logger.error("âš ï¸ CRITICAL: LIVEKIT_URL is not configured!")
             logger.error("Please set LIVEKIT_URL in your .env file")
         else:
-            logger.info(f"âœ“ LIVEKIT_URL is configured")
+            logger.info("âœ“ LIVEKIT_URL is configured")
 
         if not LIVEKIT_SIP_DOMAIN or LIVEKIT_SIP_DOMAIN.strip() == "":
             logger.error("âš ï¸ CRITICAL: LIVEKIT_SIP_DOMAIN is not configured!")
             logger.error("Please set LIVEKIT_SIP_DOMAIN in your .env file")
         else:
-            logger.info(f"âœ“ LIVEKIT_SIP_DOMAIN is configured")
+            logger.info("âœ“ LIVEKIT_SIP_DOMAIN is configured")
 
         logger.info("=" * 60)
 
@@ -300,9 +298,9 @@ class UnifiedVoiceAgentService:
                 "agent_id": agent_id,
             }
 
-            logger.info(f"âœ“ Agent instance created and cached successfully")
+            logger.info("âœ“ Agent instance created and cached successfully")
         else:
-            logger.info(f"âœ“ Using cached agent instance")
+            logger.info("âœ“ Using cached agent instance")
 
         return self.tenant_agents[agent_key]["agent"]
 
@@ -573,11 +571,11 @@ class UnifiedVoiceAgentService:
             tenant_id = phone_record.get("tenant_id")
 
             if not agent_id:
-                logger.error(f"[TWILIO WEBHOOK] Phone number has no agent_id assigned")
+                logger.error("[TWILIO WEBHOOK] Phone number has no agent_id assigned")
                 return self._error_response("This number is not assigned to an agent. Please contact support.")
 
             if not tenant_id:
-                logger.error(f"[TWILIO WEBHOOK] Phone number has no tenant_id")
+                logger.error("[TWILIO WEBHOOK] Phone number has no tenant_id")
                 return self._error_response("Configuration error. Please contact support.")
 
             # Step 4: Get agent configuration
@@ -629,7 +627,7 @@ class UnifiedVoiceAgentService:
             # Also store by tenant+call_id for backward compatibility and cleanup
             stored = await self._store_tenant_config(tenant_id, call_id, config_data)
             if not stored:
-                logger.error(f"[TWILIO WEBHOOK] Failed to store tenant config")
+                logger.error("[TWILIO WEBHOOK] Failed to store tenant config")
                 return self._error_response("Unable to initialize call. Please try again later.")
 
             logger.info(f"[TWILIO WEBHOOK] âœ“ Stored config: call_config:{call_sid}")
@@ -775,10 +773,10 @@ class UnifiedVoiceAgentService:
             # Verify storage
             verify_data = await async_redis_client.get(config_key)
             if verify_data:
-                logger.info(f"[REDIS STORE] âœ“ Successfully stored and verified config")
+                logger.info("[REDIS STORE] âœ“ Successfully stored and verified config")
                 return True
             else:
-                logger.error(f"[REDIS STORE] âœ— Failed to verify config storage")
+                logger.error("[REDIS STORE] âœ— Failed to verify config storage")
                 return False
                 
         except Exception as exc:
@@ -806,10 +804,10 @@ class UnifiedVoiceAgentService:
             # Verify storage
             verify_data = await async_redis_client.get(config_key)
             if verify_data:
-                logger.info(f"[REDIS STORE] âœ“ Successfully stored config by room name")
+                logger.info("[REDIS STORE] âœ“ Successfully stored config by room name")
                 return True
             else:
-                logger.error(f"[REDIS STORE] âœ— Failed to verify config storage by room name")
+                logger.error("[REDIS STORE] âœ— Failed to verify config storage by room name")
                 return False
                 
         except Exception as exc:
@@ -840,10 +838,10 @@ class UnifiedVoiceAgentService:
             # Verify storage
             verify_data = await async_redis_client.get(config_key)
             if verify_data:
-                logger.info(f"[REDIS STORE] âœ“ Successfully stored config by Twilio CallSid")
+                logger.info("[REDIS STORE] âœ“ Successfully stored config by Twilio CallSid")
                 return True
             else:
-                logger.error(f"[REDIS STORE] âœ— Failed to verify config storage by Twilio CallSid")
+                logger.error("[REDIS STORE] âœ— Failed to verify config storage by Twilio CallSid")
                 return False
                 
         except Exception as exc:
@@ -1144,3 +1142,4 @@ Business: {business_name}"""
 
 # Global instance
 unified_voice_agent_service = UnifiedVoiceAgentService()
+

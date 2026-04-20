@@ -349,8 +349,7 @@ class ChatbotLiveChatService:
             await self._release_takeover_lock(session_id)
 
     async def release_chat(self, session_id: str, current_user: Dict[str, Any]) -> Dict[str, Any]:
-        detail = await self.get_live_chat_detail_for_user(session_id, current_user)
-        session = detail["session"]
+        await self.get_live_chat_detail_for_user(session_id, current_user)
         updated = await self.repository.update_chat_session(
             session_id,
             {
@@ -383,8 +382,7 @@ class ChatbotLiveChatService:
         return {"session": await self.repository.get_chat_session(session_id), "message": message}
 
     async def close_chat(self, session_id: str, current_user: Dict[str, Any]) -> Dict[str, Any]:
-        detail = await self.get_live_chat_detail_for_user(session_id, current_user)
-        session = detail["session"]
+        await self.get_live_chat_detail_for_user(session_id, current_user)
         updated = await self.repository.update_chat_session(
             session_id,
             {

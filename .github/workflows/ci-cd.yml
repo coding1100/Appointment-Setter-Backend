@@ -12,10 +12,38 @@ env:
   PYTHON_VERSION: "3.11"
 
 jobs:
+  verify-undefined-names:
+    name: Verify Undefined Names
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run undefined-name guard
+        run: |
+          set -e
+          python -m pip install --upgrade pip pyflakes
+          pyflakes app > pyflakes-report.txt || true
+
+          if grep -E "undefined name|import \* used; unable to detect undefined names" pyflakes-report.txt; then
+            echo "Undefined-name safety check failed."
+            cat pyflakes-report.txt
+            exit 1
+          fi
+
+          echo "No undefined-name issues detected."
+
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    needs: verify-undefined-names
 
     steps:
       - name: Deploy to Production VPS
@@ -48,6 +76,7 @@ jobs:
     name: Deploy to Development
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/dev'
+    needs: verify-undefined-names
 
     steps:
       - name: Deploy to Development VPS

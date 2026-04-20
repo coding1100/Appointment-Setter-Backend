@@ -3,8 +3,6 @@ Authentication API routes using Firebase.
 """
 
 import logging
-import uuid
-from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
@@ -14,10 +12,8 @@ from app.api.v1.schemas.auth import (
     ForgotPasswordRequest,
     LogoutRequest,
     PasswordChange,
-    PermissionCreate,
     RefreshTokenRequest,
     ResetPasswordRequest,
-    RoleCreate,
     SetupPasswordConfirmRequest,
     TokenResponse,
     UserCreate,
@@ -37,6 +33,7 @@ from app.core.config import (
     REFRESH_TOKEN_COOKIE_NAME,
     SECRET_KEY,
 )
+from app.core.platform_apps import has_app_access as user_has_app_access
 from app.core.security import SecurityService
 from app.services.email.service import email_service
 from app.services.org_service import org_service
@@ -482,7 +479,7 @@ async def logout_user(request: Request, response: Response, logout_data: Optiona
         # Revoke refresh token (deletes session from Redis)
         success = await auth_service.revoke_user_session(refresh_token)
         if not success:
-            logger.warning(f"Failed to revoke session for refresh token (may already be revoked)")
+            logger.warning("Failed to revoke session for refresh token (may already be revoked)")
         _clear_auth_cookies(response)
 
         return {"message": "Successfully logged out"}
