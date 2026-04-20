@@ -37,9 +37,9 @@ jobs:
             git checkout main
             git reset --hard origin/main
 
-            echo "Building Docker images..."
+            echo "Building Docker images with cache..."
             export COMPOSE_BAKE=false
-            docker compose build --no-cache
+            docker compose build
             docker compose up -d --remove-orphans
 
             echo "Cleaning up old images..."
@@ -73,9 +73,9 @@ jobs:
             git checkout dev || git checkout -b dev
             git reset --hard origin/dev
 
-            echo "Building Docker images..."
+            echo "Building Docker images with cache..."
             export COMPOSE_BAKE=false
-            docker compose build --no-cache
+            docker compose build
             docker compose up -d --remove-orphans
 
             echo "Cleaning up old images..."
