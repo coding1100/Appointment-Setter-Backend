@@ -26,7 +26,7 @@ jobs:
           key: ${{ secrets.PROD_VPS_SSH_KEY }}
           port: ${{ secrets.PROD_VPS_PORT || 22 }}
           timeout: 30s
-          command_timeout: 15m
+          command_timeout: 30m
           script: |
             set -e
 
@@ -37,13 +37,9 @@ jobs:
             git checkout main
             git reset --hard origin/main
 
-            echo "Building Docker images with cache..."
-            export COMPOSE_BAKE=false
-            docker compose build
+            echo "Building Docker images with cache (single build target)..."
+            nice -n 10 docker compose build backend || docker compose build backend
             docker compose up -d --remove-orphans
-
-            echo "Cleaning up old images..."
-            docker image prune -f
 
             echo "Deployment complete. Container status:"
             docker compose ps
@@ -73,13 +69,9 @@ jobs:
             git checkout dev || git checkout -b dev
             git reset --hard origin/dev
 
-            echo "Building Docker images with cache..."
-            export COMPOSE_BAKE=false
-            docker compose build
+            echo "Building Docker images with cache (single build target)..."
+            nice -n 10 docker compose build backend || docker compose build backend
             docker compose up -d --remove-orphans
-
-            echo "Cleaning up old images..."
-            docker image prune -f
 
             echo "Deployment complete. Container status:"
             docker compose ps
