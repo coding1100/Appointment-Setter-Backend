@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 
-from app.api.v1.routers.auth import enforce_app_access, get_current_user_from_token, require_app_access
+from app.api.v1.routers.auth import enforce_app_access, require_app_access
 from app.api.v1.schemas.chatbot_agent import (
     ChatMessageResponse,
     ChatSessionResponse,
@@ -31,7 +31,7 @@ from app.chatbot_agents.live_chat_service import chatbot_live_chat_service
 from app.chatbot_agents.service import chatbot_agent_service
 from app.core.async_redis import async_redis_client
 
-router = APIRouter(prefix="/chatbot-agents", tags=["chatbot-agents"], dependencies=[Depends(require_app_access("chatbot_agents"))])
+router = APIRouter(prefix="/chatbot-agents", tags=["chatbot-agents"])
 _CHATBOT_V2_REQUIRED_FIELDS = (
     "domain_key",
     "behavior_config",
@@ -135,14 +135,14 @@ async def _stream_session_channel(websocket: WebSocket, session_id: str, audienc
 @router.get("/live-chats", response_model=List[LiveChatListItem])
 async def list_live_chats(
     limit: int = Query(100, ge=1, le=500),
-    current_user: Dict[str, Any] = Depends(get_current_user_from_token),
+    current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents")),
 ):
     sessions = await chatbot_live_chat_service.list_live_chats_for_user(current_user, limit=limit)
     return [LiveChatListItem(session=_to_session_response(session)) for session in sessions]
 
 
 @router.get("/live-chats/{session_id}", response_model=LiveChatDetailResponse)
-async def get_live_chat(session_id: str, current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
+async def get_live_chat(session_id: str, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))):
     try:
         detail = await chatbot_live_chat_service.get_live_chat_detail_for_user(session_id, current_user)
     except LookupError as exc:
@@ -153,7 +153,7 @@ async def get_live_chat(session_id: str, current_user: Dict[str, Any] = Depends(
 
 
 @router.post("/live-chats/{session_id}/takeover", response_model=TakeoverResponse)
-async def take_over_live_chat(session_id: str, current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
+async def take_over_live_chat(session_id: str, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))):
     try:
         payload = await chatbot_live_chat_service.take_over_chat(session_id, current_user)
     except LookupError as exc:
@@ -168,7 +168,7 @@ async def take_over_live_chat(session_id: str, current_user: Dict[str, Any] = De
 
 
 @router.post("/live-chats/{session_id}/release", response_model=ReleaseResponse)
-async def release_live_chat(session_id: str, current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
+async def release_live_chat(session_id: str, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))):
     try:
         payload = await chatbot_live_chat_service.release_chat(session_id, current_user)
     except LookupError as exc:
@@ -184,7 +184,7 @@ async def release_live_chat(session_id: str, current_user: Dict[str, Any] = Depe
 async def send_live_chat_message(
     session_id: str,
     payload: OperatorMessageRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user_from_token),
+    current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents")),
 ):
     try:
         result = await chatbot_live_chat_service.send_operator_message(session_id, current_user, payload.content)
@@ -198,7 +198,7 @@ async def send_live_chat_message(
 
 
 @router.post("/live-chats/{session_id}/close", response_model=ReleaseResponse)
-async def close_live_chat(session_id: str, current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
+async def close_live_chat(session_id: str, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))):
     try:
         payload = await chatbot_live_chat_service.close_chat(session_id, current_user)
     except LookupError as exc:
@@ -232,7 +232,7 @@ async def live_chat_stream(websocket: WebSocket, session_id: str, access_token: 
 
 @router.post("", response_model=ChatbotAgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_chatbot_agent(
-    chatbot_data: ChatbotAgentCreate, current_user: Dict[str, Any] = Depends(get_current_user_from_token)
+    chatbot_data: ChatbotAgentCreate, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))
 ):
     owner_user_id = str(current_user.get("id", ""))
     created = await chatbot_agent_service.create_chatbot_agent(owner_user_id=owner_user_id, payload=chatbot_data.dict())
@@ -243,7 +243,7 @@ async def create_chatbot_agent(
 async def list_chatbot_agents(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    current_user: Dict[str, Any] = Depends(get_current_user_from_token),
+    current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents")),
 ):
     user_id = str(current_user.get("id", ""))
     role = str(current_user.get("role", "user")).lower()
@@ -252,7 +252,7 @@ async def list_chatbot_agents(
 
 
 @router.get("/{chatbot_id}", response_model=ChatbotAgentResponse)
-async def get_chatbot_agent(chatbot_id: str, current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
+async def get_chatbot_agent(chatbot_id: str, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))):
     chatbot = await chatbot_agent_service.get_chatbot_agent(chatbot_id)
     if not chatbot:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chatbot agent not found")
@@ -267,7 +267,7 @@ async def get_chatbot_agent(chatbot_id: str, current_user: Dict[str, Any] = Depe
 
 @router.put("/{chatbot_id}", response_model=ChatbotAgentResponse)
 async def update_chatbot_agent(
-    chatbot_id: str, chatbot_data: ChatbotAgentUpdate, current_user: Dict[str, Any] = Depends(get_current_user_from_token)
+    chatbot_id: str, chatbot_data: ChatbotAgentUpdate, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))
 ):
     chatbot = await chatbot_agent_service.get_chatbot_agent(chatbot_id)
     if not chatbot:
@@ -289,7 +289,7 @@ async def update_chatbot_agent(
 
 
 @router.delete("/{chatbot_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_chatbot_agent(chatbot_id: str, current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
+async def delete_chatbot_agent(chatbot_id: str, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))):
     chatbot = await chatbot_agent_service.get_chatbot_agent(chatbot_id)
     if not chatbot:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chatbot agent not found")
@@ -307,7 +307,7 @@ async def delete_chatbot_agent(chatbot_id: str, current_user: Dict[str, Any] = D
 
 @router.post("/{chatbot_id}/embed-token", response_model=ChatbotEmbedTokenResponse)
 async def generate_chatbot_embed_token(
-    chatbot_id: str, payload: ChatbotEmbedTokenRequest, current_user: Dict[str, Any] = Depends(get_current_user_from_token)
+    chatbot_id: str, payload: ChatbotEmbedTokenRequest, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))
 ):
     chatbot = await chatbot_agent_service.get_chatbot_agent(chatbot_id)
     if not chatbot:
@@ -331,7 +331,7 @@ async def generate_chatbot_embed_token(
 
 
 @router.post("/{chatbot_id}/revoke-embed-tokens", response_model=ChatbotEmbedRevokeResponse)
-async def revoke_embed_tokens(chatbot_id: str, current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
+async def revoke_embed_tokens(chatbot_id: str, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))):
     chatbot = await chatbot_agent_service.get_chatbot_agent(chatbot_id)
     if not chatbot:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chatbot agent not found")
@@ -358,7 +358,7 @@ async def list_runtime_logs(
     chatbot_id: str,
     limit: int = Query(100, ge=1, le=500),
     status_filter: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(get_current_user_from_token),
+    current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents")),
 ):
     chatbot = await chatbot_agent_service.get_chatbot_agent(chatbot_id)
     if not chatbot:
@@ -384,7 +384,7 @@ async def list_runtime_logs(
 
 
 @router.get("/runtime/kill-switch", response_model=ChatbotRuntimeControlResponse)
-async def get_runtime_kill_switch(current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
+async def get_runtime_kill_switch(current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))):
     if not _is_admin(current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
 
@@ -398,7 +398,7 @@ async def get_runtime_kill_switch(current_user: Dict[str, Any] = Depends(get_cur
 
 @router.post("/runtime/kill-switch", response_model=ChatbotRuntimeControlResponse)
 async def set_runtime_kill_switch(
-    payload: ChatbotRuntimeControlRequest, current_user: Dict[str, Any] = Depends(get_current_user_from_token)
+    payload: ChatbotRuntimeControlRequest, current_user: Dict[str, Any] = Depends(require_app_access("chatbot_agents"))
 ):
     if not _is_admin(current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")

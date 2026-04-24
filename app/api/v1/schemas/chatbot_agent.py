@@ -415,6 +415,7 @@ class ChatSessionResponse(BaseModel):
     assigned_operator_name: Optional[str] = None
     started_at: datetime
     last_activity_at: datetime
+    last_restored_at: Optional[datetime] = None
     taken_over_at: Optional[datetime] = None
     released_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
