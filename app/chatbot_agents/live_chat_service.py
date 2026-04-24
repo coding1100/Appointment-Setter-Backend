@@ -407,9 +407,11 @@ class ChatbotLiveChatService:
         return {"session": await self.repository.get_chat_session(session_id), "message": system_message}
 
     async def authenticate_ws_operator(self, access_token: str) -> Dict[str, Any]:
+        if not access_token or not str(access_token).strip():
+            raise PermissionError("Missing access token")
         payload = auth_service.verify_token(access_token, token_type="access")
         if not payload or not payload.get("sub"):
-            raise PermissionError("Invalid access token")
+            raise PermissionError("Access token is invalid or expired")
         user = await auth_service.get_user_by_id(str(payload.get("sub")))
         if not user:
             raise PermissionError("User not found")

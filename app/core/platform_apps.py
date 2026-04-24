@@ -78,9 +78,9 @@ def get_default_allowed_app_ids_for_role(role: str) -> List[str]:
     if role_name == "admin":
         return get_platform_app_ids()
     if role_name in {"tenant_admin", "tenant_user", "user"}:
-        return ["appointment_setter"]
+        return [APPOINTMENT_SETTER_APP_ID, CHATBOT_AGENTS_APP_ID]
 
-    return ["appointment_setter"]
+    return [APPOINTMENT_SETTER_APP_ID]
 
 
 def resolve_user_allowed_app_ids(user: Optional[Dict[str, Any]]) -> List[str]:
@@ -96,6 +96,10 @@ def resolve_user_allowed_app_ids(user: Optional[Dict[str, Any]]) -> List[str]:
     role = str(user.get("role") or "").lower()
     explicit = normalize_allowed_app_ids(user.get("allowed_app_ids"))
     if explicit:
+        # Backward-compatible rollout: older users were often saved with only
+        # appointment_setter explicitly, which unintentionally blocks chatbot_agents.
+        if role in {"tenant_admin", "tenant_user", "user"} and CHATBOT_AGENTS_APP_ID not in explicit:
+            explicit = [*explicit, CHATBOT_AGENTS_APP_ID]
         return explicit
     return get_default_allowed_app_ids_for_role(role)
 

@@ -454,8 +454,10 @@ async def get_chatbot_embed_panel(
       const messageIds = new Set();
       let session = null;
       let sessionToken = '';
+      let visitorSessionId = '';
       let socket = null;
       let reconnectTimer = null;
+      let refreshingSessionToken = false;
       const hiddenSystemMessages = new Set([
         'A team member joined the chat.',
         'The chatbot is back in the conversation.'
@@ -538,9 +540,46 @@ async def get_chatbot_embed_panel(
         }};
         socket.onclose = function() {{
           if (session && session.status === 'open') {{
-            reconnectTimer = window.setTimeout(connectSocket, 1500);
+            reconnectTimer = window.setTimeout(async function() {{
+              const refreshed = await restoreSessionToken();
+              if (refreshed) {{
+                connectSocket();
+              }}
+            }}, 1500);
           }}
         }};
+      }};
+
+      const restoreSessionToken = async function() {{
+        if (!session || refreshingSessionToken) return false;
+        if (!visitorSessionId) return false;
+
+        refreshingSessionToken = true;
+        try {{
+          const sessionUrl = new URL('./sessions', window.location.href);
+          sessionUrl.searchParams.set('token', token);
+          if (embedOrigin) {{
+            sessionUrl.searchParams.set('embed_origin', embedOrigin);
+          }}
+          const sessionResponse = await fetch(sessionUrl.toString(), {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json', 'Accept': 'application/json' }},
+            body: JSON.stringify({{ visitor_session_id: visitorSessionId, page_url: pageUrl, page_title: pageTitle }})
+          }});
+          const sessionPayload = await sessionResponse.json();
+          if (!sessionResponse.ok) {{
+            throw new Error(sessionPayload?.detail || 'Failed to refresh chat session');
+          }}
+          session = sessionPayload.session || session;
+          sessionToken = sessionPayload.session_token || sessionToken;
+          renderStatus();
+          return Boolean(sessionToken);
+        }} catch (error) {{
+          setStatus(error?.message || 'Live connection lost', true);
+          return false;
+        }} finally {{
+          refreshingSessionToken = false;
+        }}
       }};
 
       const submitMessage = async function() {{
@@ -597,7 +636,7 @@ async def get_chatbot_embed_panel(
         document.documentElement.style.setProperty('--text', configPayload.theme?.text_color || '#0f172a');
 
         const visitorStorageKey = getVisitorKey(configPayload.chatbot_id);
-        let visitorSessionId = window.localStorage.getItem(visitorStorageKey);
+        visitorSessionId = window.localStorage.getItem(visitorStorageKey);
         if (!visitorSessionId) {{
           visitorSessionId = generateVisitorId();
           window.localStorage.setItem(visitorStorageKey, visitorSessionId);
