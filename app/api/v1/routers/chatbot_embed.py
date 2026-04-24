@@ -270,6 +270,7 @@ async def get_chatbot_embed_loader(
     panel_url = f"{request.url_for('get_chatbot_embed_panel')}?{urlencode(panel_query_params)}"
     left = "20px" if position == "bottom-left" else "auto"
     right = "20px" if position == "bottom-right" else "auto"
+    align_items = "flex-start" if position == "bottom-left" else "flex-end"
 
     script = f"""
 (function () {{
@@ -284,6 +285,10 @@ async def get_chatbot_embed_loader(
   root.style.right = '{right}';
   root.style.zIndex = '999999';
   root.style.fontFamily = 'Arial, sans-serif';
+  root.style.display = 'flex';
+  root.style.flexDirection = 'column';
+  root.style.alignItems = '{align_items}';
+  root.style.gap = '10px';
 
   var button = document.createElement('button');
   button.type = 'button';
@@ -296,13 +301,13 @@ async def get_chatbot_embed_loader(
   button.style.fontWeight = '600';
   button.style.cursor = 'pointer';
   button.style.boxShadow = '0 8px 24px rgba(2, 6, 23, 0.25)';
+  button.style.alignSelf = '{align_items}';
 
   var panel = document.createElement('div');
   panel.style.width = '380px';
   panel.style.maxWidth = 'calc(100vw - 24px)';
   panel.style.height = '560px';
   panel.style.maxHeight = '70vh';
-  panel.style.marginBottom = '10px';
   panel.style.background = '#fff';
   panel.style.border = '1px solid #d1d5db';
   panel.style.borderRadius = '14px';
