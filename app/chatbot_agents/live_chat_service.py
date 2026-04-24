@@ -122,12 +122,15 @@ class ChatbotLiveChatService:
         )
 
         if existing:
+            now = self._now_iso()
             session = await self.repository.update_chat_session(
                 existing["id"],
                 {
                     "page_url": self._normalize_page_url(page_url, normalized_origin),
                     "page_title": (page_title or '').strip(),
-                    "last_activity_at": existing.get("last_activity_at") or self._now_iso(),
+                    "last_activity_at": now,
+                    "last_restored_at": now,
+                    "is_returning_visitor": True,
                 },
             )
         else:
@@ -148,6 +151,7 @@ class ChatbotLiveChatService:
                 "assigned_operator_name": None,
                 "started_at": now,
                 "last_activity_at": now,
+                "last_restored_at": None,
                 "taken_over_at": None,
                 "released_at": None,
                 "closed_at": None,
