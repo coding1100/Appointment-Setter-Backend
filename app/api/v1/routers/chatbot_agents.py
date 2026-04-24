@@ -3,6 +3,7 @@ Chatbot agent management APIs (non-tenant).
 """
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -32,6 +33,7 @@ from app.chatbot_agents.service import chatbot_agent_service
 from app.core.async_redis import async_redis_client
 
 router = APIRouter(prefix="/chatbot-agents", tags=["chatbot-agents"])
+logger = logging.getLogger(__name__)
 _CHATBOT_V2_REQUIRED_FIELDS = (
     "domain_key",
     "behavior_config",
@@ -216,13 +218,25 @@ async def live_chat_stream(websocket: WebSocket, session_id: str, access_token: 
         current_user = await chatbot_live_chat_service.authenticate_ws_operator(access_token)
         enforce_app_access(current_user, "chatbot_agents")
         await chatbot_live_chat_service.get_live_chat_detail_for_user(session_id, current_user)
+    except HTTPException as exc:
+        logger.warning(
+            "Rejected chatbot live WS session=%s user=%s detail=%s",
+            session_id,
+            str(current_user.get("id", "unknown")) if "current_user" in locals() else "unknown",
+            exc.detail,
+        )
+        await websocket.close(code=4401, reason=str(exc.detail))
+        return
     except PermissionError as exc:
+        logger.warning("Rejected chatbot live WS session=%s reason=%s", session_id, str(exc))
         await websocket.close(code=4401, reason=str(exc))
         return
     except LookupError as exc:
+        logger.warning("Rejected chatbot live WS session=%s reason=%s", session_id, str(exc))
         await websocket.close(code=4404, reason=str(exc))
         return
     except Exception as exc:
+        logger.exception("Unexpected chatbot live WS failure session=%s", session_id)
         await websocket.close(code=4401, reason=str(exc))
         return
 

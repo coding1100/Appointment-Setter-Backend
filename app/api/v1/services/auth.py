@@ -250,12 +250,22 @@ class AuthService:
 
     async def authenticate_user(self, email: str, password: str) -> Optional[Dict[str, Any]]:
         """Authenticate user with email and password (optimized)."""
-        user = await self.get_user_by_email(str(email).strip().lower())
+        normalized_email = str(email).strip().lower()
+        user = await self.get_user_by_email(normalized_email)
         if not user:
             return None
 
+        hashed_password = user.get("hashed_password")
+        if not isinstance(hashed_password, str) or not hashed_password.strip():
+            logger.warning("Login rejected for %s: stored password hash is missing or invalid", normalized_email)
+            return None
+
         # Use async password verification to avoid blocking event loop
-        if not await self.verify_password_async(password, user["hashed_password"]):
+        try:
+            if not await self.verify_password_async(password, hashed_password):
+                return None
+        except Exception as exc:
+            logger.warning("Login password verification failed for %s: %s", normalized_email, exc)
             return None
 
         if not user.get("is_active", False):

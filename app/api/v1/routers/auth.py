@@ -388,6 +388,7 @@ async def login_user(login_data: UserLogin, request: Request, response: Response
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Login failed for email %s", login_data.email)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Login failed: {str(e)}")
 
 
