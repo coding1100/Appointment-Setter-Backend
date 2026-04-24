@@ -195,7 +195,12 @@ class ChatbotAgentService:
     async def delete_chatbot_agent(self, chatbot_id: str) -> bool:
         return await self.repository.delete(chatbot_id)
 
-    async def create_embed_token(self, chatbot: Dict[str, Any], origin: str) -> Dict[str, str]:
+    async def create_embed_token(
+        self,
+        chatbot: Dict[str, Any],
+        origin: str,
+        expires_in_minutes: Optional[int] = None,
+    ) -> Dict[str, str]:
         self._ensure_runtime_fields(chatbot)
         normalized_origin = origin.rstrip("/")
         allowed_origins = [entry.rstrip("/") for entry in chatbot.get("allowed_origins", [])]
@@ -204,7 +209,10 @@ class ChatbotAgentService:
 
         token_version = int(chatbot["embed_token_version"])
         token_data = self.token_service.create_token(
-            chatbot_id=chatbot["id"], origin=normalized_origin, version=token_version
+            chatbot_id=chatbot["id"],
+            origin=normalized_origin,
+            version=token_version,
+            expires_in_minutes=expires_in_minutes,
         )
         loader_base = CHATBOT_LOADER_BASE_URL.strip()
         if not loader_base:

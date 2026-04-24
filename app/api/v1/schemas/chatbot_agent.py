@@ -244,6 +244,12 @@ class ChatbotEmbedTokenRequest(BaseModel):
     """Request model for generating launcher embed tokens."""
 
     origin: str = Field(..., description="Origin requesting embed token")
+    expires_in_minutes: Optional[int] = Field(
+        None,
+        ge=5,
+        le=10080,
+        description="Optional token lifetime in minutes (5 minutes to 7 days).",
+    )
 
     @validator("origin")
     def validate_origin(cls, value: str) -> str:

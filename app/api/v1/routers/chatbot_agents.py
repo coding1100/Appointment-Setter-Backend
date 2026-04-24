@@ -319,7 +319,11 @@ async def generate_chatbot_embed_token(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     try:
-        token_data = await chatbot_agent_service.create_embed_token(chatbot, payload.origin)
+        token_data = await chatbot_agent_service.create_embed_token(
+            chatbot,
+            payload.origin,
+            expires_in_minutes=payload.expires_in_minutes,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return ChatbotEmbedTokenResponse(**token_data)
