@@ -82,6 +82,9 @@ class ChatbotAgentRepository:
     async def list_chat_sessions(self, limit: int = 100) -> List[Dict[str, Any]]:
         return await firebase_service.list_chatbot_chat_sessions(limit=limit)
 
+    async def count_chat_sessions_for_visitor(self, chatbot_id: str, visitor_session_id: str, origin: str) -> int:
+        return await firebase_service.count_chatbot_chat_sessions_for_visitor(chatbot_id, visitor_session_id, origin)
+
     async def create_chat_message(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         return await firebase_service.create_chatbot_chat_message(message_data)
 

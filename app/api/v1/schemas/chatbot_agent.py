@@ -408,6 +408,7 @@ class ChatSessionResponse(BaseModel):
     page_title: str = ""
     visitor_session_id: str
     visitor_label: str
+    is_returning_visitor: bool = False
     status: Literal["open", "closed"]
     control_mode: Literal["bot", "human"]
     assigned_operator_id: Optional[str] = None
