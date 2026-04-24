@@ -3,7 +3,7 @@ Embed token generation and verification for chatbot launcher usage.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
@@ -14,10 +14,17 @@ from app.core.config import CHATBOT_EMBED_SECRET, CHATBOT_EMBED_TOKEN_TTL_MINUTE
 class ChatbotEmbedTokenService:
     """Service for issuing and validating chatbot embed tokens."""
 
-    def create_token(self, chatbot_id: str, origin: str, version: int) -> Dict[str, str]:
+    def create_token(
+        self,
+        chatbot_id: str,
+        origin: str,
+        version: int,
+        expires_in_minutes: Optional[int] = None,
+    ) -> Dict[str, str]:
         """Create short-lived embed token scoped to chatbot and origin."""
         now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(minutes=CHATBOT_EMBED_TOKEN_TTL_MINUTES)
+        ttl_minutes = int(expires_in_minutes or CHATBOT_EMBED_TOKEN_TTL_MINUTES)
+        expires_at = now + timedelta(minutes=ttl_minutes)
 
         payload = {
             "sub": chatbot_id,
