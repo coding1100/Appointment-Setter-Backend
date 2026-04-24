@@ -244,6 +244,10 @@ class ChatbotEmbedTokenRequest(BaseModel):
     """Request model for generating launcher embed tokens."""
 
     origin: str = Field(..., description="Origin requesting embed token")
+    never_expires: bool = Field(
+        False,
+        description="When true, generate a non-expiring embed token.",
+    )
     expires_in_minutes: Optional[int] = Field(
         None,
         ge=5,
@@ -258,12 +262,21 @@ class ChatbotEmbedTokenRequest(BaseModel):
             raise ValueError("Origin must start with http:// or https://")
         return normalized
 
+    @root_validator(skip_on_failure=True)
+    def validate_expiry_options(cls, values):
+        never_expires = bool(values.get("never_expires", False))
+        expires_in_minutes = values.get("expires_in_minutes")
+        if never_expires and expires_in_minutes is not None:
+            raise ValueError("expires_in_minutes cannot be provided when never_expires is true")
+        return values
+
 
 class ChatbotEmbedTokenResponse(BaseModel):
     """Response model for launcher token generation."""
 
     token: str
-    expires_at: str
+    expires_at: Optional[str] = None
+    never_expires: bool = False
     token_version: int
     loader_url: str
     launcher_script: str

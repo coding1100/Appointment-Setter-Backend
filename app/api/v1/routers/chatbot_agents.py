@@ -323,6 +323,7 @@ async def generate_chatbot_embed_token(
             chatbot,
             payload.origin,
             expires_in_minutes=payload.expires_in_minutes,
+            never_expires=payload.never_expires,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
