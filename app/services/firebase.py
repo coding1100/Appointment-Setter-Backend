@@ -1190,6 +1190,29 @@ class FirebaseService:
 
         return await self._run_in_executor(_find)
 
+    async def count_chatbot_chat_sessions_for_visitor(
+        self, chatbot_id: str, visitor_session_id: str, origin: str
+    ) -> int:
+        """Count all chat sessions for the same visitor on a specific chatbot/origin."""
+
+        def _count():
+            sessions_ref = self.db.collection("chatbot_chat_sessions")
+            docs = sessions_ref.where("visitor_session_id", "==", visitor_session_id).stream()
+            normalized_origin = origin.rstrip("/")
+            total = 0
+            for doc in docs:
+                data = doc.to_dict()
+                if not data:
+                    continue
+                if data.get("chatbot_id") != chatbot_id:
+                    continue
+                if str(data.get("origin", "")).rstrip("/") != normalized_origin:
+                    continue
+                total += 1
+            return total
+
+        return await self._run_in_executor(_count)
+
     async def list_chatbot_chat_sessions_by_owner(self, owner_user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """List live chat sessions for an owner."""
 

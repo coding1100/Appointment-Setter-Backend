@@ -110,6 +110,11 @@ class ChatbotLiveChatService:
             raise ValueError("Chatbot not found")
 
         normalized_origin = self._normalize_origin(request_origin)
+        prior_session_count = await self.repository.count_chat_sessions_for_visitor(
+            chatbot_id=chatbot["id"],
+            visitor_session_id=visitor_session_id,
+            origin=normalized_origin,
+        )
         existing = await self.repository.find_open_chat_session(
             chatbot_id=chatbot["id"],
             visitor_session_id=visitor_session_id,
@@ -136,6 +141,7 @@ class ChatbotLiveChatService:
                 "page_title": (page_title or '').strip(),
                 "visitor_session_id": visitor_session_id,
                 "visitor_label": self._build_visitor_label(visitor_session_id),
+                "is_returning_visitor": prior_session_count > 0,
                 "status": "open",
                 "control_mode": "bot",
                 "assigned_operator_id": None,
