@@ -200,7 +200,8 @@ class ChatbotAgentService:
         chatbot: Dict[str, Any],
         origin: str,
         expires_in_minutes: Optional[int] = None,
-    ) -> Dict[str, str]:
+        never_expires: bool = False,
+    ) -> Dict[str, Any]:
         self._ensure_runtime_fields(chatbot)
         normalized_origin = origin.rstrip("/")
         allowed_origins = [entry.rstrip("/") for entry in chatbot.get("allowed_origins", [])]
@@ -213,6 +214,7 @@ class ChatbotAgentService:
             origin=normalized_origin,
             version=token_version,
             expires_in_minutes=expires_in_minutes,
+            never_expires=never_expires,
         )
         loader_base = CHATBOT_LOADER_BASE_URL.strip()
         if not loader_base:

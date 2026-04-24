@@ -368,28 +368,66 @@ async def get_chatbot_embed_panel(
       --text: #0f172a;
     }}
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: Arial, sans-serif; background: var(--bg); color: var(--text); }}
+    body {{ margin: 0; font-family: "Inter", "Segoe UI", Arial, sans-serif; background: var(--bg); color: var(--text); }}
     .panel {{ display: flex; flex-direction: column; height: 100vh; background: var(--bg); }}
-    .header {{ padding: 16px 18px; border-bottom: 1px solid #e5e7eb; font-weight: 700; }}
-    .meta {{ padding: 0 18px 12px; font-size: 12px; color: #64748b; border-bottom: 1px solid #eef2f7; }}
-    .messages {{ flex: 1; overflow-y: auto; padding: 16px; background: linear-gradient(180deg, rgba(248,250,252,0.8), rgba(255,255,255,1)); }}
-    .message {{ max-width: 85%; padding: 10px 12px; border-radius: 14px; margin-bottom: 10px; white-space: pre-wrap; line-height: 1.45; font-size: 14px; }}
+    .header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid #e2e8f0;
+      background:
+        radial-gradient(circle at 85% -40%, rgba(37,99,235,0.16), transparent 54%),
+        linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    }}
+    .header-left {{ display: flex; align-items: center; gap: 10px; min-width: 0; }}
+    .header-icon {{
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #0f172a;
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      box-shadow: 0 8px 20px rgba(15,23,42,0.2);
+      flex-shrink: 0;
+    }}
+    .header-main {{ min-width: 0; }}
+    .header-title {{ margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.02em; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+    .header-subtitle {{ margin-top: 2px; font-size: 12px; color: #64748b; font-weight: 500; }}
+    .header-status {{ display: inline-flex; align-items: center; gap: 6px; border: 1px solid #dbeafe; background: #eff6ff; color: #1d4ed8; border-radius: 999px; padding: 6px 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }}
+    .header-status::before {{ content: ""; width: 7px; height: 7px; border-radius: 999px; background: #22c55e; box-shadow: 0 0 0 2px rgba(34,197,94,0.16); }}
+    .messages {{ flex: 1; overflow-y: auto; padding: 14px; background: linear-gradient(180deg, rgba(248,250,252,0.92), rgba(255,255,255,1)); }}
+    .message {{ max-width: 85%; padding: 11px 13px; border-radius: 16px; margin-bottom: 10px; white-space: pre-wrap; line-height: 1.45; font-size: 14px; }}
     .message.visitor {{ margin-left: auto; background: var(--primary); color: white; border-bottom-right-radius: 6px; }}
-    .message.bot, .message.human {{ margin-right: auto; background: #f1f5f9; color: #0f172a; border-bottom-left-radius: 6px; }}
+    .message.bot, .message.human {{ margin-right: auto; background: #f1f5f9; color: #0f172a; border: 1px solid #e2e8f0; border-bottom-left-radius: 6px; }}
     .message.system {{ margin-left: auto; margin-right: auto; background: #e2e8f0; color: #334155; font-size: 12px; text-align: center; }}
-    .status {{ display: none; padding: 8px 18px; font-size: 12px; color: #64748b; border-top: 1px solid #eef2f7; }}
+    .status {{ display: none; padding: 8px 14px; font-size: 12px; color: #64748b; border-top: 1px solid #eef2f7; }}
     .status.is-visible {{ display: block; }}
-    .composer-wrap {{ display: flex; gap: 10px; padding: 14px; border-top: 1px solid #e5e7eb; background: #fff; }}
-    .composer {{ flex: 1; min-height: 44px; max-height: 120px; resize: vertical; border: 1px solid #cbd5e1; border-radius: 12px; padding: 11px 12px; font: inherit; outline: none; }}
+    .composer-wrap {{ display: flex; gap: 10px; padding: 12px; border-top: 1px solid #e5e7eb; background: #fff; }}
+    .composer {{ flex: 1; min-height: 44px; max-height: 120px; resize: vertical; border: 1px solid #cbd5e1; border-radius: 14px; padding: 11px 12px; font: inherit; outline: none; }}
     .composer:focus {{ border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }}
-    .send-btn {{ border: 0; border-radius: 12px; background: var(--primary); color: white; font-weight: 600; padding: 0 18px; cursor: pointer; }}
+    .send-btn {{ border: 0; border-radius: 14px; background: var(--primary); color: white; font-weight: 600; padding: 0 18px; cursor: pointer; box-shadow: 0 8px 18px rgba(37,99,235,0.3); }}
     .send-btn:disabled, .composer:disabled {{ opacity: 0.6; cursor: not-allowed; }}
   </style>
 </head>
 <body>
   <div class="panel">
-    <div class="header" id="chatbot-title">Loading chatbot...</div>
-    <div class="meta" id="chatbot-meta">Preparing live chat...</div>
+    <div class="header">
+      <div class="header-left">
+        <div class="header-icon">CS</div>
+        <div class="header-main">
+          <h1 class="header-title" id="chatbot-title">Loading chatbot...</h1>
+          <div class="header-subtitle">Live support</div>
+        </div>
+      </div>
+      <div class="header-status">Online</div>
+    </div>
     <div class="messages" id="chatbot-messages"></div>
     <div class="status" id="chatbot-status">Initializing chatbot...</div>
     <div class="composer-wrap">
@@ -404,7 +442,6 @@ async def get_chatbot_embed_panel(
       const pageUrl = {safe_page_url!r};
       const pageTitle = {safe_page_title!r};
       const title = document.getElementById('chatbot-title');
-      const meta = document.getElementById('chatbot-meta');
       const messages = document.getElementById('chatbot-messages');
       const status = document.getElementById('chatbot-status');
       const input = document.getElementById('chatbot-input');
@@ -553,7 +590,6 @@ async def get_chatbot_embed_panel(
         document.documentElement.style.setProperty('--primary', configPayload.theme?.primary_color || '#2563eb');
         document.documentElement.style.setProperty('--bg', configPayload.theme?.background_color || '#ffffff');
         document.documentElement.style.setProperty('--text', configPayload.theme?.text_color || '#0f172a');
-        meta.textContent = embedOrigin || pageUrl || 'Live website chat';
 
         const visitorStorageKey = getVisitorKey(configPayload.chatbot_id);
         let visitorSessionId = window.localStorage.getItem(visitorStorageKey);

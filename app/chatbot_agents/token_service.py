@@ -20,11 +20,10 @@ class ChatbotEmbedTokenService:
         origin: str,
         version: int,
         expires_in_minutes: Optional[int] = None,
-    ) -> Dict[str, str]:
-        """Create short-lived embed token scoped to chatbot and origin."""
+        never_expires: bool = False,
+    ) -> Dict[str, Optional[str]]:
+        """Create embed token scoped to chatbot and origin."""
         now = datetime.now(timezone.utc)
-        ttl_minutes = int(expires_in_minutes or CHATBOT_EMBED_TOKEN_TTL_MINUTES)
-        expires_at = now + timedelta(minutes=ttl_minutes)
 
         payload = {
             "sub": chatbot_id,
@@ -32,11 +31,22 @@ class ChatbotEmbedTokenService:
             "origin": origin,
             "ver": int(version),
             "iat": int(now.timestamp()),
-            "exp": int(expires_at.timestamp()),
         }
+        expires_at: Optional[datetime] = None
+        if never_expires:
+            payload["nexp"] = True
+        else:
+            ttl_minutes = int(expires_in_minutes or CHATBOT_EMBED_TOKEN_TTL_MINUTES)
+            expires_at = now + timedelta(minutes=ttl_minutes)
+            payload["exp"] = int(expires_at.timestamp())
+
         token = jwt.encode(payload, CHATBOT_EMBED_SECRET, algorithm=JWT_ALGORITHM)
 
-        return {"token": token, "expires_at": expires_at.isoformat()}
+        return {
+            "token": token,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+            "never_expires": bool(never_expires),
+        }
 
     def create_session_token(self, session_id: str, chatbot_id: str, origin: str, visitor_session_id: str) -> Dict[str, str]:
         """Create short-lived session token for websocket subscriptions."""
@@ -73,6 +83,8 @@ class ChatbotEmbedTokenService:
             raise ValueError("Invalid embed token origin")
         if "ver" not in payload:
             raise ValueError("Invalid embed token version")
+        if "exp" not in payload and not payload.get("nexp"):
+            raise ValueError("Invalid embed token expiry")
 
         return payload
 
