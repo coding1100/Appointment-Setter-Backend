@@ -156,7 +156,7 @@ def get_security_service() -> SecurityService:
 
 
 async def get_current_user_from_token(
-    request: Optional[Request] = None, authorization: Optional[str] = Header(None)
+    request: Request, authorization: Optional[str] = Header(None)
 ) -> Dict[str, Any]:
     """Get current user from JWT token."""
     try:
