@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from app.api.v1.schemas.phone_number import PhoneNumberCreate, PhoneNumberUpdate
 from app.core.utils import add_timestamps
-from app.services.firebase import firebase_service
+from app.services.store import store
 from app.utils.phone_number import normalize_phone_number, normalize_phone_number_safe
 
 VOICE_AGENT_INBOUND_ROLE = "voice_agent_inbound"
@@ -80,7 +80,7 @@ class PhoneNumberService:
             ValueError: If validation fails
         """
         if not agent:
-            agent = await firebase_service.get_agent(agent_id)
+            agent = await store.get_agent(agent_id)
 
         if not agent:
             raise ValueError(f"Agent {agent_id} not found")
@@ -123,7 +123,7 @@ class PhoneNumberService:
         await self._validate_agent_for_tenant(phone_data.agent_id, tenant_id)
 
         # Verify twilio integration exists and belongs to tenant
-        twilio_integration = await firebase_service.get_twilio_integration(tenant_id)
+        twilio_integration = await store.get_twilio_integration(tenant_id)
         if not twilio_integration:
             raise ValueError(f"Twilio integration not found for this tenant")
 
@@ -142,12 +142,12 @@ class PhoneNumberService:
         }
         add_timestamps(phone_dict)
 
-        created = await firebase_service.create_phone_number(phone_dict)
+        created = await store.create_phone_number(phone_dict)
         return self._normalize_phone_role_fields(created)
 
     async def get_phone_number(self, phone_id: str) -> Optional[Dict[str, Any]]:
         """Get phone number by ID."""
-        phone = await firebase_service.get_phone_number(phone_id)
+        phone = await store.get_phone_number(phone_id)
         return self._normalize_phone_role_fields(phone) if phone else None
 
     async def get_phone_by_number(self, phone_number: str) -> Optional[Dict[str, Any]]:
@@ -158,29 +158,29 @@ class PhoneNumberService:
         # Try normalized format first (most common)
         normalized = normalize_phone_number_safe(phone_number)
         if normalized:
-            phone_record = await firebase_service.get_phone_by_number(normalized)
+            phone_record = await store.get_phone_by_number(normalized)
             if phone_record:
                 return self._normalize_phone_role_fields(phone_record)
 
         # Fallback to original format (for backwards compatibility)
-        phone_record = await firebase_service.get_phone_by_number(phone_number)
+        phone_record = await store.get_phone_by_number(phone_number)
         return self._normalize_phone_role_fields(phone_record) if phone_record else None
 
     async def get_phone_by_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """Get phone number assigned to an agent."""
-        phone = await firebase_service.get_phone_by_agent(agent_id)
+        phone = await store.get_phone_by_agent(agent_id)
         return self._normalize_phone_role_fields(phone) if phone else None
 
     async def list_phones_by_tenant(self, tenant_id: str) -> List[Dict[str, Any]]:
         """List all phone numbers for a tenant."""
-        phones = await firebase_service.list_phones_by_tenant(tenant_id)
+        phones = await store.list_phones_by_tenant(tenant_id)
 
         # Enrich with agent names
         normalized_phones: List[Dict[str, Any]] = []
         for phone in phones:
             phone = self._normalize_phone_role_fields(phone)
             if phone.get("agent_id"):
-                agent = await firebase_service.get_agent(phone["agent_id"])
+                agent = await store.get_agent(phone["agent_id"])
                 if agent:
                     phone["agent_name"] = agent.get("name")
             normalized_phones.append(phone)
@@ -227,12 +227,12 @@ class PhoneNumberService:
 
         add_updated_timestamp(update_data)
 
-        updated = await firebase_service.update_phone_number(phone_id, update_data)
+        updated = await store.update_phone_number(phone_id, update_data)
         return self._normalize_phone_role_fields(updated) if updated else None
 
     async def delete_phone_number(self, phone_id: str) -> bool:
         """Delete phone number assignment."""
-        return await firebase_service.delete_phone_number(phone_id)
+        return await store.delete_phone_number(phone_id)
 
     async def assign_phone_to_agent(
         self, tenant_id: str, agent_id: str, phone_number: str, twilio_integration_id: str
@@ -269,7 +269,7 @@ class PhoneNumberService:
         """Remove phone number assignment from an agent."""
         phone = await self.get_phone_by_agent(agent_id)
         if phone:
-            updated = await firebase_service.update_phone_number(
+            updated = await store.update_phone_number(
                 phone["id"],
                 {
                     "agent_id": "",
@@ -299,7 +299,7 @@ class PhoneNumberService:
         if phone.get("usage_role") == COLD_CALLER_OUTBOUND_ROLE and phone.get("role_status") == ROLE_STATUS_ACTIVE:
             return phone
 
-        updated = await firebase_service.update_phone_number(
+        updated = await store.update_phone_number(
             phone["id"],
             {
                 "status": "active",
@@ -324,16 +324,7 @@ class PhoneNumberService:
         if phone.get("usage_role") != COLD_CALLER_OUTBOUND_ROLE:
             raise ValueError(f"Phone number {normalized_phone} is not bound to Cold Caller outbound")
 
-        running_campaign = await firebase_service.get_running_cold_campaign_by_outbound_phone_id(
-            tenant_id=tenant_id, outbound_phone_number_id=phone["id"]
-        )
-        if running_campaign:
-            raise ValueError(
-                f"Phone number {normalized_phone} cannot be unbound while campaign "
-                f"'{running_campaign.get('name', running_campaign.get('id'))}' is running"
-            )
-
-        updated = await firebase_service.update_phone_number(
+        updated = await store.update_phone_number(
             phone["id"],
             {
                 "status": "inactive",
@@ -350,7 +341,7 @@ class PhoneNumberService:
     async def get_telephony_status(self, tenant_id: str) -> Dict[str, Any]:
         """Return tenant telephony status and conflicts."""
         numbers = await self.list_phones_by_tenant(tenant_id)
-        integration = await firebase_service.get_twilio_integration(tenant_id)
+        integration = await store.get_twilio_integration(tenant_id)
 
         voice_count = len(
             [

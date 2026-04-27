@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.api.v1.schemas.agent import AgentCreate, AgentUpdate, VoiceOption
-from app.services.firebase import firebase_service
+from app.services.store import store
 
 
 class AgentService:
@@ -42,17 +42,17 @@ class AgentService:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        created = await firebase_service.create_agent(agent_dict)
+        created = await store.create_agent(agent_dict)
         return self._ensure_voice_agent_type(created)
 
     async def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """Get agent by ID."""
-        agent = await firebase_service.get_agent(agent_id)
+        agent = await store.get_agent(agent_id)
         return self._ensure_voice_agent_type(agent)
 
     async def list_agents_by_tenant(self, tenant_id: str) -> List[Dict[str, Any]]:
         """List all agents for a tenant."""
-        agents = await firebase_service.list_agents_by_tenant(tenant_id)
+        agents = await store.list_agents_by_tenant(tenant_id)
         return [self._ensure_voice_agent_type(agent) for agent in agents]
 
     async def update_agent(self, agent_id: str, agent_data: AgentUpdate) -> Optional[Dict[str, Any]]:
@@ -76,23 +76,23 @@ class AgentService:
         if agent_data.status is not None:
             update_data["status"] = agent_data.status
 
-        updated = await firebase_service.update_agent(agent_id, update_data)
+        updated = await store.update_agent(agent_id, update_data)
         return self._ensure_voice_agent_type(updated)
 
     async def delete_agent(self, agent_id: str) -> bool:
         """Delete agent."""
-        return await firebase_service.delete_agent(agent_id)
+        return await store.delete_agent(agent_id)
 
     async def activate_agent(self, agent_id: str) -> bool:
         """Activate an agent."""
         update_data = {"status": "active", "agent_type": "voice", "updated_at": datetime.now(timezone.utc).isoformat()}
-        result = await firebase_service.update_agent(agent_id, update_data)
+        result = await store.update_agent(agent_id, update_data)
         return result is not None
 
     async def deactivate_agent(self, agent_id: str) -> bool:
         """Deactivate an agent."""
         update_data = {"status": "inactive", "agent_type": "voice", "updated_at": datetime.now(timezone.utc).isoformat()}
-        result = await firebase_service.update_agent(agent_id, update_data)
+        result = await store.update_agent(agent_id, update_data)
         return result is not None
 
     def get_available_voices(self) -> List[VoiceOption]:

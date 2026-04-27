@@ -9,7 +9,7 @@ from typing import Dict
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.v1.schemas.contact import ContactCreate, ContactResponse
-from app.services.firebase import firebase_service
+from app.services.store import store
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -35,7 +35,7 @@ async def create_contact(contact_data: ContactCreate):
             "created_at": created_at.isoformat(),
         }
 
-        await firebase_service.create_contact(contact_record)
+        await store.create_contact(contact_record)
 
         return ContactResponse(
             id=contact_id,

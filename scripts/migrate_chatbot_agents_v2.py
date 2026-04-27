@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.services.firebase import firebase_service
+from app.services.store import store
 
 
 def build_defaults(chatbot: Dict[str, Any]) -> Dict[str, Any]:
@@ -53,7 +53,7 @@ def build_defaults(chatbot: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def run() -> None:
-    chatbots = await firebase_service.list_chatbot_agents(limit=10000, offset=0)
+    chatbots = await store.list_chatbot_agents(limit=10000, offset=0)
     updated = 0
     skipped = 0
 
@@ -75,7 +75,7 @@ async def run() -> None:
             continue
 
         defaults = build_defaults(chatbot)
-        await firebase_service.update_chatbot_agent(chatbot_id, defaults)
+        await store.update_chatbot_agent(chatbot_id, defaults)
         updated += 1
 
     print(f"Completed chatbot v2 migration. Updated: {updated}, Skipped: {skipped}")

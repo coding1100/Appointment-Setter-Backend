@@ -56,7 +56,7 @@ from app.core.config import (
 from app.core.encryption import encryption_service
 from app.core.utils import get_current_timestamp
 from app.services.dialog_manager import dialog_manager
-from app.services.firebase import firebase_service
+from app.services.store import store
 from app.utils.phone_number import normalize_phone_number_safe
 from app.services.tts_provider import build_tts_with_fallback
 
@@ -342,7 +342,7 @@ class UnifiedVoiceAgentService:
                 logger.info(f"Using agent_id from metadata: {agent_id}")
 
                 try:
-                    agent_data = await firebase_service.get_agent(agent_id)
+                    agent_data = await store.get_agent(agent_id)
                     if not agent_data:
                         raise ValueError(f"Voice agent '{agent_id}' not found")
 
@@ -558,9 +558,9 @@ class UnifiedVoiceAgentService:
             logger.info(f"[TWILIO WEBHOOK] Normalized phone number: {to_number} -> {normalized_to_number}")
 
             # Step 2: Lookup phone number assignment
-            phone_record = await firebase_service.get_phone_by_number(normalized_to_number)
+            phone_record = await store.get_phone_by_number(normalized_to_number)
             if not phone_record:
-                phone_record = await firebase_service.get_phone_by_number(to_number)
+                phone_record = await store.get_phone_by_number(to_number)
 
             if not phone_record:
                 logger.error(f"[TWILIO WEBHOOK] Phone number {normalized_to_number} not found in database")
@@ -581,7 +581,7 @@ class UnifiedVoiceAgentService:
                 return self._error_response("Configuration error. Please contact support.")
 
             # Step 4: Get agent configuration
-            agent = await firebase_service.get_agent(agent_id)
+            agent = await store.get_agent(agent_id)
             if not agent:
                 logger.error(f"[TWILIO WEBHOOK] Agent {agent_id} not found")
                 return self._error_response("Agent configuration not found. Please contact support.")
@@ -972,12 +972,12 @@ class UnifiedVoiceAgentService:
         return sip_uri
 
     async def _get_tenant_config(self, tenant_id: str) -> Dict[str, Any]:
-        """Get tenant configuration from Firebase."""
+        """Get tenant configuration from PostgreSQL."""
         try:
-            config = await firebase_service.get_agent_settings(tenant_id)
+            config = await store.get_agent_settings(tenant_id)
             return config or {}
         except Exception as e:
-            logger.warning(f"Failed to get tenant config from Firebase: {e}")
+            logger.warning(f"Failed to get tenant config from PostgreSQL: {e}")
             return {"business_name": "our company", "service_type": "Home Services"}
 
     def _get_system_prompt(
@@ -1089,7 +1089,7 @@ Business: {business_name}"""
     async def _initiate_twilio_call(self, tenant_id: str, phone_number: str, room_name: str) -> str:
         """Initiate an outbound Twilio phone call."""
         try:
-            twilio_integration = await firebase_service.get_twilio_integration(tenant_id)
+            twilio_integration = await store.get_twilio_integration(tenant_id)
             if twilio_integration and "auth_token" in twilio_integration:
                 try:
                     twilio_integration["auth_token"] = encryption_service.decrypt(twilio_integration["auth_token"])
@@ -1123,7 +1123,7 @@ Business: {business_name}"""
     async def _hangup_twilio_call(self, tenant_id: str, call_sid: str):
         """Hang up a Twilio call."""
         try:
-            twilio_integration = await firebase_service.get_twilio_integration(tenant_id)
+            twilio_integration = await store.get_twilio_integration(tenant_id)
             if twilio_integration and "auth_token" in twilio_integration:
                 try:
                     twilio_integration["auth_token"] = encryption_service.decrypt(twilio_integration["auth_token"])
