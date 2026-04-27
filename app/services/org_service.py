@@ -15,7 +15,7 @@ from app.core.config import (
     PLATFORM_BRAND_PRIMARY_COLOR,
     PLATFORM_BRAND_SECONDARY_COLOR,
 )
-from app.services.firebase import firebase_service
+from app.services.postgres_store import postgres_store
 
 PLATFORM_ORG_ID = "mindrind-platform"
 PLATFORM_ROLES = {"platform_owner", "platform_staff", "admin"}
@@ -44,7 +44,7 @@ class OrgService:
         return (priority, str(org.get("name", "")).lower(), str(org.get("id", "")))
 
     async def ensure_platform_org_exists(self) -> Dict[str, Any]:
-        org = await firebase_service.get_org(PLATFORM_ORG_ID)
+        org = await postgres_store.get_org(PLATFORM_ORG_ID)
         if org:
             return org
         payload = {
@@ -61,7 +61,7 @@ class OrgService:
                 "accent_color": PLATFORM_BRAND_ACCENT_COLOR,
             },
         }
-        await firebase_service.create_org(payload)
+        await postgres_store.create_org(payload)
         return payload
 
     async def _derive_legacy_memberships(self, user: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -84,7 +84,7 @@ class OrgService:
 
         tenant_id = user.get("tenant_id")
         if tenant_id:
-            org = await firebase_service.get_org_by_legacy_tenant_id(str(tenant_id), prefer_customer=True)
+            org = await postgres_store.get_org_by_legacy_tenant_id(str(tenant_id), prefer_customer=True)
             if org:
                 mapped_role = "customer_staff"
                 if role == "tenant_admin":
@@ -102,7 +102,7 @@ class OrgService:
 
     async def get_user_memberships(self, user: Dict[str, Any]) -> List[Dict[str, Any]]:
         user_id = str(user.get("id", ""))
-        memberships = await firebase_service.list_org_memberships_for_user(user_id)
+        memberships = await postgres_store.list_org_memberships_for_user(user_id)
         active = [m for m in memberships if self._normalize_role(m.get("status")) != "inactive"]
         if active:
             return active
@@ -124,7 +124,7 @@ class OrgService:
             org_ids.add(org_id)
 
         if has_platform_scope:
-            return await firebase_service.list_orgs(limit=10000, offset=0)
+            return await postgres_store.list_orgs(limit=10000, offset=0)
 
         for membership in memberships:
             org_id = str(membership.get("org_id", "")).strip()
@@ -132,12 +132,12 @@ class OrgService:
                 continue
             role = self._normalize_role(membership.get("role"))
             if role in PARTNER_ROLES:
-                descendants = await firebase_service.list_descendant_orgs(org_id)
+                descendants = await postgres_store.list_descendant_orgs(org_id)
                 org_ids.update([org["id"] for org in descendants])
 
         accessible: List[Dict[str, Any]] = []
         for org_id in org_ids:
-            org = await firebase_service.get_org(org_id)
+            org = await postgres_store.get_org(org_id)
             if org:
                 accessible.append(org)
         return sorted(accessible, key=self._org_sort_key)
@@ -237,7 +237,7 @@ class OrgService:
         if org_type == "customer":
             parent_org_id = active_org.get("parent_org_id")
             if isinstance(parent_org_id, str) and parent_org_id:
-                return await firebase_service.get_org(parent_org_id)
+                return await postgres_store.get_org(parent_org_id)
         return None
 
     async def create_membership(
@@ -247,7 +247,7 @@ class OrgService:
         role: str,
         status: str = "active",
     ) -> Dict[str, Any]:
-        existing = await firebase_service.get_org_membership(org_id=org_id, user_id=user_id)
+        existing = await postgres_store.get_org_membership(org_id=org_id, user_id=user_id)
         payload = {
             "id": existing["id"] if existing else str(uuid.uuid4()),
             "org_id": org_id,
@@ -255,7 +255,7 @@ class OrgService:
             "role": self._normalize_role(role),
             "status": status,
         }
-        await firebase_service.upsert_org_membership(payload)
+        await postgres_store.upsert_org_membership(payload)
         return payload
 
 

@@ -1,5 +1,5 @@
 """
-Provisioning service for tenant activation pipeline using Firebase/Firestore.
+Provisioning service for tenant activation pipeline using PostgreSQL.
 Handles LiveKit SIP Ingress creation and Twilio integration.
 """
 
@@ -21,14 +21,14 @@ from app.core.config import (
     TWILIO_WEBHOOK_BASE_URL,
 )
 from app.core.encryption import encryption_service
-from app.services.firebase import firebase_service
+from app.services.store import store
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
 class ProvisioningService:
-    """Service class for tenant provisioning operations using Firebase."""
+    """Service class for tenant provisioning operations using PostgreSQL."""
 
     def __init__(self):
         """Initialize provisioning service."""
@@ -36,7 +36,7 @@ class ProvisioningService:
 
     async def _get_decrypted_twilio_integration(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Get Twilio integration with decrypted auth_token."""
-        integration = await firebase_service.get_twilio_integration(tenant_id)
+        integration = await store.get_twilio_integration(tenant_id)
         if integration and "auth_token" in integration:
             try:
                 integration["auth_token"] = encryption_service.decrypt(integration["auth_token"])
@@ -74,7 +74,7 @@ class ProvisioningService:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Store provisioning job in Firebase
+        # Store provisioning job in PostgreSQL
         job = await self._create_provisioning_job(job_data)
 
         # Start provisioning pipeline asynchronously
@@ -97,23 +97,23 @@ class ProvisioningService:
 
     async def _create_provisioning_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a provisioning job."""
-        result = await firebase_service.create_provisioning_job(job_data)
+        result = await store.create_provisioning_job(job_data)
         return result
 
     async def _get_provisioning_job_by_key(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
         """Get provisioning job by idempotency key."""
-        # This would query the provisioning_jobs collection in Firebase
+        # This would query the provisioning_jobs collection in PostgreSQL
         # For now, we'll return None (would need to implement query by idempotency_key)
         return None
 
     async def _get_provisioning_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get provisioning job by ID."""
-        return await firebase_service.get_provisioning_job(job_id)
+        return await store.get_provisioning_job(job_id)
 
     async def _update_provisioning_job(self, job_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
         """Update provisioning job."""
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        return await firebase_service.update_provisioning_job(job_id, update_data)
+        return await store.update_provisioning_job(job_id, update_data)
 
     async def _run_provisioning_pipeline(self, job_id: str):
         """Run the provisioning pipeline."""
@@ -296,8 +296,8 @@ class ProvisioningService:
 
             logger.info(f"Created Twilio SIP Domain for tenant {tenant_id}: {sip_domain.sid}")
 
-            # Store SIP domain info in Firebase
-            await firebase_service.update_twilio_integration(
+            # Store SIP domain info in PostgreSQL
+            await store.update_twilio_integration(
                 tenant_id, {"sip_domain_sid": sip_domain.sid, "sip_domain_name": domain_name}
             )
 
@@ -392,8 +392,8 @@ class ProvisioningService:
             # Set up SIP trunk to route calls to LiveKit
             # Format: sip:room_name@livekit-domain
 
-            # Store routing configuration in Firebase
-            await firebase_service.update_twilio_integration(
+            # Store routing configuration in PostgreSQL
+            await store.update_twilio_integration(
                 tenant_id,
                 {
                     "routing_configured": True,
@@ -478,7 +478,7 @@ class ProvisioningService:
 
     async def get_provisioning_status(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Get provisioning status for a tenant."""
-        # This would query the provisioning_jobs collection in Firebase
+        # This would query the provisioning_jobs collection in PostgreSQL
         # For now, we'll return None (would need to implement query by tenant_id)
         return None
 

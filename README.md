@@ -42,7 +42,7 @@ A production-ready SaaS platform for AI-powered phone appointment scheduling usi
 
 ### Technology Stack
 - **Backend**: FastAPI (Python 3.11+)
-- **Database**: Firebase Firestore
+- **Database**: PostgreSQL
 - **Cache/Queue**: Redis
 - **Voice AI**: LiveKit Agents Framework
 - **Speech-to-Text**: Deepgram
@@ -74,8 +74,8 @@ A production-ready SaaS platform for AI-powered phone appointment scheduling usi
     ┌──────────────────┼──────────────────┐
     │                  │                  │
 ┌───▼────┐    ┌────────▼────────┐   ┌────▼──────┐
-│Firebase│    │  LiveKit Agent  │   │  Twilio   │
-│Firestore│    │    Worker       │   │  SIP      │
+│PostgreSQL│    │  LiveKit Agent  │   │  Twilio   │
+│PostgreSQL│    │    Worker       │   │  SIP      │
 └────────┘    │  - Gemini 2.0   │   └───────────┘
               │  - Deepgram STT │
               │  - ElevenLabs   │
@@ -87,9 +87,9 @@ A production-ready SaaS platform for AI-powered phone appointment scheduling usi
 ## 📦 Prerequisites
 
 ### Required Services
-1. **Firebase** - Firestore database
-   - Create project at [Firebase Console](https://console.firebase.google.com/)
-   - Enable Firestore database
+1. **PostgreSQL** - PostgreSQL database
+   - Provision a PostgreSQL database for backend persistence
+   - Enable PostgreSQL database
    - Generate service account credentials
 
 2. **Redis** - Session and cache management
@@ -166,10 +166,8 @@ LOG_LEVEL=INFO
 API_HOST=0.0.0.0
 API_PORT=8000
 
-# Firebase Configuration
-FIREBASE_PROJECT_ID=your-firebase-project-id
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-FIREBASE_CLIENT_EMAIL=your-service-account@project.iam.gserviceaccount.com
+# PostgreSQL Configuration
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/appointment_setter
 
 # Redis
 REDIS_URL=redis://localhost:6379/0
@@ -212,9 +210,9 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
 JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
 ```
 
-### Firebase Service Account Setup
+### PostgreSQL Service Account Setup
 
-1. Go to Firebase Console → Project Settings → Service Accounts
+1. Go to PostgreSQL Console → Project Settings → Service Accounts
 2. Generate new private key (downloads JSON file)
 3. Extract values for `.env`:
    ```json
@@ -423,7 +421,7 @@ spec:
 - [ ] Use strong `SECRET_KEY` (min 32 characters)
 - [ ] Configure CORS for your domain
 - [ ] Set up SSL/TLS certificates
-- [ ] Enable Firebase security rules
+- [ ] Enable PostgreSQL security rules
 - [ ] Configure Redis authentication
 - [ ] Set up monitoring and logging
 - [ ] Configure backup strategy
@@ -446,14 +444,14 @@ cat .env
 echo $SECRET_KEY
 ```
 
-#### 2. Firebase Connection Issues
-**Error**: Firebase initialization failed
+#### 2. PostgreSQL Connection Issues
+**Error**: PostgreSQL initialization failed
 ```bash
-# Verify Firebase credentials
-python -c "import firebase_admin; print('Firebase imports OK')"
+# Verify PostgreSQL credentials
+python -c "from app.services.store import store; print('Store import OK')"
 
-# Check firestore connection
-# Run: python -c "from app.services.firebase import firebase_service; print('Firebase connected')"
+# Check database connectivity
+# Run: alembic current
 ```
 
 #### 3. Redis Connection Failed
@@ -531,7 +529,7 @@ APPOINTMENT-SETTER/
 │   ├── services/           # Core services
 │   │   ├── dialog_manager.py
 │   │   ├── email.py
-│   │   ├── firebase.py
+│   │   ├── store.py
 │   │   ├── provisioning.py
 │   │   └── unified_voice_agent.py
 │   ├── tests/              # Test suite
@@ -593,7 +591,7 @@ Please report security vulnerabilities privately.
 - ✅ Environment variable validation
 - ✅ Secure password hashing (bcrypt)
 - ✅ CORS protection
-- ✅ SQL injection prevention (using Firestore)
+- ✅ SQL injection prevention (using PostgreSQL)
 
 ---
 
@@ -632,7 +630,7 @@ Please report security vulnerabilities privately.
 **EXCELLENT NEWS:** NO MOCK DATA FOUND IN PRODUCTION CODE!
 
 All services use real API integrations:
-- ✅ **Firebase/Firestore** - Real database operations
+- ✅ **PostgreSQL** - Real database operations
 - ✅ **Twilio** - Real phone/SIP integration
 - ✅ **LiveKit** - Real voice agent infrastructure
 - ✅ **Email Service** - Real SMTP integration
@@ -645,9 +643,9 @@ All services use real API integrations:
 ##### ⚠️ **Critical Performance Issues Identified**
 
 1. **🔴 CRITICAL: Blocking I/O in Async Functions**
-   - **Issue**: Firebase/Firestore SDK uses synchronous operations in `async def` functions
+   - **Issue**: PostgreSQL SDK uses synchronous operations in `async def` functions
    - **Impact**: Blocks event loop, severely limits concurrency
-   - **Affected Files**: `app/services/firebase.py` (all 40+ methods)
+   - **Affected Files**: `app/services/store.py` (all 40+ methods)
    - **Solution**: Wrap blocking calls with `asyncio.to_thread()` or use async-compatible library
    - **Performance Gain**: 10-50x throughput improvement under load
 
@@ -669,7 +667,7 @@ All services use real API integrations:
    - **Issue**: Loading all appointments to check conflicts
    - **Impact**: Slow slot generation for tenants with many appointments
    - **Affected Files**: `app/api/v1/services/scheduling.py` line 76
-   - **Solution**: Add date range filter to Firestore query
+   - **Solution**: Add date range filter to PostgreSQL query
    - **Performance Gain**: 10-100x faster for busy tenants
 
 5. **🟡 MEDIUM: Missing Caching**
@@ -679,16 +677,16 @@ All services use real API integrations:
    - **Performance Gain**: 50-90% reduction in database load
 
 6. **🟡 MEDIUM: Sequential API Calls**
-   - **Issue**: Multiple Firebase calls not batched
+   - **Issue**: Multiple PostgreSQL calls not batched
    - **Impact**: Increased latency
-   - **Solution**: Use Firestore batch operations or `asyncio.gather()`
+   - **Solution**: Use PostgreSQL batch operations or `asyncio.gather()`
    - **Performance Gain**: 2-3x faster for multi-document operations
 
 ##### 📊 Performance Impact Summary
 
 | Issue | Severity | Current Performance | Optimized Performance | Improvement |
 |-------|----------|---------------------|----------------------|-------------|
-| Blocking Firebase I/O | 🔴 Critical | 10-50 req/sec | 500-2000 req/sec | **10-50x** |
+| Blocking PostgreSQL I/O | 🔴 Critical | 10-50 req/sec | 500-2000 req/sec | **10-50x** |
 | Blocking Twilio API | 🔴 Critical | 2-5 calls/sec | 20-50 calls/sec | **5-10x** |
 | Sync Redis Client | 🔴 Critical | 50-100 ops/sec | 500-1000 ops/sec | **5-10x** |
 | N+1 Queries | 🟡 High | 5-10 sec/query | 50-500 ms/query | **10-100x** |
@@ -697,7 +695,7 @@ All services use real API integrations:
 ##### 🎯 Recommended Action Plan
 
 **Phase 1: Critical Fixes (Immediate)**
-1. Wrap all Firebase/Firestore calls with `asyncio.to_thread()`
+1. Wrap all PostgreSQL calls with `asyncio.to_thread()`
 2. Replace sync Redis with `redis.asyncio`
 3. Add date range filter to appointment queries
 
@@ -707,7 +705,7 @@ All services use real API integrations:
 6. Add connection pooling for external APIs
 
 **Phase 3: Medium Priority (Week 2-3)**
-7. Batch Firebase operations where possible
+7. Batch PostgreSQL operations where possible
 8. Implement query result caching
 9. Add database indexes for common queries
 

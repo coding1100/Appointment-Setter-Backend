@@ -69,11 +69,11 @@ class LiveKitError(ExternalServiceError):
         super().__init__(service="LiveKit", message=message, details=details)
 
 
-class FirebaseError(ExternalServiceError):
-    """Exception raised for Firebase/Firestore errors."""
+class PostgreSQLError(ExternalServiceError):
+    """Exception raised for PostgreSQL errors."""
 
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(service="Firebase", message=message, details=details)
+        super().__init__(service="PostgreSQL", message=message, details=details)
 
 
 class AuthenticationError(AppException):

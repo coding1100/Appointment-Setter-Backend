@@ -10,13 +10,15 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# Firebase settings (Minimal Required Fields)
-FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "")
-FIREBASE_PRIVATE_KEY = os.environ.get("FIREBASE_PRIVATE_KEY", "")
-FIREBASE_CLIENT_EMAIL = os.environ.get("FIREBASE_CLIENT_EMAIL", "")
-
 # Redis settings
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+# PostgreSQL settings
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/appointment_setter")
+DATABASE_POOL_SIZE = int(os.environ.get("DATABASE_POOL_SIZE", "10"))
+DATABASE_POOL_MAX_OVERFLOW = int(os.environ.get("DATABASE_POOL_MAX_OVERFLOW", "20"))
+DATABASE_POOL_TIMEOUT_SECONDS = int(os.environ.get("DATABASE_POOL_TIMEOUT_SECONDS", "30"))
+DATABASE_CONNECT_TIMEOUT_SECONDS = int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SECONDS", "10"))
 
 # LiveKit settings
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")

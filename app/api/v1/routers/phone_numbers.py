@@ -174,9 +174,9 @@ async def assign_phone_to_agent(
     try:
         # Get twilio integration for this tenant
         from app.api.v1.services.sip_configuration import sip_configuration_service
-        from app.services.firebase import firebase_service
+        from app.services.store import store
 
-        twilio_integration = await firebase_service.get_twilio_integration(tenant_id)
+        twilio_integration = await store.get_twilio_integration(tenant_id)
 
         if not twilio_integration:
             raise HTTPException(
@@ -207,7 +207,7 @@ async def assign_phone_to_agent(
                 "sip_configured": True,
                 "sip_configured_at": datetime.now(timezone.utc).isoformat(),
             }
-            await firebase_service.update_phone_number(phone["id"], update_data)
+            await store.update_phone_number(phone["id"], update_data)
 
             logger.info(
                 f"Successfully assigned phone {assignment.phone_number} to agent {assignment.agent_id} with SIP configuration"

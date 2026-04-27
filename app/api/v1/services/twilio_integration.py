@@ -15,7 +15,7 @@ from twilio.rest import Client
 from app.api.v1.schemas.voice_agent import TwilioCredentialTest, TwilioCredentialTestResponse, TwilioIntegrationConfig
 from app.core import config as app_config
 from app.core.encryption import encryption_service
-from app.services.firebase import firebase_service
+from app.services.store import store
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ class TwilioIntegrationService:
 
     async def _list_active_role_bindings(self, tenant_id: str) -> List[Dict[str, Any]]:
         """List active telephony role bindings for the tenant."""
-        phones = await firebase_service.list_phones_by_tenant(tenant_id)
+        phones = await store.list_phones_by_tenant(tenant_id)
         active_bindings: List[Dict[str, Any]] = []
         for phone in phones:
             usage_role = phone.get("usage_role") or "voice_agent_inbound"
@@ -220,7 +220,7 @@ class TwilioIntegrationService:
             effective_webhook = config.webhook_url or (f"{base}/api/v1/voice-agent/twilio/webhook" if base else None)
             effective_status = config.status_callback_url or (f"{base}/api/v1/voice-agent/twilio/status" if base else None)
 
-            # Store integration in Firebase with encrypted auth_token
+            # Store integration in PostgreSQL with encrypted auth_token
             integration_data = {
                 "id": str(uuid.uuid4()),
                 "tenant_id": tenant_id,
@@ -236,8 +236,8 @@ class TwilioIntegrationService:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            # Store in Firebase
-            result = await firebase_service.create_twilio_integration(integration_data)
+            # Store in PostgreSQL
+            result = await store.create_twilio_integration(integration_data)
 
             # Invalidate cache on create
             if result:
@@ -280,7 +280,7 @@ class TwilioIntegrationService:
     async def update_integration(self, tenant_id: str, config: TwilioIntegrationConfig) -> Dict[str, Any]:
         """Update Twilio integration for a tenant."""
         try:
-            current_integration = await firebase_service.get_twilio_integration(tenant_id)
+            current_integration = await store.get_twilio_integration(tenant_id)
             if current_integration and current_integration.get("account_sid") != config.account_sid:
                 active_bindings = await self._list_active_role_bindings(tenant_id)
                 if active_bindings:
@@ -327,8 +327,8 @@ class TwilioIntegrationService:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            # Update in Firebase
-            result = await firebase_service.update_twilio_integration(tenant_id, update_data)
+            # Update in PostgreSQL
+            result = await store.update_twilio_integration(tenant_id, update_data)
 
             # Invalidate cache on update
             if result:
@@ -361,13 +361,13 @@ class TwilioIntegrationService:
         if cached_integration:
             integration = cached_integration
         else:
-            # Cache miss: fetch from Firebase
-            integration = await firebase_service.get_twilio_integration(tenant_id)
+            # Cache miss: fetch from PostgreSQL
+            integration = await store.get_twilio_integration(tenant_id)
             if integration:
                 # Store in cache (with encrypted auth_token)
                 await set_cached_twilio_integration(tenant_id, integration)
 
-        # Decrypt auth_token before returning (whether from cache or Firebase)
+        # Decrypt auth_token before returning (whether from cache or PostgreSQL)
         if integration and "auth_token" in integration:
             # Decrypt auth_token before returning
             try:
@@ -397,8 +397,8 @@ class TwilioIntegrationService:
             if integration.get("phone_number"):
                 await self._remove_webhook(integration["account_sid"], integration["auth_token"], integration["phone_number"])
 
-            # Delete from Firebase
-            result = await firebase_service.delete_twilio_integration(tenant_id)
+            # Delete from PostgreSQL
+            result = await store.delete_twilio_integration(tenant_id)
 
             # Invalidate cache on delete
             if result is not None:
@@ -519,7 +519,7 @@ class TwilioIntegrationService:
 
         # Fetch numbers already tracked for this tenant
         try:
-            existing = await firebase_service.list_phones_by_tenant(tenant_id)
+            existing = await store.list_phones_by_tenant(tenant_id)
         except Exception:
             existing = []
 
@@ -641,7 +641,7 @@ class TwilioIntegrationService:
             await _run_twilio_sync(_purchase_phone_number_sync)
 
             # Handle integration linking
-            integration = await firebase_service.get_twilio_integration(tenant_id)
+            integration = await store.get_twilio_integration(tenant_id)
             integration_id = None
 
             if integration:
@@ -674,7 +674,7 @@ class TwilioIntegrationService:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            created = await firebase_service.create_phone_number(phone_dict)
+            created = await store.create_phone_number(phone_dict)
             logger.info(f"Successfully purchased and stored phone number {phone_number} for tenant {tenant_id}")
             return created
 

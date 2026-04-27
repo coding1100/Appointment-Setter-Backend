@@ -4,3 +4,7 @@ nginx
 .env
 env-prod
 .idea*
+firestore-export-*
+*.jsonl
+*.dump
+*.sql

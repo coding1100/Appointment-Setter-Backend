@@ -1,5 +1,5 @@
 """
-Dialog Manager with FSM (Finite State Machine) and LLM policy for Home Services using Firebase/Firestore.
+Dialog Manager with FSM (Finite State Machine) and LLM policy for Home Services using PostgreSQL.
 Handles conversation flow, slot filling, and confirmation.
 """
 
@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from app.core.utils import get_current_timestamp
-from app.services.firebase import firebase_service
+from app.services.store import store
 
 
 class DialogState(str, Enum):
@@ -58,7 +58,7 @@ class DialogContext:
 
 
 class DialogManager:
-    """Dialog Manager for Home Services appointment booking using Firebase."""
+    """Dialog Manager for Home Services appointment booking using PostgreSQL."""
 
     def __init__(self):
         """Initialize dialog manager."""
@@ -211,7 +211,7 @@ class DialogManager:
     async def _handle_booking(self, context: DialogContext, user_input: str) -> Dict[str, Any]:
         """Handle booking state."""
         try:
-            # Create appointment using Firebase
+            # Create appointment using PostgreSQL
             appointment_data = {
                 "id": str(uuid.uuid4()),
                 "tenant_id": context.tenant_id,
@@ -226,7 +226,7 @@ class DialogManager:
                 "status": "scheduled",
             }
 
-            appointment = await firebase_service.create_appointment(appointment_data)
+            appointment = await store.create_appointment(appointment_data)
 
             if appointment:
                 success_message = f"Great! Your {context.service_type} appointment has been booked for {context.slots['datetime'].value}. You'll receive a confirmation email shortly."

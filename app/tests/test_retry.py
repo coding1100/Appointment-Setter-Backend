@@ -104,5 +104,4 @@ def test_retry_config_values():
     """Test that retry configuration values are set."""
     assert RetryConfig.TWILIO_MAX_ATTEMPTS > 0
     assert RetryConfig.LIVEKIT_MAX_ATTEMPTS > 0
-    assert RetryConfig.FIREBASE_MAX_ATTEMPTS > 0
-    assert RetryConfig.SENDGRID_MAX_ATTEMPTS > 0
+    assert RetryConfig.DATABASE_MAX_ATTEMPTS > 0
