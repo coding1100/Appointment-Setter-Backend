@@ -1,5 +1,5 @@
 """
-Tenant service layer for business logic using Firebase/Firestore.
+Tenant service layer for business logic using PostgreSQL.
 """
 
 import uuid
@@ -14,11 +14,11 @@ from app.api.v1.schemas.tenant import (
 )
 from app.core.prompts import prompt_map
 from app.core.utils import add_timestamps, add_updated_timestamp
-from app.services.firebase import firebase_service
+from app.services.store import store
 from app.services.org_service import org_service
 
 class TenantService:
-    """Service class for tenant operations using Firebase."""
+    """Service class for tenant operations using PostgreSQL."""
 
     def __init__(self):
         """Initialize tenant service."""
@@ -31,7 +31,7 @@ class TenantService:
         normalized_name_lower = normalized_name.lower()
 
         # Prevent duplicates by name (case-insensitive)
-        existing_by_lower = await firebase_service.get_tenant_by_name_lower(normalized_name_lower)
+        existing_by_lower = await store.get_tenant_by_name_lower(normalized_name_lower)
         if existing_by_lower:
             raise ValueError(f"Tenant already exists with name '{normalized_name}'")
 
@@ -43,7 +43,7 @@ class TenantService:
         }
         add_timestamps(tenant_dict)
 
-        created_tenant = await firebase_service.create_tenant(tenant_dict)
+        created_tenant = await store.create_tenant(tenant_dict)
         await self.ensure_org_mapping_for_tenant(created_tenant)
         return created_tenant
 
@@ -59,9 +59,9 @@ class TenantService:
         partner_org_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"mindrind:partner:{tenant_id}"))
         customer_org_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"mindrind:customer:{tenant_id}"))
 
-        partner_org = await firebase_service.get_org(partner_org_id)
+        partner_org = await store.get_org(partner_org_id)
         if not partner_org:
-            await firebase_service.create_org(
+            await store.create_org(
                 {
                     "id": partner_org_id,
                     "org_type": "partner",
@@ -73,9 +73,9 @@ class TenantService:
                 }
             )
 
-        customer_org = await firebase_service.get_org(customer_org_id)
+        customer_org = await store.get_org(customer_org_id)
         if not customer_org:
-            await firebase_service.create_org(
+            await store.create_org(
                 {
                     "id": customer_org_id,
                     "org_type": "customer",
@@ -87,7 +87,7 @@ class TenantService:
                 }
             )
 
-        await firebase_service.upsert_partner_entitlements(
+        await store.upsert_partner_entitlements(
             partner_org_id=partner_org_id,
             payload={
                 "appointment_setter_enabled": True,
@@ -104,8 +104,8 @@ class TenantService:
         if cached_tenant:
             return cached_tenant
 
-        # Cache miss: fetch from Firebase
-        tenant = await firebase_service.get_tenant(tenant_id)
+        # Cache miss: fetch from PostgreSQL
+        tenant = await store.get_tenant(tenant_id)
         if tenant:
             # Store in cache
             await set_cached_tenant(tenant_id, tenant)
@@ -126,7 +126,7 @@ class TenantService:
         update_data["name"] = tenant_data.name
         update_data["owner_email"] = tenant_data.owner_email.strip()
 
-        result = await firebase_service.update_tenant(tenant_id, update_data)
+        result = await store.update_tenant(tenant_id, update_data)
 
         # Invalidate cache on update
         if result:
@@ -136,7 +136,7 @@ class TenantService:
 
     async def list_tenants(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """List tenants with pagination."""
-        return await firebase_service.list_tenants(limit, offset)
+        return await store.list_tenants(limit, offset)
 
     async def create_business_config(self, tenant_id: str, business_data: BusinessInfoCreate) -> Dict[str, Any]:
         """Create business configuration for a tenant."""
@@ -152,8 +152,8 @@ class TenantService:
         }
         add_timestamps(business_dict)
 
-        # Store in Firebase Firestore
-        result = await firebase_service.create_business_config(business_dict)
+        # Store in PostgreSQL
+        result = await store.create_business_config(business_dict)
         return result
 
     async def get_business_config(self, tenant_id: str) -> Optional[Dict[str, Any]]:
@@ -165,8 +165,8 @@ class TenantService:
         if cached_config:
             return cached_config
 
-        # Cache miss: fetch from Firebase
-        config = await firebase_service.get_business_config(tenant_id)
+        # Cache miss: fetch from PostgreSQL
+        config = await store.get_business_config(tenant_id)
         if config:
             # Store in cache
             await set_cached_business_config(tenant_id, config)
@@ -187,7 +187,7 @@ class TenantService:
         }
         add_updated_timestamp(update_data)
 
-        result = await firebase_service.update_business_config(tenant_id, update_data)
+        result = await store.update_business_config(tenant_id, update_data)
 
         # Invalidate cache on update
         if result:
@@ -210,8 +210,8 @@ class TenantService:
         }
         add_timestamps(agent_dict)
 
-        # Store in Firebase Firestore
-        result = await firebase_service.create_agent_settings(agent_dict)
+        # Store in PostgreSQL
+        result = await store.create_agent_settings(agent_dict)
 
         # Invalidate cache on create
         if result:
@@ -228,8 +228,8 @@ class TenantService:
         if cached_settings:
             return cached_settings
 
-        # Cache miss: fetch from Firebase
-        settings = await firebase_service.get_agent_settings(tenant_id)
+        # Cache miss: fetch from PostgreSQL
+        settings = await store.get_agent_settings(tenant_id)
         if settings:
             # Store in cache
             await set_cached_agent_settings(tenant_id, settings)
@@ -247,7 +247,7 @@ class TenantService:
         }
         add_updated_timestamp(update_data)
 
-        result = await firebase_service.update_agent_settings(tenant_id, update_data)
+        result = await store.update_agent_settings(tenant_id, update_data)
 
         # Invalidate cache on update
         if result:
@@ -268,13 +268,13 @@ class TenantService:
         }
         add_timestamps(twilio_dict)
 
-        # Store in Firebase Firestore
-        result = await firebase_service.create_twilio_integration(twilio_dict)
+        # Store in PostgreSQL
+        result = await store.create_twilio_integration(twilio_dict)
         return result
 
     async def get_twilio_integration(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Get Twilio integration for a tenant."""
-        return await firebase_service.get_twilio_integration(tenant_id)
+        return await store.get_twilio_integration(tenant_id)
 
     async def update_twilio_integration(
         self, tenant_id: str, twilio_data: TwilioIntegrationCreate
@@ -286,7 +286,7 @@ class TenantService:
         }
         add_updated_timestamp(update_data)
 
-        return await firebase_service.update_twilio_integration(tenant_id, update_data)
+        return await store.update_twilio_integration(tenant_id, update_data)
 
     def get_prompt_for_service_type(self, service_type: str) -> str:
         """Get the appropriate prompt for a service type."""

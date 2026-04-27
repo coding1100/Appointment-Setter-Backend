@@ -21,7 +21,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from app.api.v1.services.tenant import tenant_service
-from app.services.firebase import firebase_service
+from app.services.store import store
 from app.services.org_service import org_service
 
 
@@ -44,7 +44,7 @@ async def _list_all_tenants(batch_size: int = 500) -> List[Dict[str, Any]]:
     tenants: List[Dict[str, Any]] = []
     offset = 0
     while True:
-        chunk = await firebase_service.list_tenants(limit=batch_size, offset=offset)
+        chunk = await store.list_tenants(limit=batch_size, offset=offset)
         if not chunk:
             break
         tenants.extend(chunk)
@@ -58,7 +58,7 @@ async def _list_all_users(batch_size: int = 500) -> List[Dict[str, Any]]:
     users: List[Dict[str, Any]] = []
     offset = 0
     while True:
-        chunk = await firebase_service.list_users(limit=batch_size, offset=offset)
+        chunk = await store.list_users(limit=batch_size, offset=offset)
         if not chunk:
             break
         users.extend(chunk)
@@ -87,7 +87,7 @@ async def migrate(dry_run: bool = True) -> None:
     relinked_appointments = 0
 
     await org_service.ensure_platform_org_exists()
-    platform_org = await firebase_service.get_org("mindrind-platform")
+    platform_org = await store.get_org("mindrind-platform")
     if not platform_org:
         raise RuntimeError("Platform org initialization failed")
 
@@ -99,8 +99,8 @@ async def migrate(dry_run: bool = True) -> None:
         partner_org_id = _partner_org_id_for_tenant(tenant_id)
         customer_org_id = _customer_org_id_for_tenant(tenant_id)
 
-        partner_exists = await firebase_service.get_org(partner_org_id)
-        customer_exists = await firebase_service.get_org(customer_org_id)
+        partner_exists = await store.get_org(partner_org_id)
+        customer_exists = await store.get_org(customer_org_id)
 
         if dry_run:
             if not partner_exists:
@@ -120,7 +120,7 @@ async def migrate(dry_run: bool = True) -> None:
                 continue
 
             role = _customer_role_for_user(user)
-            existing_membership = await firebase_service.get_org_membership(customer_org_id, user_id)
+            existing_membership = await store.get_org_membership(customer_org_id, user_id)
             if existing_membership:
                 continue
 
@@ -137,7 +137,7 @@ async def migrate(dry_run: bool = True) -> None:
 
         appointment_offset = 0
         while True:
-            appointments = await firebase_service.list_appointments(tenant_id=tenant_id, limit=500, offset=appointment_offset)
+            appointments = await store.list_appointments(tenant_id=tenant_id, limit=500, offset=appointment_offset)
             if not appointments:
                 break
             for appointment in appointments:
@@ -149,7 +149,7 @@ async def migrate(dry_run: bool = True) -> None:
                 if dry_run:
                     relinked_appointments += 1
                 else:
-                    await firebase_service.update_appointment(
+                    await store.update_appointment(
                         appointment_id,
                         {
                             "customer_org_id": customer_org_id,

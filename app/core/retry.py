@@ -155,10 +155,10 @@ class RetryConfig:
     LIVEKIT_DELAY = 1.0
     LIVEKIT_BACKOFF = 2.0
 
-    # Firebase/Firestore retry configuration
-    FIREBASE_MAX_ATTEMPTS = 3
-    FIREBASE_DELAY = 0.5
-    FIREBASE_BACKOFF = 1.5
+    # Database retry configuration
+    DATABASE_MAX_ATTEMPTS = 3
+    DATABASE_DELAY = 0.5
+    DATABASE_BACKOFF = 1.5
 
 
 
@@ -206,20 +206,20 @@ def retry_livekit(func: Callable) -> Callable:
     )
 
 
-def retry_firebase(func: Callable) -> Callable:
-    """Retry decorator specifically for Firebase/Firestore operations."""
+def retry_database(func: Callable) -> Callable:
+    """Retry decorator specifically for database operations."""
     return (
         retry_async(
-            max_attempts=RetryConfig.FIREBASE_MAX_ATTEMPTS,
-            delay=RetryConfig.FIREBASE_DELAY,
-            backoff=RetryConfig.FIREBASE_BACKOFF,
-            exceptions=(Exception,),  # Catch all Firebase errors
+            max_attempts=RetryConfig.DATABASE_MAX_ATTEMPTS,
+            delay=RetryConfig.DATABASE_DELAY,
+            backoff=RetryConfig.DATABASE_BACKOFF,
+            exceptions=(Exception,),  # Catch all database errors
         )(func)
         if asyncio.iscoroutinefunction(func)
         else retry_sync(
-            max_attempts=RetryConfig.FIREBASE_MAX_ATTEMPTS,
-            delay=RetryConfig.FIREBASE_DELAY,
-            backoff=RetryConfig.FIREBASE_BACKOFF,
+            max_attempts=RetryConfig.DATABASE_MAX_ATTEMPTS,
+            delay=RetryConfig.DATABASE_DELAY,
+            backoff=RetryConfig.DATABASE_BACKOFF,
             exceptions=(Exception,),
         )(func)
     )

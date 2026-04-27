@@ -1,5 +1,5 @@
 """
-Authentication service for user management and JWT token handling using Firebase.
+Authentication service for user management and JWT token handling using PostgreSQL.
 """
 
 import logging
@@ -17,7 +17,7 @@ from app.core.async_redis import async_redis_client
 from app.core.config import JWT_ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
 from app.core.platform_apps import resolve_allowed_app_ids, resolve_default_app_id
 from app.core.utils import add_updated_timestamp, get_current_timestamp
-from app.services.firebase import firebase_service
+from app.services.postgres_store import postgres_store
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class AuthService:
-    """Service class for authentication operations using Firebase/Firestore."""
+    """Service class for authentication operations using PostgreSQL."""
 
     def __init__(self):
         """Initialize auth service."""
@@ -178,7 +178,7 @@ class AuthService:
         normalized_email = str(user_data.email).strip().lower()
         normalized_username = str(user_data.username).strip()
 
-        # Prepare user data for Firebase
+        # Prepare user data for PostgreSQL
         user_dict = {
             "id": str(uuid.uuid4()),
             "email": normalized_email,
@@ -200,23 +200,23 @@ class AuthService:
         user_dict["allowed_app_ids"] = resolve_allowed_app_ids(user_dict)
         user_dict["default_app_id"] = resolve_default_app_id(user_dict)
 
-        return await firebase_service.create_user(user_dict)
+        return await postgres_store.create_user(user_dict)
 
     async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         """Get user by email."""
-        return await firebase_service.get_user_by_email(str(email).strip().lower())
+        return await postgres_store.get_user_by_email(str(email).strip().lower())
 
     async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get user by ID."""
-        return await firebase_service.get_user(user_id)
+        return await postgres_store.get_user(user_id)
 
     async def list_users(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """List users with pagination."""
-        return await firebase_service.list_users(limit, offset)
+        return await postgres_store.list_users(limit, offset)
 
     async def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get user by ID."""
-        return await firebase_service.get_user(user_id)
+        return await postgres_store.get_user(user_id)
 
     async def update_user(self, user_id: str, user_data: UserUpdate) -> Dict[str, Any]:
         """Update user."""
@@ -240,13 +240,13 @@ class AuthService:
         if user_data.tenant_id:
             update_data["tenant_id"] = user_data.tenant_id
 
-        return await firebase_service.update_user(user_id, update_data)
+        return await postgres_store.update_user(user_id, update_data)
 
     async def update_user_fields(self, user_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
         """Update arbitrary user fields for internal platform operations."""
         payload = dict(update_data)
         add_updated_timestamp(payload)
-        return await firebase_service.update_user(user_id, payload)
+        return await postgres_store.update_user(user_id, payload)
 
     async def authenticate_user(self, email: str, password: str) -> Optional[Dict[str, Any]]:
         """Authenticate user with email and password (optimized)."""
@@ -289,7 +289,7 @@ class AuthService:
         # Update password
         update_data = {"hashed_password": new_hashed_password}
         add_updated_timestamp(update_data)
-        await firebase_service.update_user(user_id, update_data)
+        await postgres_store.update_user(user_id, update_data)
 
         return True
 
@@ -305,7 +305,7 @@ class AuthService:
             "status": "active",
         }
         add_updated_timestamp(update_data)
-        await firebase_service.update_user(user_id, update_data)
+        await postgres_store.update_user(user_id, update_data)
         return True
 
     async def create_user_session(self, user_id: str, refresh_token: str) -> Dict[str, Any]:
@@ -422,7 +422,7 @@ class AuthService:
         custom_permissions: List[str] = []
         platform_role_id = user.get("platform_role_id")
         if isinstance(platform_role_id, str) and platform_role_id:
-            role_doc = await firebase_service.get_platform_role(platform_role_id)
+            role_doc = await postgres_store.get_platform_role(platform_role_id)
             if role_doc:
                 raw_permissions = role_doc.get("permissions", []) or []
                 custom_permissions = [str(permission).strip() for permission in raw_permissions if str(permission).strip()]

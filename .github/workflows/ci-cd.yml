@@ -67,6 +67,14 @@ jobs:
 
             echo "Building Docker images with cache (single build target)..."
             nice -n 10 docker compose build backend || docker compose build backend
+
+            echo "Starting database services..."
+            docker compose up -d postgres redis
+
+            echo "Applying database migrations..."
+            docker compose run --rm --no-deps backend alembic upgrade head
+
+            echo "Starting application services..."
             docker compose up -d --remove-orphans
 
             echo "Deployment complete. Container status:"
@@ -100,6 +108,14 @@ jobs:
 
             echo "Building Docker images with cache (single build target)..."
             nice -n 10 docker compose build backend || docker compose build backend
+
+            echo "Starting database services..."
+            docker compose up -d postgres redis
+
+            echo "Applying database migrations..."
+            docker compose run --rm --no-deps backend alembic upgrade head
+
+            echo "Starting application services..."
             docker compose up -d --remove-orphans
 
             echo "Deployment complete. Container status:"

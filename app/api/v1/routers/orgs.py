@@ -38,7 +38,7 @@ from app.core.platform_apps import normalize_allowed_app_ids
 from app.models.auth import UserRole
 from app.services.audit_service import audit_service
 from app.services.email.service import email_service
-from app.services.firebase import firebase_service
+from app.services.postgres_store import postgres_store
 from app.services.org_service import PARTNER_ROLES, PLATFORM_ORG_ID, org_service
 
 router = APIRouter(tags=["orgs"])
@@ -95,7 +95,7 @@ def _partner_scope_ids(current_user: Dict[str, Any]) -> Set[str]:
 
 async def _collect_partner_org_scope_ids(partner_org_id: str) -> Set[str]:
     scope_ids: Set[str] = {partner_org_id}
-    descendants = await firebase_service.list_descendant_orgs(partner_org_id)
+    descendants = await postgres_store.list_descendant_orgs(partner_org_id)
     for org in descendants:
         org_id = str(org.get("id", "")).strip()
         if not org_id:
@@ -110,7 +110,7 @@ async def _active_user_ids_for_partner_scope(partner_org_id: str) -> Set[str]:
     scope_org_ids = await _collect_partner_org_scope_ids(partner_org_id)
     active_user_ids: Set[str] = set()
     for scope_org_id in scope_org_ids:
-        memberships = await firebase_service.list_org_memberships_for_org(scope_org_id)
+        memberships = await postgres_store.list_org_memberships_for_org(scope_org_id)
         for membership in memberships:
             if _role_name(membership.get("status")) != "active":
                 continue
@@ -131,7 +131,7 @@ async def _resolve_partner_org_id(org: Dict[str, Any]) -> Optional[str]:
 
 
 async def _sync_partner_seat_usage(partner_org_id: str) -> Dict[str, Any]:
-    entitlements = await firebase_service.get_partner_entitlements(partner_org_id) or {}
+    entitlements = await postgres_store.get_partner_entitlements(partner_org_id) or {}
     seat_limit = _as_positive_int(entitlements.get("seat_limit"), DEFAULT_PARTNER_SEAT_LIMIT)
     active_user_ids = await _active_user_ids_for_partner_scope(partner_org_id)
     seat_usage = len(active_user_ids)
@@ -143,11 +143,11 @@ async def _sync_partner_seat_usage(partner_org_id: str) -> Dict[str, Any]:
         "seat_remaining": seat_remaining,
         "over_seat_limit": over_seat_limit,
     }
-    return await firebase_service.upsert_partner_entitlements(partner_org_id, update_payload)
+    return await postgres_store.upsert_partner_entitlements(partner_org_id, update_payload)
 
 
 async def _enforce_partner_seat_limit(partner_org_id: str, candidate_user_id: Optional[str] = None) -> None:
-    entitlements = await firebase_service.get_partner_entitlements(partner_org_id) or {}
+    entitlements = await postgres_store.get_partner_entitlements(partner_org_id) or {}
     seat_limit = _as_positive_int(entitlements.get("seat_limit"), DEFAULT_PARTNER_SEAT_LIMIT)
     active_user_ids = await _active_user_ids_for_partner_scope(partner_org_id)
     normalized_candidate = (candidate_user_id or "").strip()
@@ -167,7 +167,7 @@ async def _cascade_customer_status_for_partner(partner_org_id: str, status_value
 
     Returns count of customer orgs updated.
     """
-    descendants = await firebase_service.list_descendant_orgs(partner_org_id)
+    descendants = await postgres_store.list_descendant_orgs(partner_org_id)
     updated_count = 0
     target_status = str(status_value).strip().lower()
     for org in descendants:
@@ -176,7 +176,7 @@ async def _cascade_customer_status_for_partner(partner_org_id: str, status_value
         org_id = str(org.get("id", "")).strip()
         if not org_id:
             continue
-        await firebase_service.update_org(org_id, {"status": target_status})
+        await postgres_store.update_org(org_id, {"status": target_status})
         updated_count += 1
     return updated_count
 
@@ -185,7 +185,7 @@ async def _require_org_access(current_user: Dict[str, Any], org_id: str) -> Dict
     has_access = await org_service.user_can_access_org(current_user, org_id)
     if not has_access:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied for this organization")
-    org = await firebase_service.get_org(org_id)
+    org = await postgres_store.get_org(org_id)
     if not org:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     return await _attach_partner_entitlements(org)
@@ -220,7 +220,7 @@ async def _handle_idempotency_precheck(
     if not normalized_key:
         return None
 
-    state = await firebase_service.acquire_idempotency_key(
+    state = await postgres_store.acquire_idempotency_key(
         scope=scope,
         key=normalized_key,
         request_hash=_request_hash(payload),
@@ -264,7 +264,7 @@ async def list_orgs(
 ):
     """List organizations visible to the current actor."""
     if _is_platform_staff(current_user):
-        orgs = await firebase_service.list_orgs(limit=limit, offset=offset)
+        orgs = await postgres_store.list_orgs(limit=limit, offset=offset)
     else:
         orgs = current_user.get("accessible_orgs") or []
 
@@ -324,7 +324,7 @@ async def create_org(
         parent_org_id = payload.parent_org_id
 
     if parent_org_id:
-        parent_org = await firebase_service.get_org(parent_org_id)
+        parent_org = await postgres_store.get_org(parent_org_id)
         if not parent_org:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="parent_org_id does not exist")
         if payload.org_type == "customer" and str(parent_org.get("org_type", "")).lower() != "partner":
@@ -355,10 +355,10 @@ async def create_org(
         "legacy_tenant_id": payload.legacy_tenant_id,
     }
     try:
-        created = await firebase_service.create_org(org_doc)
+        created = await postgres_store.create_org(org_doc)
 
         if payload.org_type == "partner":
-            await firebase_service.upsert_partner_entitlements(
+            await postgres_store.upsert_partner_entitlements(
                 org_id,
                 {
                     "appointment_setter_enabled": False,
@@ -385,7 +385,7 @@ async def create_org(
             },
         )
         if normalized_idempotency_key:
-            await firebase_service.complete_idempotency_key(
+            await postgres_store.complete_idempotency_key(
                 scope=f"orgs:create:{current_user_id}",
                 key=normalized_idempotency_key,
                 response_payload=jsonable_encoder(response_payload),
@@ -393,7 +393,7 @@ async def create_org(
         return response_payload
     except Exception as exc:
         if normalized_idempotency_key:
-            await firebase_service.fail_idempotency_key(
+            await postgres_store.fail_idempotency_key(
                 scope=f"orgs:create:{current_user_id}",
                 key=normalized_idempotency_key,
                 error_message=str(exc),
@@ -435,11 +435,11 @@ async def create_partner_with_owner(
 
     async def _rollback_partial_creates() -> None:
         if partner_org_id and owner_user_id:
-            await firebase_service.delete_org_membership(org_id=partner_org_id, user_id=owner_user_id)
-            await firebase_service.delete_user(owner_user_id)
+            await postgres_store.delete_org_membership(org_id=partner_org_id, user_id=owner_user_id)
+            await postgres_store.delete_user(owner_user_id)
         if partner_org_id:
-            await firebase_service.delete_partner_entitlements(partner_org_id)
-            await firebase_service.delete_org(partner_org_id)
+            await postgres_store.delete_partner_entitlements(partner_org_id)
+            await postgres_store.delete_org(partner_org_id)
 
     try:
         existing_user = await auth_service.get_user_by_email(owner_email)
@@ -456,9 +456,9 @@ async def create_partner_with_owner(
             "branding": payload.branding.model_dump(exclude_none=True) if payload.branding else {},
             "legacy_tenant_id": payload.legacy_tenant_id,
         }
-        created_partner = await firebase_service.create_org(org_doc)
+        created_partner = await postgres_store.create_org(org_doc)
 
-        entitlements_record = await firebase_service.upsert_partner_entitlements(
+        entitlements_record = await postgres_store.upsert_partner_entitlements(
             partner_org_id,
             {
                 "appointment_setter_enabled": False,
@@ -491,7 +491,7 @@ async def create_partner_with_owner(
             role=payload.owner.role,
             status="active",
         )
-        membership_record = await firebase_service.get_org_membership(org_id=partner_org_id, user_id=owner_user_id)
+        membership_record = await postgres_store.get_org_membership(org_id=partner_org_id, user_id=owner_user_id)
         if not membership_record:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -554,7 +554,7 @@ async def create_partner_with_owner(
             },
         )
         if normalized_idempotency_key:
-            await firebase_service.complete_idempotency_key(
+            await postgres_store.complete_idempotency_key(
                 scope=idempotency_scope,
                 key=normalized_idempotency_key,
                 response_payload=jsonable_encoder(response_payload),
@@ -571,7 +571,7 @@ async def create_partner_with_owner(
             metadata={"error": str(exc.detail)},
         )
         if normalized_idempotency_key:
-            await firebase_service.fail_idempotency_key(
+            await postgres_store.fail_idempotency_key(
                 scope=idempotency_scope,
                 key=normalized_idempotency_key,
                 error_message=exc.detail if isinstance(exc.detail, str) else "Request failed",
@@ -588,7 +588,7 @@ async def create_partner_with_owner(
             metadata={"error": str(exc)},
         )
         if normalized_idempotency_key:
-            await firebase_service.fail_idempotency_key(
+            await postgres_store.fail_idempotency_key(
                 scope=idempotency_scope,
                 key=normalized_idempotency_key,
                 error_message=str(exc),
@@ -624,14 +624,14 @@ async def update_org(
     if payload.branding is not None:
         update_data["branding"] = payload.branding.model_dump(exclude_none=True)
 
-    updated = await firebase_service.update_org(org_id, update_data)
+    updated = await postgres_store.update_org(org_id, update_data)
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     if str(updated.get("org_type", "")).lower() == "partner":
         if payload.status == "suspended":
-            await firebase_service.upsert_partner_entitlements(org_id, {"onboarding_status": "suspended"})
+            await postgres_store.upsert_partner_entitlements(org_id, {"onboarding_status": "suspended"})
         elif payload.status == "active":
-            await firebase_service.upsert_partner_entitlements(org_id, {"onboarding_status": "active"})
+            await postgres_store.upsert_partner_entitlements(org_id, {"onboarding_status": "active"})
         await _sync_partner_seat_usage(org_id)
     await audit_service.log_event(
         actor=current_user,
@@ -662,7 +662,7 @@ async def suspend_org(
             detail="Only platform staff can suspend partner organizations",
         )
 
-    updated = await firebase_service.update_org(org_id, {"status": "suspended"})
+    updated = await postgres_store.update_org(org_id, {"status": "suspended"})
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
 
@@ -670,7 +670,7 @@ async def suspend_org(
     affected_customers = 0
     if org_type == "partner":
         affected_customers = await _cascade_customer_status_for_partner(org_id, "suspended")
-        entitlements = await firebase_service.upsert_partner_entitlements(org_id, {"onboarding_status": "suspended"})
+        entitlements = await postgres_store.upsert_partner_entitlements(org_id, {"onboarding_status": "suspended"})
         entitlements = await _sync_partner_seat_usage(org_id)
         onboarding_status = str(entitlements.get("onboarding_status", "suspended"))
 
@@ -708,7 +708,7 @@ async def reactivate_org(
             detail="Only platform staff can reactivate partner organizations",
         )
 
-    updated = await firebase_service.update_org(org_id, {"status": "active"})
+    updated = await postgres_store.update_org(org_id, {"status": "active"})
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
 
@@ -716,7 +716,7 @@ async def reactivate_org(
     affected_customers = 0
     if org_type == "partner":
         affected_customers = await _cascade_customer_status_for_partner(org_id, "active")
-        entitlements = await firebase_service.upsert_partner_entitlements(org_id, {"onboarding_status": "active"})
+        entitlements = await postgres_store.upsert_partner_entitlements(org_id, {"onboarding_status": "active"})
         entitlements = await _sync_partner_seat_usage(org_id)
         onboarding_status = str(entitlements.get("onboarding_status", "active"))
 
@@ -742,7 +742,7 @@ async def list_org_members(
 ):
     """List members for an org."""
     await _require_org_access(current_user, org_id)
-    return await firebase_service.list_org_memberships_for_org(org_id)
+    return await postgres_store.list_org_memberships_for_org(org_id)
 
 
 @router.post("/orgs/{org_id}/members", response_model=OrgMembershipResponse, status_code=status.HTTP_201_CREATED)
@@ -766,7 +766,7 @@ async def create_org_member(
 
     if "user_id" in payload:
         membership_payload = OrgMembershipCreateRequest(**payload)
-        existing_membership = await firebase_service.get_org_membership(org_id=org_id, user_id=membership_payload.user_id)
+        existing_membership = await postgres_store.get_org_membership(org_id=org_id, user_id=membership_payload.user_id)
         if partner_org_id and _role_name(membership_payload.status) == "active":
             existing_is_active = _role_name((existing_membership or {}).get("status")) == "active"
             if not existing_is_active:
@@ -779,7 +779,7 @@ async def create_org_member(
         )
         if partner_org_id:
             await _sync_partner_seat_usage(partner_org_id)
-        created_record = await firebase_service.get_org_membership(org_id=org_id, user_id=membership_payload.user_id)
+        created_record = await postgres_store.get_org_membership(org_id=org_id, user_id=membership_payload.user_id)
         await audit_service.log_event(
             actor=current_user,
             action="org.membership.create",
@@ -840,7 +840,7 @@ async def create_org_member(
             expires_in_hours=48,
             platform_name="MindRind",
         )
-    created_record = await firebase_service.get_org_membership(org_id=org_id, user_id=str(new_user["id"]))
+    created_record = await postgres_store.get_org_membership(org_id=org_id, user_id=str(new_user["id"]))
     if created_record:
         await audit_service.log_event(
             actor=current_user,
@@ -872,7 +872,7 @@ async def resend_org_member_setup_invite(
     if not platform_staff and str(org.get("org_type", "")).lower() == "platform":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only platform staff can manage platform org members")
 
-    membership = await firebase_service.get_org_membership(org_id=org_id, user_id=user_id)
+    membership = await postgres_store.get_org_membership(org_id=org_id, user_id=user_id)
     if not membership:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org membership not found")
 
@@ -926,7 +926,7 @@ async def update_partner_entitlements(
     if not _is_platform_staff(current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only platform staff can update partner entitlements")
 
-    org = await firebase_service.get_org(partner_org_id)
+    org = await postgres_store.get_org(partner_org_id)
     if not org or str(org.get("org_type", "")).lower() != "partner":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Partner organization not found")
 
@@ -941,7 +941,7 @@ async def update_partner_entitlements(
     if payload.onboarding_status is not None:
         update_payload["onboarding_status"] = payload.onboarding_status
 
-    await firebase_service.upsert_partner_entitlements(
+    await postgres_store.upsert_partner_entitlements(
         partner_org_id=partner_org_id,
         payload=update_payload,
     )
@@ -977,7 +977,7 @@ async def update_partner_branding(
         if partner_org_id not in allowed_partner_ids:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only owner partner staff can update this branding")
 
-    updated = await firebase_service.update_org(partner_org_id, {"branding": payload.branding.model_dump(exclude_none=True)})
+    updated = await postgres_store.update_org(partner_org_id, {"branding": payload.branding.model_dump(exclude_none=True)})
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Partner organization not found")
     await audit_service.log_event(
