@@ -14,7 +14,7 @@ from app.api.v1.routers.auth import get_current_user_from_token, require_admin_r
 from app.core import config
 from app.core.encryption import encryption_service
 from app.core.security import SecurityService
-from app.services.firebase import firebase_service
+from app.services.store import store
 from app.services.unified_voice_agent import unified_voice_agent_service
 
 # Configure logging
@@ -258,9 +258,9 @@ async def _validate_twilio_signature(request: Request, form_data: Dict[str, Any]
             # For now, we'll try to get by phone number (To field) as fallback
             to_number = form_data.get("To")
             if to_number:
-                phone_record = await firebase_service.get_phone_by_number(to_number)
+                phone_record = await store.get_phone_by_number(to_number)
                 if phone_record and phone_record.get("tenant_id"):
-                    integration = await firebase_service.get_twilio_integration(phone_record["tenant_id"])
+                    integration = await store.get_twilio_integration(phone_record["tenant_id"])
                     if integration and integration.get("account_sid") == account_sid:
                         encrypted_token = integration.get("auth_token")
                         if encrypted_token:

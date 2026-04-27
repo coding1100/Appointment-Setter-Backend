@@ -1,5 +1,5 @@
 """
-Appointment management API routes using Firebase.
+Appointment management API routes using PostgreSQL.
 """
 
 import uuid

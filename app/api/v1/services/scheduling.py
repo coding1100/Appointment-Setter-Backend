@@ -1,5 +1,5 @@
 """
-Scheduling service for appointment slot management with Redis holds using Firebase/Firestore.
+Scheduling service for appointment slot management with Redis holds using PostgreSQL.
 PERFORMANCE OPTIMIZED: Using async Redis for 5-10x improvement.
 """
 
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.api.v1.services.tenant import tenant_service
 from app.core.async_redis import async_redis_client
 from app.core.config import REDIS_URL
-from app.services.firebase import firebase_service
+from app.services.store import store
 
 
 @dataclass
@@ -43,7 +43,7 @@ class SlotHold:
 
 
 class SchedulingService:
-    """Service class for appointment scheduling operations using Firebase."""
+    """Service class for appointment scheduling operations using PostgreSQL."""
 
     def __init__(self):
         """Initialize scheduling service with async Redis."""
@@ -80,7 +80,7 @@ class SchedulingService:
         query_start = (start_date - timedelta(days=1)).isoformat()
         query_end = (end_date + timedelta(days=1)).isoformat()
 
-        existing_appointments = await firebase_service.list_appointments_by_date_range(
+        existing_appointments = await store.list_appointments_by_date_range(
             tenant_id=tenant_id, start_date=query_start, end_date=query_end, statuses=["scheduled", "confirmed"]
         )
 
@@ -227,7 +227,7 @@ class SchedulingService:
             query_start = (appointment_datetime - timedelta(days=buffer_days)).isoformat()
             query_end = (appointment_end + timedelta(days=buffer_days)).isoformat()
 
-            existing_appointments = await firebase_service.list_appointments_by_date_range(
+            existing_appointments = await store.list_appointments_by_date_range(
                 tenant_id=tenant_id, start_date=query_start, end_date=query_end, statuses=["scheduled", "confirmed"]
             )
 

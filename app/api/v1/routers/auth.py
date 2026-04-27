@@ -1,5 +1,5 @@
 """
-Authentication API routes using Firebase.
+Authentication API routes using PostgreSQL.
 """
 
 import logging
@@ -155,13 +155,15 @@ def get_security_service() -> SecurityService:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Security service unavailable: {str(e)}")
 
 
-async def get_current_user_from_token(request: Request, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+async def get_current_user_from_token(
+    request: Optional[Request] = None, authorization: Optional[str] = Header(None)
+) -> Dict[str, Any]:
     """Get current user from JWT token."""
     try:
         token: Optional[str] = None
         if authorization:
             token = authorization[7:] if authorization.startswith("Bearer ") else authorization
-        if not token:
+        if not token and request is not None:
             token = request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)
         if not token:
             raise HTTPException(

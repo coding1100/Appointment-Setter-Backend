@@ -1,5 +1,5 @@
 """
-Tenant management API routes using Firebase.
+Tenant management API routes using PostgreSQL.
 """
 
 import uuid

@@ -65,7 +65,7 @@ def test_send_appointment_confirmation_email_mocked(monkeypatch):
         "app.services.email.service.EmailService.send_appointment_owner_notification",
         fake_owner_send,
     )
-    monkeypatch.setattr("app.services.firebase.firebase_service.get_tenant", fake_get_tenant)
+    monkeypatch.setattr("app.services.store.store.get_tenant", fake_get_tenant)
 
     agent = VoiceAgent(instructions="test", tenant_id="tenant-123")
     result = asyncio.run(
@@ -107,7 +107,7 @@ def test_send_appointment_confirmation_email_integration(monkeypatch):
     async def fake_get_tenant(tenant_id):
         return {"id": tenant_id, "owner_email": owner_recipient}
 
-    monkeypatch.setattr("app.services.firebase.firebase_service.get_tenant", fake_get_tenant)
+    monkeypatch.setattr("app.services.store.store.get_tenant", fake_get_tenant)
 
     agent = VoiceAgent(instructions="test", tenant_id="tenant-123")
     result = asyncio.run(

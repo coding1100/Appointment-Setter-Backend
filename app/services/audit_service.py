@@ -8,13 +8,13 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
-from app.services.firebase import firebase_service
+from app.services.postgres_store import postgres_store
 
 logger = logging.getLogger(__name__)
 
 
 class AuditService:
-    """Writes immutable audit events to Firestore."""
+    """Writes immutable audit events to PostgreSQL."""
 
     async def log_event(
         self,
@@ -46,7 +46,7 @@ class AuditService:
             "metadata": metadata or {},
         }
         try:
-            return await firebase_service.create_audit_log(payload)
+            return await postgres_store.create_audit_log(payload)
         except Exception as exc:
             logger.error("Failed to persist audit log event: %s", exc, exc_info=True)
             # Never break business flow because of audit storage issues.

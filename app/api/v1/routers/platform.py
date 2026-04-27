@@ -24,8 +24,8 @@ from app.core.platform_apps import (
 )
 from app.models.auth import UserRole
 from app.services.audit_service import audit_service
-from app.services.firebase import firebase_service
 from app.services.org_service import PLATFORM_ORG_ID, org_service
+from app.services.postgres_store import postgres_store
 
 router = APIRouter(prefix="/platform", tags=["platform"])
 
@@ -347,7 +347,7 @@ async def get_platform_bootstrap(current_user: Dict[str, Any] = Depends(get_curr
     partner_org = await org_service.get_partner_org_for_active_context(access_context.active_org)
     partner_entitlements = None
     if partner_org:
-        partner_entitlements = await firebase_service.get_partner_entitlements(str(partner_org.get("id", "")))
+        partner_entitlements = await postgres_store.get_partner_entitlements(str(partner_org.get("id", "")))
 
     is_platform_scope = access_context.platform_scope
     appointment_enabled = True
@@ -377,7 +377,7 @@ async def get_platform_bootstrap(current_user: Dict[str, Any] = Depends(get_curr
     platform_role_name: Optional[str] = None
     platform_role_slug: Optional[str] = None
     if isinstance(platform_role_id, str) and platform_role_id:
-        role_doc = await firebase_service.get_platform_role(platform_role_id)
+        role_doc = await postgres_store.get_platform_role(platform_role_id)
         if role_doc:
             role_name_raw = role_doc.get("name")
             role_slug_raw = role_doc.get("slug")
@@ -496,7 +496,7 @@ async def list_platform_audit_logs(
 ):
     """List platform audit logs (admin/staff only)."""
     require_admin_role(current_user)
-    logs = await firebase_service.list_audit_logs(limit=limit, offset=offset)
+    logs = await postgres_store.list_audit_logs(limit=limit, offset=offset)
     response: List[AuditLogResponse] = []
     for item in logs:
         actor = item.get("actor", {}) or {}
@@ -524,7 +524,7 @@ async def list_platform_audit_logs(
 async def list_platform_roles(current_user: Dict[str, Any] = Depends(get_current_user_from_token)):
     require_admin_role(current_user)
     await _require_platform_permission(current_user, ["roles:read", "roles:write"])
-    roles = await firebase_service.list_platform_roles(limit=500, offset=0)
+    roles = await postgres_store.list_platform_roles(limit=500, offset=0)
     normalized_roles = sorted(roles, key=lambda role: str(role.get("name", "")).lower())
     return [
         PlatformRoleResponse(
@@ -576,14 +576,14 @@ async def create_platform_role(
     if payload.scope != "platform":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported role scope")
     slug = _slugify_role_name(payload.name)
-    existing = await firebase_service.get_platform_role_by_slug(slug)
+    existing = await postgres_store.get_platform_role_by_slug(slug)
     if existing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role with this name already exists")
 
     catalog_ids = {item["id"] for item in PLATFORM_PERMISSION_CATALOG}
     permissions = [permission for permission in payload.permissions if permission in catalog_ids]
 
-    role_doc = await firebase_service.create_platform_role(
+    role_doc = await postgres_store.create_platform_role(
         {
             "id": str(uuid.uuid4()),
             "name": payload.name.strip(),
@@ -625,7 +625,7 @@ async def update_platform_role(
 ):
     require_admin_role(current_user)
     await _require_platform_permission(current_user, ["roles:write"])
-    existing = await firebase_service.get_platform_role(role_id)
+    existing = await postgres_store.get_platform_role(role_id)
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
     if existing.get("is_system"):
@@ -635,7 +635,7 @@ async def update_platform_role(
     if payload.name is not None:
         new_slug = _slugify_role_name(payload.name)
         if new_slug != existing.get("slug"):
-            slug_collision = await firebase_service.get_platform_role_by_slug(new_slug)
+            slug_collision = await postgres_store.get_platform_role_by_slug(new_slug)
             if slug_collision and slug_collision.get("id") != role_id:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role with this name already exists")
         update_data["name"] = payload.name.strip()
@@ -648,7 +648,7 @@ async def update_platform_role(
     if payload.status is not None:
         update_data["status"] = payload.status
 
-    updated = await firebase_service.update_platform_role(role_id, update_data)
+    updated = await postgres_store.update_platform_role(role_id, update_data)
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
     await audit_service.log_event(
@@ -684,7 +684,7 @@ async def create_platform_user(
     idempotency_scope = f"platform:create-user:{current_user_id}"
     normalized_idempotency_key = (idempotency_key or "").strip() or None
     if normalized_idempotency_key:
-        precheck = await firebase_service.acquire_idempotency_key(
+        precheck = await postgres_store.acquire_idempotency_key(
             scope=idempotency_scope,
             key=normalized_idempotency_key,
             request_hash=_request_hash(payload.model_dump(mode="json", exclude_none=False)),
@@ -719,7 +719,7 @@ async def create_platform_user(
 
         platform_role_id = payload.platform_role_id
         if platform_role_id:
-            role_doc = await firebase_service.get_platform_role(platform_role_id)
+            role_doc = await postgres_store.get_platform_role(platform_role_id)
             if not role_doc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Platform role not found")
             if role_doc.get("status") != "active":
@@ -769,7 +769,7 @@ async def create_platform_user(
             },
         )
         if normalized_idempotency_key:
-            await firebase_service.complete_idempotency_key(
+            await postgres_store.complete_idempotency_key(
                 scope=idempotency_scope,
                 key=normalized_idempotency_key,
                 response_payload=jsonable_encoder(response_payload),
@@ -777,7 +777,7 @@ async def create_platform_user(
         return response_payload
     except HTTPException as exc:
         if normalized_idempotency_key:
-            await firebase_service.fail_idempotency_key(
+            await postgres_store.fail_idempotency_key(
                 scope=idempotency_scope,
                 key=normalized_idempotency_key,
                 error_message=exc.detail if isinstance(exc.detail, str) else "Request failed",
@@ -785,7 +785,7 @@ async def create_platform_user(
         raise
     except Exception as exc:
         if normalized_idempotency_key:
-            await firebase_service.fail_idempotency_key(
+            await postgres_store.fail_idempotency_key(
                 scope=idempotency_scope,
                 key=normalized_idempotency_key,
                 error_message=str(exc),
@@ -805,7 +805,7 @@ async def assign_platform_role_to_user(
     if not target_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    role_doc = await firebase_service.get_platform_role(payload.platform_role_id)
+    role_doc = await postgres_store.get_platform_role(payload.platform_role_id)
     if not role_doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Platform role not found")
     if role_doc.get("status") != "active":
@@ -838,7 +838,7 @@ async def set_active_org(
     if not has_access:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization access denied")
 
-    target_org = await firebase_service.get_org(payload.org_id)
+    target_org = await postgres_store.get_org(payload.org_id)
     if not target_org:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     target_status = str(target_org.get("status", "active")).strip().lower()

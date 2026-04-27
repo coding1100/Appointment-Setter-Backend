@@ -20,7 +20,7 @@ async def test_phone_assignment_rejects_non_voice_agent(monkeypatch):
             "service_type": "Plumbing",
         }
 
-    monkeypatch.setattr("app.api.v1.services.phone_number.firebase_service.get_agent", _fake_get_agent)
+    monkeypatch.setattr("app.api.v1.services.phone_number.store.get_agent", _fake_get_agent)
 
     with pytest.raises(ValueError, match="only be assigned to voice agents"):
         await phone_number_service._validate_agent_for_tenant("agent-1", "tenant-1")
@@ -38,7 +38,7 @@ async def test_phone_assignment_allows_legacy_agent_without_type(monkeypatch):
             "service_type": "Plumbing",
         }
 
-    monkeypatch.setattr("app.api.v1.services.phone_number.firebase_service.get_agent", _fake_get_agent)
+    monkeypatch.setattr("app.api.v1.services.phone_number.store.get_agent", _fake_get_agent)
 
     result = await phone_number_service._validate_agent_for_tenant("agent-1", "tenant-1")
     assert result["name"] == "Legacy Voice Agent"

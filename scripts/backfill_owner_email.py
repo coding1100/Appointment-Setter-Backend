@@ -16,9 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from firebase_admin import firestore
-
-from app.services.firebase import firebase_service
+from app.services.store import store
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +27,7 @@ async def _build_user_email_index(limit: int) -> Tuple[Dict[str, str], Dict[str,
     tenant_user_emails: Dict[str, str] = {}
 
     while True:
-        users = await firebase_service.list_users(limit=limit, offset=offset)
+        users = await store.list_users(limit=limit, offset=offset)
         if not users:
             break
 
@@ -67,7 +65,7 @@ async def backfill(
     default_email = (default_email or "").strip() or None
 
     while True:
-        tenants = await firebase_service.list_tenants(limit=limit, offset=offset)
+        tenants = await store.list_tenants(limit=limit, offset=offset)
         if not tenants:
             break
 
@@ -83,7 +81,7 @@ async def backfill(
             if not owner_email:
                 contact_email: Optional[str] = None
                 try:
-                    business_config = await firebase_service.get_business_config(tenant_id)
+                    business_config = await store.get_business_config(tenant_id)
                 except Exception as exc:
                     logger.warning("Failed to load business config for tenant %s: %s", tenant_id, exc)
                     business_config = None
@@ -111,12 +109,12 @@ async def backfill(
                     )
 
             if delete_timezone and "timezone" in tenant:
-                update_data["timezone"] = firestore.DELETE_FIELD
+                update_data["timezone"] = None
                 updated_timezone += 1
 
             if update_data:
                 try:
-                    await firebase_service.update_tenant(tenant_id, update_data)
+                    await store.update_tenant(tenant_id, update_data)
                     logger.info("Updated tenant %s", tenant_id)
                 except Exception as exc:
                     logger.warning("Failed to update tenant %s: %s", tenant_id, exc)

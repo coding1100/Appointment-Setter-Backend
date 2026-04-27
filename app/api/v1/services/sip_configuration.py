@@ -29,7 +29,7 @@ from app.core.config import (
     LIVEKIT_URL,
 )
 from app.core.encryption import encryption_service
-from app.services.firebase import firebase_service
+from app.services.store import store
 from app.utils.phone_number import normalize_phone_number, normalize_phone_number_safe
 
 # Configure logging
@@ -75,7 +75,7 @@ class SIPConfigurationService:
 
     async def _get_decrypted_twilio_integration(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Get Twilio integration with decrypted auth_token."""
-        integration = await firebase_service.get_twilio_integration(tenant_id)
+        integration = await store.get_twilio_integration(tenant_id)
         if integration and "auth_token" in integration:
             try:
                 integration["auth_token"] = encryption_service.decrypt(integration["auth_token"])

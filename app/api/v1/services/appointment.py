@@ -1,5 +1,5 @@
 """
-Appointment service for managing appointments and email notifications using Firebase/Firestore.
+Appointment service for managing appointments and email notifications using PostgreSQL.
 """
 
 import logging
@@ -10,14 +10,14 @@ from typing import Any, Dict, List, Optional
 from app.api.v1.services.scheduling import SchedulingService
 from app.core.response_mappers import parse_iso_timestamp
 from app.services.email.service import EmailService
-from app.services.firebase import firebase_service
+from app.services.store import store
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
 class AppointmentService:
-    """Service class for appointment operations using Firebase."""
+    """Service class for appointment operations using PostgreSQL."""
 
     def __init__(self):
         """Initialize appointment service."""
@@ -49,7 +49,7 @@ class AppointmentService:
                 raise ValueError(error_message)
 
             # Create appointment
-            customer_org = await firebase_service.get_org_by_legacy_tenant_id(tenant_id, prefer_customer=True)
+            customer_org = await store.get_org_by_legacy_tenant_id(tenant_id, prefer_customer=True)
             appointment_dict = {
                 "id": str(uuid.uuid4()),
                 "tenant_id": tenant_id,
@@ -70,7 +70,7 @@ class AppointmentService:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            appointment = await firebase_service.create_appointment(appointment_dict)
+            appointment = await store.create_appointment(appointment_dict)
 
             # Send confirmation email
             if customer_email:
@@ -86,7 +86,7 @@ class AppointmentService:
 
     async def get_appointment(self, appointment_id: str) -> Optional[Dict[str, Any]]:
         """Get appointment by ID."""
-        return await firebase_service.get_appointment(appointment_id)
+        return await store.get_appointment(appointment_id)
 
     async def list_appointments(
         self,
@@ -99,7 +99,7 @@ class AppointmentService:
     ) -> List[Dict[str, Any]]:
         """List appointments for a tenant with filters."""
         # Get base appointments
-        appointments = await firebase_service.list_appointments(tenant_id, limit, offset)
+        appointments = await store.list_appointments(tenant_id, limit, offset)
 
         # Apply filters
         filtered_appointments = []
@@ -134,7 +134,7 @@ class AppointmentService:
         if notes:
             update_data["notes"] = notes
 
-        return await firebase_service.update_appointment(appointment_id, update_data)
+        return await store.update_appointment(appointment_id, update_data)
 
     async def cancel_appointment(self, appointment_id: str, reason: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Cancel an appointment."""
@@ -147,7 +147,7 @@ class AppointmentService:
         if reason:
             update_data["cancellation_reason"] = reason
 
-        appointment = await firebase_service.update_appointment(appointment_id, update_data)
+        appointment = await store.update_appointment(appointment_id, update_data)
 
         # Send cancellation email if customer email exists
         if appointment and appointment.get("customer_email"):
@@ -185,7 +185,7 @@ class AppointmentService:
         if reason:
             update_data["reschedule_reason"] = reason
 
-        updated_appointment = await firebase_service.update_appointment(appointment_id, update_data)
+        updated_appointment = await store.update_appointment(appointment_id, update_data)
 
         # Send reschedule email if customer email exists
         if updated_appointment and updated_appointment.get("customer_email"):
@@ -211,7 +211,7 @@ class AppointmentService:
         if completion_notes:
             update_data["completion_notes"] = completion_notes
 
-        return await firebase_service.update_appointment(appointment_id, update_data)
+        return await store.update_appointment(appointment_id, update_data)
 
     async def get_appointments_by_date_range(
         self, tenant_id: str, start_date: datetime, end_date: datetime
