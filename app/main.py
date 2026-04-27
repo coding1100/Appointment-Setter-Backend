@@ -60,15 +60,19 @@ async def lifespan(app: FastAPI):
     print_environment_summary()
 
     # Startup
-    # Warm up Firebase connection to prevent slow first queries
+    # Warm up PostgreSQL connection to prevent slow first queries
     try:
-        from app.services.firebase_health import firebase_health
+        from app.services.postgres_health import postgres_health
 
-        logger.info("Warming up Firebase connection...")
-        await firebase_health.warm_up_connection()
-        logger.info("✅ Firebase connection ready")
+        logger.info("Warming up PostgreSQL connection...")
+        is_ready = await postgres_health.warm_up_connection()
+        if is_ready:
+            revision = await postgres_health.get_migration_revision()
+            logger.info("PostgreSQL connection ready (alembic_revision=%s)", revision or "none")
+        else:
+            logger.warning("PostgreSQL warmup check returned unhealthy")
     except Exception as e:
-        logger.warning(f"Firebase warmup skipped: {e}")
+        logger.warning(f"PostgreSQL warmup skipped: {e}")
 
     yield
 

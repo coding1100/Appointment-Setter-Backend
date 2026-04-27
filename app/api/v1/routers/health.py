@@ -11,7 +11,7 @@ from livekit import api as livekit_api
 
 from app.core.async_redis import async_redis_client
 from app.core.config import ENVIRONMENT, LIVEKIT_URL
-from app.services.firebase import firebase_service
+from app.services.database import check_database_health
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -68,17 +68,17 @@ async def detailed_health_check() -> Dict[str, Any]:
         health_status["components"]["redis"] = {"status": "unhealthy", "message": str(e)}
         overall_healthy = False
 
-    # Check Firebase
+    # Check PostgreSQL
     try:
-        firebase_healthy = await firebase_service.health_check()
-        if firebase_healthy:
-            health_status["components"]["firebase"] = {"status": "healthy", "message": "Connected"}
+        database_healthy = check_database_health()
+        if database_healthy:
+            health_status["components"]["database"] = {"status": "healthy", "message": "Connected"}
         else:
-            health_status["components"]["firebase"] = {"status": "unhealthy", "message": "Failed to connect or query Firebase"}
+            health_status["components"]["database"] = {"status": "unhealthy", "message": "Failed to connect to PostgreSQL"}
             overall_healthy = False
     except Exception as e:
-        logger.error(f"Firebase health check failed: {e}")
-        health_status["components"]["firebase"] = {"status": "unhealthy", "message": str(e)}
+        logger.error(f"PostgreSQL health check failed: {e}")
+        health_status["components"]["database"] = {"status": "unhealthy", "message": str(e)}
         overall_healthy = False
 
     # Check LiveKit (basic URL validation)
@@ -118,14 +118,14 @@ async def readiness_check() -> Dict[str, Any]:
         checks["redis"] = False
         ready = False
 
-    # Check Firebase
+    # Check PostgreSQL
     try:
-        firebase_healthy = await firebase_service.health_check()
-        checks["firebase"] = firebase_healthy
-        if not firebase_healthy:
+        database_healthy = check_database_health()
+        checks["database"] = database_healthy
+        if not database_healthy:
             ready = False
     except Exception:
-        checks["firebase"] = False
+        checks["database"] = False
         ready = False
 
     if ready:

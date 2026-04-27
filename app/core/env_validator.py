@@ -7,13 +7,11 @@ import os
 import sys
 from typing import Dict, List, Tuple
 
-from app.core.config import (  # Firebase; Redis; LiveKit; AI Services; SendGrid; Application
+from app.core.config import (  # Redis; LiveKit; AI Services; SendGrid; Application
+    DATABASE_URL,
     DEEPGRAM_API_KEY,
     ELEVEN_API_KEY,
     ENVIRONMENT,
-    FIREBASE_CLIENT_EMAIL,
-    FIREBASE_PRIVATE_KEY,
-    FIREBASE_PROJECT_ID,
     GOOGLE_API_KEY,
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
@@ -30,9 +28,7 @@ logger = logging.getLogger(__name__)
 REQUIRED_ENV_VARS = {
     # Critical for application functionality
     "SECRET_KEY": SECRET_KEY,
-    "FIREBASE_PROJECT_ID": FIREBASE_PROJECT_ID,
-    "FIREBASE_PRIVATE_KEY": FIREBASE_PRIVATE_KEY,
-    "FIREBASE_CLIENT_EMAIL": FIREBASE_CLIENT_EMAIL,
+    "DATABASE_URL": DATABASE_URL,
     "REDIS_URL": REDIS_URL,
     "LIVEKIT_API_KEY": LIVEKIT_API_KEY,
     "LIVEKIT_API_SECRET": LIVEKIT_API_SECRET,
@@ -123,7 +119,7 @@ def get_environment_info() -> Dict[str, any]:
     """Get information about the current environment configuration."""
     return {
         "environment": ENVIRONMENT,
-        "firebase_configured": bool(FIREBASE_PROJECT_ID and FIREBASE_PRIVATE_KEY and FIREBASE_CLIENT_EMAIL),
+        "database_configured": bool(DATABASE_URL),
         "redis_configured": bool(REDIS_URL),
         "livekit_configured": bool(LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL),
         "google_ai_configured": bool(GOOGLE_API_KEY),
@@ -142,7 +138,7 @@ def print_environment_summary():
     logger.info("ENVIRONMENT CONFIGURATION SUMMARY")
     logger.info("=" * 80)
     logger.info(f"Environment: {info['environment']}")
-    logger.info(f"Firebase: {'✅' if info['firebase_configured'] else '❌'}")
+    logger.info(f"PostgreSQL: {'✅' if info['database_configured'] else '❌'}")
     logger.info(f"Redis: {'✅' if info['redis_configured'] else '❌'}")
     logger.info(f"LiveKit: {'✅' if info['livekit_configured'] else '❌'}")
     logger.info(f"Google AI (Gemini): {'✅' if info['google_ai_configured'] else '❌'}")
