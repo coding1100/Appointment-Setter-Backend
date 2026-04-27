@@ -71,8 +71,34 @@ jobs:
             echo "Starting database services..."
             docker compose up -d postgres redis
 
+            echo "Waiting for PostgreSQL to become ready..."
+            for i in $(seq 1 30); do
+              if docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-appointment_setter}" >/dev/null 2>&1; then
+                echo "PostgreSQL is ready."
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "PostgreSQL did not become ready in time."
+                docker compose logs postgres
+                exit 1
+              fi
+              sleep 2
+            done
+
             echo "Applying database migrations..."
-            docker compose run --rm --no-deps backend alembic upgrade head
+            for i in $(seq 1 5); do
+              if docker compose run --rm --no-deps --use-aliases backend sh -lc 'python -c "import socket; socket.getaddrinfo(\"postgres\", 5432)" && alembic upgrade head'; then
+                echo "Database migrations applied successfully."
+                break
+              fi
+              if [ "$i" -eq 5 ]; then
+                echo "Database migrations failed after retries."
+                docker compose logs postgres
+                exit 1
+              fi
+              echo "Migration attempt $i failed, retrying..."
+              sleep 3
+            done
 
             echo "Starting application services..."
             docker compose up -d --remove-orphans
@@ -112,8 +138,34 @@ jobs:
             echo "Starting database services..."
             docker compose up -d postgres redis
 
+            echo "Waiting for PostgreSQL to become ready..."
+            for i in $(seq 1 30); do
+              if docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-appointment_setter}" >/dev/null 2>&1; then
+                echo "PostgreSQL is ready."
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "PostgreSQL did not become ready in time."
+                docker compose logs postgres
+                exit 1
+              fi
+              sleep 2
+            done
+
             echo "Applying database migrations..."
-            docker compose run --rm --no-deps backend alembic upgrade head
+            for i in $(seq 1 5); do
+              if docker compose run --rm --no-deps --use-aliases backend sh -lc 'python -c "import socket; socket.getaddrinfo(\"postgres\", 5432)" && alembic upgrade head'; then
+                echo "Database migrations applied successfully."
+                break
+              fi
+              if [ "$i" -eq 5 ]; then
+                echo "Database migrations failed after retries."
+                docker compose logs postgres
+                exit 1
+              fi
+              echo "Migration attempt $i failed, retrying..."
+              sleep 3
+            done
 
             echo "Starting application services..."
             docker compose up -d --remove-orphans
