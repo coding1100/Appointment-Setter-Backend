@@ -153,15 +153,13 @@ class ChatbotAgentService:
     async def list_chatbot_agents_for_user(
         self, user_id: str, role: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:
-        if role == "admin":
-            return await self.repository.list_all(limit=limit, offset=offset)
         return await self.repository.list_for_owner(user_id, limit=limit, offset=offset)
 
     async def get_chatbot_agent(self, chatbot_id: str) -> Optional[Dict[str, Any]]:
         return await self.repository.get(chatbot_id)
 
     def can_manage(self, chatbot: Dict[str, Any], user_id: str, role: str) -> bool:
-        return role == "admin" or chatbot.get("owner_user_id") == user_id
+        return chatbot.get("owner_user_id") == user_id
 
     async def update_chatbot_agent(self, chatbot_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         existing = await self.repository.get(chatbot_id)
