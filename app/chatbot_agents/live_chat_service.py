@@ -294,12 +294,8 @@ class ChatbotLiveChatService:
             )
 
     async def list_live_chats_for_user(self, current_user: Dict[str, Any], limit: int = 100) -> List[Dict[str, Any]]:
-        role = str(current_user.get("role", 'user')).lower()
         user_id = str(current_user.get("id", ''))
-        if role == "admin":
-            sessions = await self.repository.list_chat_sessions(limit=limit)
-        else:
-            sessions = await self.repository.list_chat_sessions_for_owner(user_id, limit=limit)
+        sessions = await self.repository.list_chat_sessions_for_owner(user_id, limit=limit)
         return [session for session in sessions if session.get("status") == "open"]
 
     async def get_live_chat_detail_for_user(self, session_id: str, current_user: Dict[str, Any]) -> Dict[str, Any]:
@@ -379,12 +375,11 @@ class ChatbotLiveChatService:
         detail = await self.get_live_chat_detail_for_user(session_id, current_user)
         session = detail["session"]
         operator_id = str(current_user.get("id", ''))
-        role = str(current_user.get("role", 'user')).lower()
         if session.get("status") != "open":
             raise ValueError("Chat session is closed")
         if session.get("control_mode") != "human":
             raise ValueError("Chat must be in human takeover mode")
-        if session.get("assigned_operator_id") not in {operator_id, None} and role != "admin":
+        if session.get("assigned_operator_id") not in {operator_id, None}:
             raise PermissionError("Chat is assigned to another operator")
 
         latest = await self.repository.get_chat_session(session_id)
