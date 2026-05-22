@@ -50,10 +50,27 @@ def prewarm_vad(proc: agents.JobProcess):
     """
     Runs ONCE per worker process.
     This is the ONLY place Silero VAD should be loaded.
+
+    The Silero weights are baked into the image at build time
+    (`download-files`), so this should complete in well under a second.
+    If it stalls (e.g. CPU/memory starvation on the host), the worker's
+    `initialize_process_timeout` will recycle this process. We time and
+    guard the load so the failure is visible in logs rather than a silent
+    10-minute hang (the production symptom seen on 2026-04-28).
     """
+    import time
+
     logger.info("[VAD] Prewarming Silero VAD (once per worker process)")
-    proc.userdata["vad"] = silero.VAD.load(**VAD_SETTINGS)
-    logger.info("[VAD] ✓ Silero VAD ready")
+    started = time.monotonic()
+    try:
+        proc.userdata["vad"] = silero.VAD.load(**VAD_SETTINGS)
+    except Exception:
+        logger.exception("[VAD] ✗ Failed to load Silero VAD during prewarm")
+        # Re-raise so the supervisor recycles this process instead of
+        # serving jobs without a VAD (which would crash every call).
+        raise
+    elapsed = time.monotonic() - started
+    logger.info("[VAD] ✓ Silero VAD ready (%.2fs)", elapsed)
 
 
 # =========================================================
@@ -168,7 +185,13 @@ async def entrypoint(ctx: agents.JobContext):
     tts = get_tts_service(config.get("voice_id"), "en")
 
     # 6️⃣ PREWARMED VAD (REQUIRED)
-    vad = ctx.proc.userdata["vad"]
+    vad = ctx.proc.userdata.get("vad")
+    if vad is None:
+        # prewarm_vad failed or never ran for this process. Fail loudly so
+        # LiveKit recycles the process rather than crashing every turn.
+        raise RuntimeError(
+            "Silero VAD not available in process userdata — prewarm did not complete"
+        )
 
     # =====================================================
     # ✅ AGENT SESSION (VAD + TURN DETECTOR)

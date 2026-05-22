@@ -523,10 +523,26 @@ class TwilioIntegrationService:
         except Exception:
             existing = []
 
+        # A stored number is only "in use" (and therefore NOT available to
+        # re-assign) when it is actually bound: it has an agent, or it has an
+        # active role binding (e.g. cold-caller outbound). A number whose row
+        # still exists but has been unassigned (agent_id="", status/role
+        # "inactive") — or one that was just purchased into the pool — must be
+        # returned here so it reappears in the "Unassigned Numbers" panel.
+        # Without this, unassigning a number makes it vanish from the UI
+        # entirely (no longer "assigned", yet still excluded from "unassigned").
         assigned_set = set()
         for p in existing or []:
             n = p.get("phone_number")
-            if n:
+            if not n:
+                continue
+            role_status = p.get("role_status")
+            if not role_status:
+                role_status = "active" if p.get("status", "active") == "active" else "inactive"
+            in_use = bool(p.get("agent_id")) or (
+                p.get("status", "active") == "active" and role_status == "active"
+            )
+            if in_use:
                 assigned_set.add(n)
 
         unassigned = []
