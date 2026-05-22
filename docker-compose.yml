@@ -72,7 +72,14 @@ services:
 
     # Backend runs FastAPI server, not LiveKit worker
     entrypoint: []
-    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+    # --forwarded-allow-ips: trust X-Forwarded-* from the host reverse proxy
+    # (requests arrive from the Docker bridge gateway, e.g. 172.18.0.x, which is
+    # NOT in uvicorn's default trust list of 127.0.0.1). Without this, uvicorn
+    # ignores X-Forwarded-Proto/Host, so request.url is rebuilt as http://<internal>
+    # and Twilio webhook signature validation fails (403 -> caller hears
+    # "an application error has occurred"). The proxy MUST send X-Forwarded-Proto
+    # and X-Forwarded-Host for this to resolve to the correct public https URL.
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
 
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
@@ -194,12 +201,31 @@ services:
     entrypoint: []
     command: ["python", "run_voice_worker.py", "start"]
 
+    # -------------------------------------------------------------------
+    # Resource sizing — LiveKit production guidance is ~4 cores / 8GB per
+    # agent server (handles 10-25 concurrent jobs; the turn detector needs
+    # more headroom). Limits cap a runaway worker; reservations guarantee
+    # enough CPU/RAM that VAD/turn-detector prewarm cannot starve and hang
+    # (root cause of the 2026-04-28 10-minute prewarm stall).
+    # Honored by `docker compose up` (Compose v2) without Swarm.
+    # https://docs.livekit.io/deploy/custom/deployments/
+    # -------------------------------------------------------------------
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
+        reservations:
+          cpus: "2.0"
+          memory: 4G
+
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f run_voice_worker.py || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      # Generous so first-boot model/process prewarm never trips the check.
+      start_period: 90s
 
 networks:
   app-network:

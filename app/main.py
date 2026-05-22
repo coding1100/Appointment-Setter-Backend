@@ -219,4 +219,14 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host=API_HOST, port=API_PORT, reload=DEBUG, log_level=LOG_LEVEL.lower(), proxy_headers=True)
+    uvicorn.run(
+        "app.main:app",
+        host=API_HOST,
+        port=API_PORT,
+        reload=DEBUG,
+        log_level=LOG_LEVEL.lower(),
+        proxy_headers=True,
+        # Trust X-Forwarded-* from the reverse proxy so request.url reflects the
+        # public https URL (required for Twilio webhook signature validation).
+        forwarded_allow_ips="*",
+    )
