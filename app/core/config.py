@@ -115,7 +115,7 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 # Chatbot embed settings
 CHATBOT_EMBED_SECRET = os.environ.get("CHATBOT_EMBED_SECRET", SECRET_KEY)
 CHATBOT_EMBED_TOKEN_TTL_MINUTES = int(os.environ.get("CHATBOT_EMBED_TOKEN_TTL_MINUTES", "60"))
-CHATBOT_TEXT_MODEL = os.environ.get("CHATBOT_TEXT_MODEL", "gemini-2.0-flash")
+CHATBOT_TEXT_MODEL = os.environ.get("CHATBOT_TEXT_MODEL", "gemini-2.5-flash-lite")
 CHATBOT_LOADER_BASE_URL = os.environ.get("CHATBOT_LOADER_BASE_URL", "")
 CHATBOT_LLM_PROVIDER = os.environ.get("CHATBOT_LLM_PROVIDER", "gemini")
 CHATBOT_STREAM_TIMEOUT_SECONDS = int(os.environ.get("CHATBOT_STREAM_TIMEOUT_SECONDS", "60"))
