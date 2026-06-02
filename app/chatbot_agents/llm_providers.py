@@ -48,7 +48,7 @@ class GeminiChatbotProvider(ChatbotLLMProvider):
             yield {"type": "done"}
             return
 
-        model = CHATBOT_TEXT_MODEL.strip() or "gemini-2.0-flash"
+        model = CHATBOT_TEXT_MODEL.strip() or "gemini-2.5-flash-lite"
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse"
         headers = {
             "Content-Type": "application/json",

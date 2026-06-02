@@ -284,7 +284,7 @@ class UnifiedVoiceAgentService:
             agent = Agent(
                 vad=self._vad,
                 stt=deepgram.STT(),
-                llm=google.LLM(model="gemini-2.0-flash"),
+                llm=google.LLM(model="gemini-2.5-flash-lite"),
                 tts=tts_service,
                 instructions=system_prompt,
             )

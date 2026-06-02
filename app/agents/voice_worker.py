@@ -198,7 +198,7 @@ async def entrypoint(ctx: agents.JobContext):
     # =====================================================
     session = AgentSession(
         stt=deepgram.STT(model="nova-2-general", language="en-US"),
-        llm=google.LLM(model="gemini-2.0-flash"),
+        llm=google.LLM(model="gemini-2.5-flash-lite"),
         tts=tts,
         vad=vad,
 
