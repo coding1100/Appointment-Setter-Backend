@@ -62,14 +62,15 @@ class AgentResponse(BaseModel):
 
 
 class VoiceOption(BaseModel):
-    """Schema for ElevenLabs voice option."""
+    """Schema for a TTS voice option."""
 
     voice_id: str
     name: str
     description: str
     preview_url: Optional[str] = None
     category: str  # male, female, neutral
-    use_case: str  # conversational, narration, customer_service
+    use_case: str  # conversational, narration, customer_service, general
+    provider: Optional[str] = None  # "elevenlabs" or "gemini" — which TTS speaks this voice
 
 
 class VoiceListResponse(BaseModel):
