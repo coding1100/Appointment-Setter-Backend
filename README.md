@@ -1,6 +1,6 @@
 # AI Phone Scheduler - Appointment Setter
 
-A production-ready SaaS platform for AI-powered phone appointment scheduling using LiveKit voice agents and Twilio integration.
+
 
 ## 🚀 Features
 
