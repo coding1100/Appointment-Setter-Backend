@@ -3,7 +3,7 @@ Shared validation functions for schemas and services.
 """
 
 # Service type constants
-VALID_SERVICE_TYPES = ["Home Services", "Plumbing", "Electrician", "Painter", "Carpenter", "Maids", "Healthcare"]
+VALID_SERVICE_TYPES = ["Home Services", "Plumbing", "Electrician", "Painter", "Carpenter", "Maids", "Healthcare", "Scholarly Help"]
 
 
 def validate_service_type(service_type: str) -> str:
