@@ -134,11 +134,18 @@ class VoiceAgent(Agent):
         instructions: str,
         tenant_id: Optional[str],
         call_id: Optional[str] = None,
+        agent_name: str = "",
+        service_type: str = "",
         job_ctx: Optional[agents.JobContext] = None,
     ):
         super().__init__(instructions=instructions)
         self.tenant_id = tenant_id
         self.call_id = call_id
+        # Agent context — auto-injected into capture_lead notifications so
+        # the LLM never has to know or pass its own identity. The team's
+        # inbox shows which agent took the call and which vertical it was.
+        self.agent_name = (agent_name or "").strip()
+        self.service_type = (service_type or "").strip()
         # JobContext is the official handle for ending a SIP call —
         # `job_ctx.api.room.delete_room(...)` disconnects the SIP participant
         # (Twilio's leg) and drops the caller's phone. session.aclose() does
@@ -147,6 +154,7 @@ class VoiceAgent(Agent):
         # exit in time"). Ref: https://docs.livekit.io/recipes/sip_lifecycle/
         self._job_ctx = job_ctx
         self._booking_completed = False  # idempotency guard for book_appointment
+        self._lead_captured = False      # idempotency guard for capture_lead
 
     # ------------------------------------------------------------------
     # Tool: book the appointment + send emails
@@ -282,6 +290,137 @@ class VoiceAgent(Agent):
             "out (SMTP failure — check backend logs). Call end_call with "
             "a closing_line that apologises briefly and says a teammate "
             "will follow up by phone. Do NOT promise an email."
+        )
+
+    # ------------------------------------------------------------------
+    # Tool: generic lead capture — usable by any agent vertical
+    # ------------------------------------------------------------------
+    @function_tool
+    async def capture_lead(
+        self,
+        customer_name: str,
+        customer_phone: str,
+        customer_email: str,
+        summary: str,
+        details: str = "",
+    ) -> str:
+        """Capture caller info and email the tenant's team for follow-up.
+
+        Generic primitive — works for ANY agent vertical (scholarly help,
+        real estate, healthcare scheduling, etc.). The recipient is the
+        tenant's configured `owner_email`. The agent's identity and
+        vertical are auto-injected from the agent's configuration, so the
+        LLM never needs to pass them.
+
+        Call EXACTLY ONCE per call, AFTER all the fields your prompt's
+        workflow tells you to gather have been collected and confirmed by
+        the caller, and BEFORE end_call.
+
+        Arguments:
+            customer_name:  The caller's full name.
+            customer_phone: The caller's phone number (any common format).
+                            Pass the confirmed digits — the email will
+                            tel:-link them automatically.
+            customer_email: The caller's email. Pass "" if none was given.
+            summary:        ONE line, the headline of the lead. Becomes the
+                            email subject. Examples:
+                              "Exam help — proctored, due 12/25 14:30 EST"
+                              "Buyer interested in 2BR condo, Westwood"
+                              "Annual check-up booking, prefers mornings"
+            details:        Multi-line free-form body — the structured
+                            fields you captured, one per line as
+                            "Field: Value". Newlines are preserved in the
+                            email. Pass "" if there's nothing beyond the
+                            summary. Examples:
+                              Service: Exam help
+                              Proctored: Yes
+                              Due: 2025-12-25 14:30 EST
+                              Subject: Statistics
+
+        Returns a status string the LLM uses to choose its closing_line:
+          * success -> closing should confirm the team will follow up.
+          * failure -> closing should say a teammate will call back; do
+                       NOT promise a specific follow-up channel.
+        """
+        if self._lead_captured:
+            return "Lead already captured. Call end_call now."
+        if not self.tenant_id:
+            logger.error("[LEAD] tenant_id missing on VoiceAgent; cannot capture lead")
+            return (
+                "Captured the details locally but couldn't notify the team "
+                "(missing tenant context). Apologise briefly and call end_call."
+            )
+
+        from app.services.email.service import EmailService
+        from app.services.store import store
+
+        # Resolve where the team notification goes — the tenant's owner
+        # email. Same field that drives appointment owner-notifications.
+        try:
+            tenant = await store.get_tenant(self.tenant_id)
+        except Exception:
+            logger.exception("[LEAD] failed to load tenant for lead notification")
+            tenant = None
+        team_email = ((tenant or {}).get("owner_email") or "").strip()
+        tenant_name = ((tenant or {}).get("name") or "").strip()
+
+        clean_name = customer_name.strip() or "Unknown caller"
+        clean_phone = customer_phone.strip()
+        clean_email = (customer_email or "").strip()
+        clean_summary = summary.strip() or "(no summary provided)"
+        clean_details = (details or "").strip()
+
+        lead_data = {
+            "tenant_id": self.tenant_id,
+            "tenant_name": tenant_name,
+            "call_id": self.call_id,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "agent_name": self.agent_name,
+            "service_type": self.service_type,
+            "customer_name": clean_name,
+            "customer_phone": clean_phone,
+            "customer_email": clean_email,
+            "summary": clean_summary,
+            "details": clean_details,
+        }
+
+        if not team_email:
+            # No team inbox configured — log the full payload so the lead
+            # is at least recoverable from worker logs.
+            logger.error(
+                "[LEAD] tenant=%s has no owner_email; cannot notify team. lead=%s",
+                self.tenant_id, lead_data,
+            )
+            self._lead_captured = True
+            return (
+                "Captured the lead but the team inbox isn't configured. "
+                "Apologise briefly and call end_call."
+            )
+
+        email_sent = False
+        try:
+            email_sent = await EmailService().send_lead_notification(team_email, lead_data)
+        except Exception:
+            logger.exception("[LEAD] team notification email crashed")
+
+        self._lead_captured = True
+        logger.info(
+            "[LEAD] captured tenant=%s call=%s team=%s email_sent=%s agent=%s service=%s phone=%s",
+            self.tenant_id, self.call_id, team_email, email_sent,
+            self.agent_name or "<unknown>", self.service_type or "<unknown>", clean_phone,
+        )
+
+        if email_sent:
+            return (
+                "Lead captured and the team has been notified by email. "
+                "Call end_call with a closing_line that confirms a teammate "
+                "will follow up shortly."
+            )
+        return (
+            "Lead captured but the team-notification email did NOT go out "
+            "(check backend logs). Call end_call with a closing_line saying "
+            "a teammate will call the caller back; do NOT promise a specific "
+            "channel like text or email."
         )
 
     # ------------------------------------------------------------------
@@ -541,19 +680,23 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info(f"[WORKER ENTRYPOINT] Loaded browser test config for tenant: {tenant_id}, call_id: {call_id}")
 
     # 4️⃣ Build instructions
-    instructions = get_template(
-        service_type=config.get("service_type", "Home Services"),
-        agent_name=config.get("agent_data", {}).get("name", "Assistant"),
-    )
+    service_type = config.get("service_type", "Home Services")
+    agent_name = config.get("agent_data", {}).get("name", "Assistant")
+    instructions = get_template(service_type=service_type, agent_name=agent_name)
 
     greeting = config.get("agent_data", {}).get("greeting_message")
 
     # 5️⃣ Create agent + TTS. Pass the JobContext through so the agent can
     # call `ctx.api.room.delete_room(...)` for the official SIP hangup.
+    # agent_name + service_type are forwarded so the generic capture_lead
+    # tool can auto-inject them into the team notification email without
+    # the LLM having to know its own identity.
     agent = VoiceAgent(
         instructions=instructions,
         tenant_id=tenant_id,
         call_id=call_id,
+        agent_name=agent_name,
+        service_type=service_type,
         job_ctx=ctx,
     )
     tts = get_tts_service(config.get("voice_id"), "en")
