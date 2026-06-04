@@ -2,8 +2,6 @@
 Tests for retry logic utilities.
 """
 
-import asyncio
-
 import pytest
 
 from app.core.retry import RetryConfig, retry_async, retry_sync

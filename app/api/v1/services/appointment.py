@@ -109,8 +109,6 @@ class AppointmentService:
                 continue
 
             # Date filters
-            from app.core.response_mappers import parse_iso_timestamp
-
             appointment_datetime = parse_iso_timestamp(appointment["appointment_datetime"])
             if not appointment_datetime:
                 continue

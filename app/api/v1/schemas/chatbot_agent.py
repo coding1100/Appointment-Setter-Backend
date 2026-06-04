@@ -1,5 +1,5 @@
 """
-Schemas for multi-domain chatbot agent configuration and launcher embedding.
+Schemas for multi-domain chatbot agent configuration, live chat, and launcher embedding.
 """
 
 from datetime import datetime
@@ -244,6 +244,16 @@ class ChatbotEmbedTokenRequest(BaseModel):
     """Request model for generating launcher embed tokens."""
 
     origin: str = Field(..., description="Origin requesting embed token")
+    never_expires: bool = Field(
+        False,
+        description="When true, generate a non-expiring embed token.",
+    )
+    expires_in_minutes: Optional[int] = Field(
+        None,
+        ge=5,
+        le=10080,
+        description="Optional token lifetime in minutes (5 minutes to 7 days).",
+    )
 
     @validator("origin")
     def validate_origin(cls, value: str) -> str:
@@ -252,12 +262,21 @@ class ChatbotEmbedTokenRequest(BaseModel):
             raise ValueError("Origin must start with http:// or https://")
         return normalized
 
+    @root_validator(skip_on_failure=True)
+    def validate_expiry_options(cls, values):
+        never_expires = bool(values.get("never_expires", False))
+        expires_in_minutes = values.get("expires_in_minutes")
+        if never_expires and expires_in_minutes is not None:
+            raise ValueError("expires_in_minutes cannot be provided when never_expires is true")
+        return values
+
 
 class ChatbotEmbedTokenResponse(BaseModel):
     """Response model for launcher token generation."""
 
     token: str
-    expires_at: str
+    expires_at: Optional[str] = None
+    never_expires: bool = False
     token_version: int
     loader_url: str
     launcher_script: str
@@ -333,3 +352,96 @@ class ChatbotRuntimeControlResponse(BaseModel):
     enabled: bool
     updated_at: datetime
     updated_by: str
+
+
+class CreateEmbedSessionRequest(BaseModel):
+    visitor_session_id: str = Field(..., min_length=1, max_length=200)
+    page_url: Optional[str] = Field(None, max_length=2000)
+    page_title: Optional[str] = Field(None, max_length=300)
+
+    @validator("visitor_session_id", "page_url", "page_title", pre=True)
+    def trim_optional_fields(cls, value):
+        if value is None:
+            return value
+        return str(value).strip()
+
+
+class VisitorMessageRequest(BaseModel):
+    visitor_session_id: str = Field(..., min_length=1, max_length=200)
+    message: str = Field(..., min_length=1, max_length=4000)
+
+    @validator("visitor_session_id", "message")
+    def trim_visitor_message_fields(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Field cannot be empty")
+        return cleaned
+
+
+class OperatorMessageRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=4000)
+
+    @validator("content")
+    def trim_operator_content(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Content cannot be empty")
+        return cleaned
+
+
+class ChatMessageResponse(BaseModel):
+    id: str
+    session_id: str
+    chatbot_id: str
+    sender_type: Literal["visitor", "bot", "human", "system"]
+    sender_id: Optional[str] = None
+    content: str
+    created_at: datetime
+
+
+class ChatSessionResponse(BaseModel):
+    id: str
+    chatbot_id: str
+    owner_user_id: str
+    origin: str
+    page_url: str
+    page_title: str = ""
+    visitor_session_id: str
+    visitor_label: str
+    is_returning_visitor: bool = False
+    status: Literal["open", "closed"]
+    control_mode: Literal["bot", "human"]
+    assigned_operator_id: Optional[str] = None
+    assigned_operator_name: Optional[str] = None
+    started_at: datetime
+    last_activity_at: datetime
+    last_restored_at: Optional[datetime] = None
+    taken_over_at: Optional[datetime] = None
+    released_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+    last_message_preview: Optional[str] = None
+
+
+class CreateEmbedSessionResponse(BaseModel):
+    session: ChatSessionResponse
+    messages: List[ChatMessageResponse]
+    session_token: str
+
+
+class LiveChatListItem(BaseModel):
+    session: ChatSessionResponse
+
+
+class LiveChatDetailResponse(BaseModel):
+    session: ChatSessionResponse
+    messages: List[ChatMessageResponse]
+
+
+class TakeoverResponse(BaseModel):
+    session: ChatSessionResponse
+    message: ChatMessageResponse
+
+
+class ReleaseResponse(BaseModel):
+    session: ChatSessionResponse
+    message: ChatMessageResponse

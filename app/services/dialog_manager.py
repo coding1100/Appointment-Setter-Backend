@@ -3,13 +3,11 @@ Dialog Manager with FSM (Finite State Machine) and LLM policy for Home Services 
 Handles conversation flow, slot filling, and confirmation.
 """
 
-import json
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from app.core.prompts import prompt_map
 from app.core.utils import get_current_timestamp
 from app.services.store import store
 
@@ -247,7 +245,7 @@ class DialogManager:
             else:
                 raise Exception("Failed to create appointment")
 
-        except Exception as e:
+        except Exception:
             error_message = (
                 "I'm sorry, there was an issue booking your appointment. Let me transfer you to a human representative."
             )
@@ -316,7 +314,7 @@ class DialogManager:
     async def _generate_confirmation_message(self, context: DialogContext) -> str:
         """Generate confirmation message with collected information."""
         slots = context.slots
-        message = f"Let me confirm your appointment details:\n"
+        message = "Let me confirm your appointment details:\n"
         message += f"Name: {slots['name'].value}\n"
         message += f"Phone: {slots['phone'].value}\n"
         message += f"Email: {slots['email'].value}\n"

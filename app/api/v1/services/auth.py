@@ -3,7 +3,6 @@ Authentication service for user management and JWT token handling using PostgreS
 """
 
 import logging
-import secrets
 import uuid
 import hashlib
 from datetime import datetime, timedelta, timezone
@@ -13,7 +12,7 @@ from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
 from passlib.context import CryptContext
 
-from app.api.v1.schemas.auth import LoginRequest, PasswordChangeRequest, UserCreate, UserUpdate
+from app.api.v1.schemas.auth import PasswordChangeRequest, UserCreate, UserUpdate
 from app.core.async_redis import async_redis_client
 from app.core.config import JWT_ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_REFRESH_TOKEN_EXPIRE_DAYS, SECRET_KEY
 from app.core.platform_apps import resolve_allowed_app_ids, resolve_default_app_id
@@ -198,6 +197,8 @@ class AuthService:
             "default_app_id": None,
             "last_login": None,
         }
+        user_dict["allowed_app_ids"] = resolve_allowed_app_ids(user_dict)
+        user_dict["default_app_id"] = resolve_default_app_id(user_dict)
 
         return await postgres_store.create_user(user_dict)
 
@@ -249,12 +250,22 @@ class AuthService:
 
     async def authenticate_user(self, email: str, password: str) -> Optional[Dict[str, Any]]:
         """Authenticate user with email and password (optimized)."""
-        user = await self.get_user_by_email(str(email).strip().lower())
+        normalized_email = str(email).strip().lower()
+        user = await self.get_user_by_email(normalized_email)
         if not user:
             return None
 
+        hashed_password = user.get("hashed_password")
+        if not isinstance(hashed_password, str) or not hashed_password.strip():
+            logger.warning("Login rejected for %s: stored password hash is missing or invalid", normalized_email)
+            return None
+
         # Use async password verification to avoid blocking event loop
-        if not await self.verify_password_async(password, user["hashed_password"]):
+        try:
+            if not await self.verify_password_async(password, hashed_password):
+                return None
+        except Exception as exc:
+            logger.warning("Login password verification failed for %s: %s", normalized_email, exc)
             return None
 
         if not user.get("is_active", False):

@@ -12,14 +12,14 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, status
 
 from app.core.async_redis import async_redis_client
-from app.core.config import AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY, SECRET_KEY
+from app.core.config import AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY
 
 # Configure logging
 logger = logging.getLogger(__name__)

@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.api.v1.services.tenant import tenant_service
 from app.core.async_redis import async_redis_client
-from app.core.config import REDIS_URL
 from app.services.store import store
 
 
@@ -62,8 +61,6 @@ class SchedulingService:
             return slots
 
         # Get business configuration for working hours
-        business_config = await tenant_service.get_business_config(tenant_id)
-
         # Default working hours (9 AM to 5 PM)
         working_hours = {
             "monday": {"start": "09:00", "end": "17:00"},
@@ -74,6 +71,9 @@ class SchedulingService:
             "saturday": {"start": "10:00", "end": "14:00"},
             "sunday": {"start": "10:00", "end": "14:00"},
         }
+        business_config = await tenant_service.get_business_config(tenant_id)
+        if isinstance(business_config, dict) and isinstance(business_config.get("working_hours"), dict):
+            working_hours = business_config["working_hours"]
 
         # PERFORMANCE OPTIMIZATION: Use date range filter to avoid N+1 query
         # Only load appointments in the requested date range (10-100x faster!)
@@ -247,7 +247,7 @@ class SchedulingService:
                     appointment_datetime < existing_end + timedelta(minutes=buffer_minutes)
                     and appointment_end + timedelta(minutes=buffer_minutes) > existing_start
                 ):
-                    return False, f"Time slot conflicts with existing appointment"
+                    return False, "Time slot conflicts with existing appointment"
 
             return True, None
 

@@ -2,13 +2,12 @@
 Observability service for structured logging, metrics, and tracing.
 """
 
-import logging
 import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import redis
 import structlog
@@ -27,7 +26,7 @@ try:
 except ImportError:
     OPENTELEMETRY_AVAILABLE = False
 
-from app.core.config import DEBUG, LOG_LEVEL, REDIS_URL
+from app.core.config import DEBUG, REDIS_URL
 
 # Configure structured logging
 structlog.configure(

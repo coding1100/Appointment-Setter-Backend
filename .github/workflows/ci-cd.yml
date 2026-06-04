@@ -54,7 +54,7 @@ jobs:
           key: ${{ secrets.PROD_VPS_SSH_KEY }}
           port: ${{ secrets.PROD_VPS_PORT || 22 }}
           timeout: 30s
-          command_timeout: 15m
+          command_timeout: 30m
           script: |
             set -e
 
@@ -102,9 +102,6 @@ jobs:
 
             echo "Starting application services..."
             docker compose up -d --remove-orphans
-
-            echo "Cleaning up old images..."
-            docker image prune -f
 
             echo "Deployment complete. Container status:"
             docker compose ps
@@ -172,9 +169,6 @@ jobs:
 
             echo "Starting application services..."
             docker compose up -d --remove-orphans
-
-            echo "Cleaning up old images..."
-            docker image prune -f
 
             echo "Deployment complete. Container status:"
             docker compose ps
