@@ -15,8 +15,13 @@ from typing import Dict, Optional
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, function_tool
-from livekit.plugins import silero
 from livekit.plugins.google.realtime import RealtimeModel
+from google.genai.types import (
+    AutomaticActivityDetection,
+    EndSensitivity,
+    RealtimeInputConfig,
+    StartSensitivity,
+)
 
 from app.core.async_redis import async_redis_client
 from app.core.config import (
@@ -42,6 +47,20 @@ GEMINI_LIVE_DEFAULT_VOICE = "Puck"
 # is the corresponding Gemini API endpoint.
 GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
+# Server-side automatic activity detection — replaces client-side VAD +
+# AgentSession endpointing. The defaults Live ships with are tuned for
+# desktop microphones (long silence windows, conservative); for telephony
+# we want tighter turn closure for snappier responses.
+# https://ai.google.dev/gemini-api/docs/live#voice-activity-detection
+_GEMINI_LIVE_REALTIME_INPUT_CONFIG = RealtimeInputConfig(
+    automatic_activity_detection=AutomaticActivityDetection(
+        start_of_speech_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
+        end_of_speech_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
+        silence_duration_ms=300,
+        prefix_padding_ms=200,
+    ),
+)
+
 # Hard upper bound on any single call. Even if the LLM ignores the prompt's
 # "call end_call after the closing line" instruction, this watchdog guarantees
 # the session is torn down so Twilio billing stops and worker capacity is
@@ -51,46 +70,6 @@ MAX_CALL_DURATION_SECONDS = int(os.environ.get("VOICE_AGENT_MAX_CALL_DURATION", 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VoiceAgentWorker")
-
-
-# =========================================================
-# ✅ OFFICIAL LIVEKIT VAD CONFIG (DO NOT USE 8kHz)
-# =========================================================
-VAD_SETTINGS = {
-    "sample_rate": 16000,
-    "min_speech_duration": 0.06,
-    "min_silence_duration": 0.25,
-    "prefix_padding_duration": 0.15,
-    "activation_threshold": 0.5,
-    "force_cpu": True,
-}
-
-
-def prewarm_vad(proc: agents.JobProcess):
-    """
-    Runs ONCE per worker process.
-    This is the ONLY place Silero VAD should be loaded.
-
-    The Silero weights are baked into the image at build time
-    (`download-files`), so this should complete in well under a second.
-    If it stalls (e.g. CPU/memory starvation on the host), the worker's
-    `initialize_process_timeout` will recycle this process. We time and
-    guard the load so the failure is visible in logs rather than a silent
-    10-minute hang (the production symptom seen on 2026-04-28).
-    """
-    import time
-
-    logger.info("[VAD] Prewarming Silero VAD (once per worker process)")
-    started = time.monotonic()
-    try:
-        proc.userdata["vad"] = silero.VAD.load(**VAD_SETTINGS)
-    except Exception:
-        logger.exception("[VAD] ✗ Failed to load Silero VAD during prewarm")
-        # Re-raise so the supervisor recycles this process instead of
-        # serving jobs without a VAD (which would crash every call).
-        raise
-    elapsed = time.monotonic() - started
-    logger.info("[VAD] ✓ Silero VAD ready (%.2fs)", elapsed)
 
 
 # =========================================================
@@ -742,22 +721,19 @@ async def entrypoint(ctx: agents.JobContext):
         job_ctx=ctx,
     )
 
-    # 6️⃣ PREWARMED VAD (REQUIRED — client-side activity detection)
-    vad = ctx.proc.userdata.get("vad")
-    if vad is None:
-        # prewarm_vad failed or never ran for this process. Fail loudly so
-        # LiveKit recycles the process rather than crashing every turn.
-        raise RuntimeError(
-            "Silero VAD not available in process userdata — prewarm did not complete"
-        )
-
-    # =====================================================
+# =====================================================
     # ✅ AGENT SESSION — Gemini Live (multimodal realtime)
     # =====================================================
-    # The Gemini Live model does STT + LLM + TTS in a single bidirectional
-    # stream, so we don't pass `stt=`, `tts=`, or `turn_detection=` —
-    # the model handles all three server-side. We keep `vad` for
-    # client-side activity tracking and pre-emption logic.
+    # The Gemini Live model does STT + LLM + TTS + turn detection in a
+    # single bidirectional stream. All of those layers happen server-side
+    # at Google, so we do NOT pass `vad=`, `min_endpointing_delay=`,
+    # `max_endpointing_delay=`, `allow_interruptions=`, or any other
+    # client-side endpointing knobs — they'd just add a redundant
+    # processing hop before the model sees the audio.
+    #
+    # Latency tuning lives on the RealtimeModel via `realtime_input_config`
+    # and `proactivity` — both of which push tightening to the model
+    # boundary where it actually matters.
     # https://ai.google.dev/gemini-api/docs/live
     chosen_voice = (config.get("voice_id") or "").strip()
     live_voice = chosen_voice if chosen_voice in _GEMINI_LIVE_VOICES else GEMINI_LIVE_DEFAULT_VOICE
@@ -771,12 +747,10 @@ async def entrypoint(ctx: agents.JobContext):
             model=GEMINI_LIVE_MODEL,
             voice=live_voice,
             language="en-US",
+            temperature=0.6,
+            realtime_input_config=_GEMINI_LIVE_REALTIME_INPUT_CONFIG,
+            proactivity=True,
         ),
-        vad=vad,
-        min_endpointing_delay=0.2,
-        max_endpointing_delay=1.5,
-        allow_interruptions=True,
-        min_interruption_duration=0.35,
     )
 
     await session.start(room=ctx.room, agent=agent)
@@ -859,7 +833,6 @@ if __name__ == "__main__":
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm_vad,
             api_key=LIVEKIT_API_KEY,
             api_secret=LIVEKIT_API_SECRET,
             ws_url=LIVEKIT_URL,
