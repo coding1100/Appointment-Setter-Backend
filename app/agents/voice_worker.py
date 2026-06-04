@@ -566,45 +566,36 @@ class VoiceAgent(Agent):
 
         line = (closing_line or "").strip() or self.DEFAULT_CLOSING_LINE
 
-        # Anti-double-goodbye:
-        # The LLM sometimes emits a brief acknowledgement ("Great, thanks!")
-        # in the same turn as end_call. That text is already being streamed
-        # to TTS as `current_speech` by the time this tool runs. If we then
-        # also call session.say(closing_line), the caller hears BOTH speeches
-        # back-to-back ("Great, thanks!" + the closing line) and the call
-        # sounds broken.
-        #
-        # Resolution: if a current speech exists, let it finish and use IT
-        # as the goodbye — don't say a second one. Only when nothing is
-        # in flight do we fall back to our deterministic closing line.
-        current = self.session.current_speech
-        if current is not None and not current.done:
-            try:
-                await asyncio.wait_for(current.wait_for_playout(), timeout=20.0)
-                logger.info(
-                    "[CALL] LLM-spoken closing drained; skipped tool say to avoid double goodbye",
-                )
-            except asyncio.TimeoutError:
-                logger.warning("[CALL] LLM closing line timed out; interrupting and saying fallback")
+        # Single-source-of-truth closing:
+        #   1. Forcibly interrupt whatever the LLM may have started
+        #      emitting in the same turn (Flash Lite occasionally tacks
+        #      a "Perfect, thanks!" onto the end_call turn — we don't
+        #      want that to play because it would race with our
+        #      deterministic closing line).
+        #   2. Speak OUR closing line via session.say(). This is the
+        #      only speech the caller hears.
+        #   3. Hard hangup via delete_room.
+        try:
+            current = self.session.current_speech
+            if current is not None and not current.done:
                 try:
                     current.interrupt()
-                except Exception:
-                    pass
-                try:
-                    handle = self.session.say(line)
-                    await asyncio.wait_for(handle.wait_for_playout(), timeout=15.0)
+                    logger.info("[CALL] interrupted in-flight LLM speech before closing line")
                 except Exception as exc:
-                    logger.warning("[CALL] fallback say failed: %s", exc, exc_info=True)
-        else:
-            # No LLM-emitted speech — speak our deterministic goodbye.
+                    logger.warning("[CALL] interrupt() raised: %s", exc)
+        except Exception:
+            pass
+
+        try:
+            handle = self.session.say(line, allow_interruptions=False)
             try:
-                handle = self.session.say(line)
-                try:
-                    await asyncio.wait_for(handle.wait_for_playout(), timeout=20.0)
-                except asyncio.TimeoutError:
-                    logger.warning("[CALL] timed out (20s) waiting for closing line playout")
-            except Exception as exc:
-                logger.warning("[CALL] error speaking closing line: %s", exc, exc_info=True)
+                # Tight timeout — a single closing sentence rarely needs
+                # more than ~6s of TTS; 12s is a generous safety margin.
+                await asyncio.wait_for(handle.wait_for_playout(), timeout=12.0)
+            except asyncio.TimeoutError:
+                logger.warning("[CALL] timed out (12s) playing closing line; hanging up anyway")
+        except Exception as exc:
+            logger.warning("[CALL] error speaking closing line: %s", exc, exc_info=True)
 
         # Step 3: hard hangup via room deletion — the only reliable way to
         # terminate the SIP participant. Falls back to aclose() only if the
@@ -779,13 +770,24 @@ async def entrypoint(ctx: agents.JobContext):
     await session.start(room=ctx.room, agent=agent)
     logger.info("[WORKER ENTRYPOINT] ✓ Agent session started")
 
-    # 7️⃣ Initial greeting
-    if greeting:
-        await session.generate_reply(
-            instructions=f"Greet the user by saying exactly: '{greeting}'"
-        )
-    else:
-        await session.generate_reply()
+    # 7️⃣ Initial greeting — spoken directly via TTS, NOT through the LLM.
+    # `session.generate_reply()` would trigger an LLM turn whose output races
+    # with whatever the prompt's step 1 ("GREETING") instructs, producing
+    # two greetings back-to-back. Using `session.say()` here makes the
+    # configured greeting message the single source of truth for the
+    # opening line; the prompt is updated to instruct the LLM to NOT speak
+    # a greeting (the system has already done it) and to wait for the
+    # caller's response. If no greeting is configured, a generic default
+    # is spoken so the line is never silent.
+    opening_line = (greeting or "").strip() or (
+        "Hello, thanks for calling. How can I help you today?"
+    )
+    try:
+        opening_handle = session.say(opening_line, allow_interruptions=False)
+        await asyncio.wait_for(opening_handle.wait_for_playout(), timeout=15.0)
+        logger.info("[WORKER ENTRYPOINT] Greeting played: %r", opening_line)
+    except Exception as exc:
+        logger.warning("[WORKER ENTRYPOINT] greeting playout error: %s", exc)
 
     closed_event = asyncio.Event()
 
