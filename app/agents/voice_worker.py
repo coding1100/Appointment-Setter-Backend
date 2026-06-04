@@ -309,25 +309,37 @@ class VoiceAgent(Agent):
     # ------------------------------------------------------------------
     # Tools: end the call cleanly
     # ------------------------------------------------------------------
-    async def _finish_call(self) -> str:
-        logger.info("[CALL] finishing call (tenant=%s call=%s)", self.tenant_id, self.call_id)
+    # The tool ITSELF owns the goodbye line. Previous design asked the LLM
+    # to speak the closing line, then call end_call — but the LLM did not
+    # reliably speak first, so `current_speech` was either None or a stale
+    # handle and `wait_for_playout()` hung the full timeout window. Owning
+    # the speech here removes the race: we call session.say() (which
+    # returns a SpeechHandle synchronously), await its wait_for_playout()
+    # so the audio actually drains to the caller, THEN aclose() to send
+    # the SIP BYE and let Twilio drop the line.
+    #
+    # Refs:
+    #   https://docs.livekit.io/agents/build/tools/    (function tool patterns)
+    #   https://docs.livekit.io/agents/voice-agent/    (session lifecycle)
+    DEFAULT_CLOSING_LINE = "Thanks for calling. Have a great day."
 
-        # CRITICAL: wait for the closing-line TTS to actually finish playing
-        # to the caller before tearing the session down. session.aclose()
-        # interrupts any in-flight speech, which is why the caller never
-        # heard the goodbye and LiveKit logged "speech not done in time
-        # after interruption, cancelling the speech arbitrarily" 5s later.
-        # Bounded wait so a stuck TTS can never deadlock the watchdog.
-        speech = getattr(self.session, "current_speech", None)
-        if speech is not None:
-            wait_for_playout = getattr(speech, "wait_for_playout", None)
-            if wait_for_playout is not None:
-                try:
-                    await asyncio.wait_for(wait_for_playout(), timeout=15.0)
-                except asyncio.TimeoutError:
-                    logger.warning("[CALL] timed out (15s) waiting for closing speech to finish")
-                except Exception as exc:
-                    logger.warning("[CALL] error awaiting closing speech: %s", exc)
+    async def _finish_call(self, closing_line: Optional[str] = None) -> str:
+        logger.info(
+            "[CALL] finishing call (tenant=%s call=%s)", self.tenant_id, self.call_id,
+        )
+
+        line = (closing_line or "").strip() or self.DEFAULT_CLOSING_LINE
+        try:
+            # Synchronous return — `say` schedules the speech and gives us a
+            # handle to track its lifecycle. `allow_interruptions=False`
+            # prevents an eager VAD frame from clipping the goodbye.
+            handle = self.session.say(line, allow_interruptions=False)
+            try:
+                await asyncio.wait_for(handle.wait_for_playout(), timeout=20.0)
+            except asyncio.TimeoutError:
+                logger.warning("[CALL] timed out (20s) playing out the closing line")
+        except Exception as exc:
+            logger.warning("[CALL] error speaking closing line: %s", exc, exc_info=True)
 
         try:
             await self.session.aclose()
@@ -338,14 +350,25 @@ class VoiceAgent(Agent):
         return "Call ended."
 
     @function_tool
-    async def end_call(self) -> str:
-        """End the call. Call ONLY after speaking the closing line."""
-        return await self._finish_call()
+    async def end_call(self, closing_line: str = "") -> str:
+        """End the call after speaking a short closing line.
+
+        Pass `closing_line` as the message you want the caller to hear
+        before the line drops (e.g. "You're all set — a confirmation is
+        on the way. Take care!"). If empty, a generic "Thanks for calling,
+        have a great day." is spoken. The tool speaks the line, waits for
+        it to finish playing, and then hangs up — do NOT speak it yourself
+        first or the caller will hear it twice.
+
+        Call exactly ONCE per call: after book_appointment succeeds, when
+        the caller asks to hang up, or after retry discipline is exhausted.
+        """
+        return await self._finish_call(closing_line=closing_line)
 
     @function_tool
-    async def close_session(self) -> str:
+    async def close_session(self, closing_line: str = "") -> str:
         """Legacy alias for end_call. Either name works."""
-        return await self._finish_call()
+        return await self._finish_call(closing_line=closing_line)
 
 
 # =========================================================
