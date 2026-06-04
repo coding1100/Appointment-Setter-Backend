@@ -261,23 +261,32 @@ class VoiceAgent(Agent):
             except Exception:
                 logger.exception("[BOOK] customer confirmation email send raised")
 
-        # Owner notification is a courtesy email, not load-bearing for the
-        # booking. Treat its failure as non-fatal — never let it sink the call.
+        # Team-notification email — uses the SAME generic `send_lead_notification`
+        # primitive that capture_lead uses, so the team inbox gets one
+        # consistent format for every captured "thing" across every agent
+        # vertical (appointment bookings AND lead captures). Non-fatal: we
+        # never let a flaky team email sink the booking.
+        team_email_sent = False
         try:
-            await self._notify_owner(
-                customer_name=customer_name,
-                customer_email=customer_email,
+            team_email_sent = await self._send_team_lead_notification_for_appointment(
+                customer_name=clean_name,
+                customer_phone=customer_phone.strip(),
+                customer_email=clean_email or "",
                 appointment_datetime=appointment_dt,
-                service_type=service_type,
-                service_address=service_address,
+                service_type=clean_service,
+                service_address=clean_address,
+                service_details=clean_details or "",
+                appointment_id=appointment.get("id") or "",
             )
         except Exception as exc:
-            logger.warning("[BOOK] Owner notification failed (non-fatal): %s", exc)
+            logger.warning("[BOOK] Team notification failed (non-fatal): %s", exc)
 
         self._booking_completed = True
         logger.info(
-            "[BOOK] Created appointment id=%s tenant=%s call=%s customer_email_sent=%s",
-            appointment.get("id"), self.tenant_id, self.call_id, customer_email_sent,
+            "[BOOK] Created appointment id=%s tenant=%s call=%s "
+            "customer_email_sent=%s team_email_sent=%s",
+            appointment.get("id"), self.tenant_id, self.call_id,
+            customer_email_sent, team_email_sent,
         )
         if customer_email_sent:
             return (
@@ -469,32 +478,69 @@ class VoiceAgent(Agent):
             )
         return "Appointment confirmation email sent successfully."
 
-    async def _notify_owner(
+    async def _send_team_lead_notification_for_appointment(
         self,
         customer_name: str,
+        customer_phone: str,
         customer_email: str,
         appointment_datetime: datetime,
         service_type: str,
         service_address: str,
-    ) -> None:
-        """Send the tenant-owner the new-booking notification, if configured."""
+        service_details: str = "",
+        appointment_id: str = "",
+    ) -> bool:
+        """Send the tenant's team a lead-shaped notification for a new booking.
+
+        Uses the same generic `send_lead_notification` primitive that
+        capture_lead uses, so the team inbox is consistent across every
+        agent vertical. Returns True on successful SMTP delivery, False
+        otherwise; the caller logs the bool for visibility.
+        """
         from app.services.email.service import EmailService
         from app.services.store import store
 
         if not self.tenant_id:
-            return
+            return False
         tenant = await store.get_tenant(self.tenant_id)
-        owner_email = (tenant or {}).get("owner_email")
-        if not owner_email:
-            return
-        await EmailService().send_appointment_owner_notification(
-            owner_email,
-            customer_name,
-            customer_email,
-            appointment_datetime,
-            service_type,
-            service_address,
-        )
+        if not tenant:
+            return False
+        team_email = (tenant.get("owner_email") or "").strip()
+        if not team_email:
+            return False
+
+        # Render the appointment as a lead payload — same shape Lisa uses,
+        # so the team email format is identical across agents.
+        when_pretty = appointment_datetime.strftime("%B %d, %Y at %I:%M %p %Z").strip()
+        summary = f"Appointment booked - {service_type or 'service'}"
+        if when_pretty:
+            summary += f", {when_pretty}"
+
+        details_lines = []
+        if service_type:
+            details_lines.append(f"Service: {service_type}")
+        if service_address:
+            details_lines.append(f"Address: {service_address}")
+        if when_pretty:
+            details_lines.append(f"When: {when_pretty}")
+        if service_details:
+            details_lines.append(f"Notes: {service_details}")
+        if appointment_id:
+            details_lines.append(f"Appointment ID: {appointment_id}")
+
+        lead_data = {
+            "tenant_id": self.tenant_id,
+            "tenant_name": (tenant.get("name") or "").strip(),
+            "call_id": self.call_id,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "agent_name": self.agent_name,
+            "service_type": self.service_type,
+            "customer_name": customer_name,
+            "customer_phone": customer_phone,
+            "customer_email": customer_email,
+            "summary": summary,
+            "details": "\n".join(details_lines),
+        }
+        return await EmailService().send_lead_notification(team_email, lead_data)
 
     # ------------------------------------------------------------------
     # Tools: end the call cleanly — official LiveKit SIP recipe
