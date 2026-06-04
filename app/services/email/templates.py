@@ -1,3 +1,4 @@
+from html import escape as _esc
 from typing import Any, Dict
 
 class EmailTemplates:
@@ -102,6 +103,84 @@ class EmailTemplates:
         </body>
         </html>
         """
+
+    @staticmethod
+    def lead_notification(data: Dict[str, Any]) -> tuple[str, str]:
+        """Generic new-lead notification — works for any voice agent.
+
+        `data` keys (all strings, missing/empty handled gracefully):
+            customer_name, customer_phone, customer_email
+            summary       — one-line headline of the lead
+            details       — multi-line free-form body, newlines preserved
+            agent_name    — which agent took the call (e.g. "Lisa")
+            service_type  — agent's vertical (e.g. "Scholarly Help")
+            tenant_name   — workspace name
+            call_id       — internal call id
+            captured_at   — ISO 8601 timestamp
+
+        All user-supplied values are HTML-escaped before interpolation.
+        Subject is deterministically built from `service_type`, `agent_name`,
+        and `summary` so operators can inbox-filter without touching code.
+        """
+        name = _esc(str(data.get("customer_name", "")).strip() or "Unknown")
+        phone = _esc(str(data.get("customer_phone", "")).strip() or "(not provided)")
+        email = _esc(str(data.get("customer_email", "")).strip() or "(not provided)")
+        summary = str(data.get("summary", "")).strip() or "(no summary)"
+        summary_esc = _esc(summary)
+        details_raw = str(data.get("details", "")).strip()
+        agent_name = str(data.get("agent_name", "")).strip()
+        service_type = str(data.get("service_type", "")).strip()
+        tenant_name = _esc(str(data.get("tenant_name", "")).strip() or "—")
+        call_id = _esc(str(data.get("call_id", "")).strip() or "n/a")
+        captured_at = _esc(str(data.get("captured_at", "")).strip() or "n/a")
+
+        # Subject layers: [vertical] from <agent>: <summary>
+        prefix = f"[{service_type}] " if service_type else ""
+        attribution = f"New lead from {agent_name}" if agent_name else "New lead"
+        subject = f"{prefix}{attribution}: {summary}"
+
+        # Phone -> tel: link, preserving raw digits/+ for href.
+        phone_for_href = "".join(ch for ch in str(data.get("customer_phone", "")) if ch.isdigit() or ch == "+")
+        phone_href = f"tel:{phone_for_href}" if phone_for_href else "#"
+
+        # Preserve newlines + spacing in details using <pre> with wrapping.
+        if details_raw:
+            details_html = (
+                f'<pre style="white-space:pre-wrap; font-family:inherit; margin:0;">'
+                f'{_esc(details_raw)}</pre>'
+            )
+        else:
+            details_html = '<em>(none captured)</em>'
+
+        header_title = f"New Lead — {service_type}" if service_type else "New Lead"
+
+        content = f"""
+            <p style="margin-top:0;">
+                <strong>{_esc(summary)}</strong>
+            </p>
+            <p>A caller just spoke with{f' <strong>{_esc(agent_name)}</strong>' if agent_name else ' the assistant'}
+               and is ready for follow-up.
+               <strong>Next step:</strong> contact them on the phone number below.</p>
+            <div class="details-box">
+                <table style="width:100%; border-collapse:collapse;">
+                    <tr><td style="padding:6px 12px 6px 0; vertical-align:top;"><strong>Name</strong></td>
+                        <td>{name}</td></tr>
+                    <tr><td style="padding:6px 12px 6px 0; vertical-align:top;"><strong>Phone</strong></td>
+                        <td><a href="{_esc(phone_href)}">{phone}</a></td></tr>
+                    <tr><td style="padding:6px 12px 6px 0; vertical-align:top;"><strong>Email</strong></td>
+                        <td>{email}</td></tr>
+                    <tr><td style="padding:6px 12px 6px 0; vertical-align:top;"><strong>Details</strong></td>
+                        <td>{details_html}</td></tr>
+                </table>
+            </div>
+            <p style="color:#666; font-size:12px; margin-bottom:0;">
+                Workspace: {tenant_name}
+                {f' &middot; Agent: {_esc(agent_name)}' if agent_name else ''}
+                {f' &middot; Vertical: {_esc(service_type)}' if service_type else ''}
+                <br>Captured at {captured_at} &middot; Call ID {call_id}
+            </p>
+        """
+        return subject, EmailTemplates._create_html_wrapper(header_title, content, header_color="#1d4ed8")
 
     @staticmethod
     def appointment_confirmation(data: Dict[str, Any]) -> tuple[str, str]:

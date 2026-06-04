@@ -297,6 +297,25 @@ class EmailService:
             logger.error(f"Error sending user setup invite email: {e}", exc_info=True)
             return False
 
+    async def send_lead_notification(
+        self,
+        team_email: str,
+        lead_data: dict,
+    ) -> bool:
+        """Generic new-lead team notification (vertical-agnostic).
+
+        `lead_data` shape — see EmailTemplates.lead_notification. Returns
+        True on a successful SMTP delivery, False otherwise; the caller
+        uses the bool to choose the LLM's closing line.
+        """
+        try:
+            subject, html = EmailTemplates.lead_notification(lead_data)
+            await self._send(subject, [team_email], html)
+            return True
+        except Exception as e:
+            logger.error("Error sending lead notification email: %s", e, exc_info=True)
+            return False
+
     async def send_password_reset_email(
         self,
         *,
