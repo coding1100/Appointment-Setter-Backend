@@ -1,152 +1,117 @@
-"""Email service — Resend HTTP API as the sole transport.
+"""Email service — SMTP transport via fastapi_mail.
 
-Official Python SDK: https://resend.com/docs/send-with-python
-REST reference:      https://resend.com/docs/api-reference/emails/send-email
-Errors:              https://resend.com/docs/api-reference/errors
-Domain verification: https://resend.com/docs/dashboard/domains/introduction
+Required environment (read via `EmailSettings`):
+  * MAIL_USERNAME, MAIL_PASSWORD  — SMTP credentials.
+  * MAIL_SERVER, MAIL_PORT        — host / port (e.g. smtp.gmail.com / 587).
+  * MAIL_FROM                     — From header.
+  * MAIL_STARTTLS, MAIL_SSL_TLS   — transport security flags.
+  * USE_CREDENTIALS, VALIDATE_CERTS
 
-Required environment:
-  * RESEND_API_KEY    — Resend API key with "Sending access".
-  * RESEND_FROM_EMAIL — From address. Format: "noreply@yourdomain.com" or
-                        "Display Name <noreply@yourdomain.com>". The domain
-                        must be verified on the Resend dashboard before any
-                        send is accepted (the documented exception is
-                        Resend's own "onboarding@resend.dev" address, which
-                        is fine for early testing).
-
-Optional environment:
-  * RESEND_REPLY_TO   — explicit reply-to (defaults to the From address).
-
-Behaviour:
-  * The Resend Python SDK is synchronous. We invoke it via
-    `asyncio.to_thread(...)` so the event loop is never blocked during
-    the HTTPS round-trip.
-  * `_send()` raises on hard failure; the public `send_*` methods catch
-    and return False so a single email hiccup never sinks a booking.
-  * Every send logs a single structured line: success carries the Resend
-    message id; failure carries the exception text so the operator can see
-    "unverified domain", "invalid api key", etc. straight from the docs.
+Gmail-From defense:
+  Gmail's SMTP relay rejects sends where the `From` header doesn't match
+  the authenticated MAIL_USERNAME unless that address is registered as a
+  verified "Send mail as" alias on the Gmail account. To prevent the
+  silent failure mode (booking succeeds but the email is rejected at the
+  SMTP layer), this service detects MAIL_SERVER == smtp.gmail.com /
+  smtp.googlemail.com and, when MAIL_FROM doesn't match MAIL_USERNAME,
+  silently overrides the From to MAIL_USERNAME and logs ONE warning at
+  startup so the operator can fix the .env or switch to a real
+  transactional provider.
 """
 
-import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-import resend
+from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 
 from app.core.config import email_settings
 from app.services.email.templates import EmailTemplates
 
 logger = logging.getLogger(__name__)
 
-# From values that look like a placeholder from .env.example — treat as
-# "not configured" so we never silently mail with "noreply@your-domain.com".
-_PLACEHOLDER_FROM_FRAGMENTS = ("your-domain.com", "example.com", "yourcompany.com")
-
-
-def _is_real_email_or_pair(value: str) -> bool:
-    """Accept either "addr@domain" or "Display Name <addr@domain>"."""
-    value = (value or "").strip()
-    if "@" not in value:
-        return False
-    lower = value.lower()
-    return not any(frag in lower for frag in _PLACEHOLDER_FROM_FRAGMENTS)
-
 
 class EmailService:
-    """Resend-backed email service.
+    """SMTP-backed email service.
 
-    Public method signatures are unchanged from the prior implementations
-    (fastapi_mail -> SendGrid -> Resend), so callers (appointment_service,
-    voice worker, auth flow, tests) need no edits.
+    Public method signatures are stable across the codebase's transport
+    history (this is the path of record again now); callers — the voice
+    worker, appointment service, auth flow, and the existing test suite —
+    need no edits when this module is swapped.
     """
 
     def __init__(self) -> None:
-        self._api_key: str = (email_settings.RESEND_API_KEY or "").strip()
-        self._from_email: str = (
-            email_settings.RESEND_FROM_EMAIL.strip()
-            if _is_real_email_or_pair(email_settings.RESEND_FROM_EMAIL)
-            else ""
-        )
-        self._reply_to: Optional[str] = (
-            email_settings.RESEND_REPLY_TO.strip()
-            if _is_real_email_or_pair(email_settings.RESEND_REPLY_TO)
-            else None
-        )
+        # Gmail-From defense: override From -> MAIL_USERNAME if the SMTP
+        # server is Gmail and the two don't match.
+        effective_from = email_settings.MAIL_FROM
+        server = (email_settings.MAIL_SERVER or "").strip().lower()
+        is_gmail = server in ("smtp.gmail.com", "smtp.googlemail.com")
+        if (
+            is_gmail
+            and email_settings.MAIL_USERNAME
+            and effective_from
+            and effective_from.strip().lower() != email_settings.MAIL_USERNAME.strip().lower()
+        ):
+            logger.warning(
+                "[EMAIL] Gmail SMTP requires MAIL_FROM to match the "
+                "authenticated MAIL_USERNAME; overriding From '%s' -> '%s' "
+                "so mail still sends. Update .env (or set up 'Send mail as' "
+                "in Gmail) to silence this.",
+                effective_from, email_settings.MAIL_USERNAME,
+            )
+            effective_from = email_settings.MAIL_USERNAME
 
-        # The SDK reads its key from a module-level attribute; safe to set
-        # repeatedly (idempotent) and harmless if the key is empty — the
-        # send call itself will surface the auth error.
-        if self._api_key:
-            resend.api_key = self._api_key
-            logger.info(
-                "[EMAIL] transport=resend from=%s reply_to=%s",
-                self._from_email or "<unset>",
-                self._reply_to or self._from_email or "<unset>",
-            )
-        else:
-            logger.error(
-                "[EMAIL] RESEND_API_KEY is not configured — email sends will fail."
-            )
+        self._from_email = effective_from
 
-        if not self._from_email:
-            logger.error(
-                "[EMAIL] RESEND_FROM_EMAIL is not configured (or looks like a "
-                "placeholder). Set it to a verified Resend sender — see "
-                "https://resend.com/docs/dashboard/domains/introduction"
-            )
+        self.conf = ConnectionConfig(
+            MAIL_USERNAME=email_settings.MAIL_USERNAME,
+            MAIL_PASSWORD=email_settings.MAIL_PASSWORD,
+            MAIL_FROM=effective_from,
+            MAIL_PORT=email_settings.MAIL_PORT,
+            MAIL_SERVER=email_settings.MAIL_SERVER,
+            MAIL_STARTTLS=email_settings.MAIL_STARTTLS,
+            MAIL_SSL_TLS=email_settings.MAIL_SSL_TLS,
+            USE_CREDENTIALS=email_settings.USE_CREDENTIALS,
+            VALIDATE_CERTS=email_settings.VALIDATE_CERTS,
+        )
+        self.fm = FastMail(self.conf)
+
+        logger.info(
+            "[EMAIL] transport=smtp server=%s from=%s",
+            email_settings.MAIL_SERVER or "<unset>",
+            self._from_email or "<unset>",
+        )
 
     # ------------------------------------------------------------------
     # Transport
     # ------------------------------------------------------------------
     async def _send(self, subject: str, recipients: List[str], html_body: str) -> None:
-        """Send via Resend; raises on hard failure.
+        """Send via SMTP; raises on hard failure.
 
-        Resend documents specific error codes (401 missing/restricted key,
-        403 unverified domain, 422 invalid From, 429 quota/rate). The SDK
-        surfaces these as exceptions which we let propagate to the caller
-        after logging.
+        Callers (the public send_* methods below) catch and return False so
+        a single email hiccup never sinks a booking.
         """
-        if not self._api_key:
-            raise RuntimeError("RESEND_API_KEY is not configured")
-        if not self._from_email:
-            raise RuntimeError("RESEND_FROM_EMAIL is not configured")
         if not recipients:
             raise ValueError("send() called with no recipients")
 
-        # Per https://resend.com/docs/api-reference/emails/send-email
-        params: Dict = {
-            "from": self._from_email,
-            "to": list(recipients),
-            "subject": subject,
-            "html": html_body,
-        }
-        if self._reply_to:
-            params["reply_to"] = self._reply_to
-
+        message = MessageSchema(
+            subject=subject,
+            recipients=recipients,
+            body=html_body,
+            subtype=MessageType.html,
+        )
         try:
-            # SDK is sync; offload the HTTPS round-trip to a worker thread.
-            response = await asyncio.to_thread(resend.Emails.send, params)
+            await self.fm.send_message(message)
         except Exception as exc:
-            # Surface the exact provider message — for the common
-            # misconfigurations Resend's docs document the failure mode
-            # right there in the error text (unverified domain, invalid
-            # api key, daily quota exceeded, etc.).
             logger.error(
-                "[EMAIL] Resend send failed for to=%s subject=%r: %s",
+                "[EMAIL] smtp send failed for to=%s subject=%r: %s",
                 recipients, subject, exc, exc_info=True,
             )
             raise
-
-        message_id = (response or {}).get("id") if isinstance(response, dict) else getattr(response, "id", None)
-        logger.info(
-            "[EMAIL] sent (resend) to=%s subject=%r id=%s",
-            recipients, subject, message_id or "<unknown>",
-        )
+        logger.info("[EMAIL] sent (smtp) to=%s subject=%r", recipients, subject)
 
     # ------------------------------------------------------------------
-    # Public send_* methods (signatures unchanged across transport swaps)
+    # Public send_* methods (signatures stable across transport swaps)
     # ------------------------------------------------------------------
     async def send_raw_email(self, to_email: str, subject: str, body: str) -> str:
         """Generic raw send used by the AI agent tool."""

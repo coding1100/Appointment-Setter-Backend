@@ -229,13 +229,13 @@ class VoiceAgent(Agent):
 
         # Send the customer confirmation ourselves so we can read the
         # boolean status. `send_appointment_confirmation` catches its own
-        # provider errors and returns False, logging the cause; we use
-        # that signal to tell the LLM the truth instead of empty-promising
-        # an email that never went out (common Resend causes per
-        # https://resend.com/docs/api-reference/errors : unverified
-        # RESEND_FROM_EMAIL domain (403), invalid RESEND_API_KEY (401), or
-        # daily/monthly quota exceeded (429)). The booking still succeeds
-        # in the DB regardless.
+        # SMTP errors and returns False, logging the cause; we use that
+        # signal to tell the LLM the truth instead of empty-promising an
+        # email that never went out (common SMTP causes: MAIL_FROM domain
+        # does not match the authenticated SMTP user — handled by the
+        # Gmail-From defense in EmailService — or auth failure, or the
+        # SMTP server unreachable). The booking still succeeds in the DB
+        # regardless.
         customer_email_sent = False
         if clean_email:
             try:
@@ -381,18 +381,45 @@ class VoiceAgent(Agent):
 
         line = (closing_line or "").strip() or self.DEFAULT_CLOSING_LINE
 
-        # Step 1+2: speak goodbye and wait for the TTS to fully drain. We
-        # do NOT touch self.session.current_speech — per the official
-        # recipe, queuing behind any in-flight speech with `say` is the
-        # right behaviour. Bounded wait so a stuck TTS can't deadlock.
-        try:
-            handle = self.session.say(line)
+        # Anti-double-goodbye:
+        # The LLM sometimes emits a brief acknowledgement ("Great, thanks!")
+        # in the same turn as end_call. That text is already being streamed
+        # to TTS as `current_speech` by the time this tool runs. If we then
+        # also call session.say(closing_line), the caller hears BOTH speeches
+        # back-to-back ("Great, thanks!" + the closing line) and the call
+        # sounds broken.
+        #
+        # Resolution: if a current speech exists, let it finish and use IT
+        # as the goodbye — don't say a second one. Only when nothing is
+        # in flight do we fall back to our deterministic closing line.
+        current = self.session.current_speech
+        if current is not None and not current.done:
             try:
-                await asyncio.wait_for(handle.wait_for_playout(), timeout=20.0)
+                await asyncio.wait_for(current.wait_for_playout(), timeout=20.0)
+                logger.info(
+                    "[CALL] LLM-spoken closing drained; skipped tool say to avoid double goodbye",
+                )
             except asyncio.TimeoutError:
-                logger.warning("[CALL] timed out (20s) waiting for closing line playout")
-        except Exception as exc:
-            logger.warning("[CALL] error speaking closing line: %s", exc, exc_info=True)
+                logger.warning("[CALL] LLM closing line timed out; interrupting and saying fallback")
+                try:
+                    current.interrupt()
+                except Exception:
+                    pass
+                try:
+                    handle = self.session.say(line)
+                    await asyncio.wait_for(handle.wait_for_playout(), timeout=15.0)
+                except Exception as exc:
+                    logger.warning("[CALL] fallback say failed: %s", exc, exc_info=True)
+        else:
+            # No LLM-emitted speech — speak our deterministic goodbye.
+            try:
+                handle = self.session.say(line)
+                try:
+                    await asyncio.wait_for(handle.wait_for_playout(), timeout=20.0)
+                except asyncio.TimeoutError:
+                    logger.warning("[CALL] timed out (20s) waiting for closing line playout")
+            except Exception as exc:
+                logger.warning("[CALL] error speaking closing line: %s", exc, exc_info=True)
 
         # Step 3: hard hangup via room deletion — the only reliable way to
         # terminate the SIP participant. Falls back to aclose() only if the

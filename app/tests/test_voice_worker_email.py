@@ -101,8 +101,8 @@ def test_send_appointment_confirmation_email_integration(monkeypatch):
     if not recipient or not owner_recipient:
         pytest.skip("Set SMTP_TEST_RECIPIENT and SMTP_TEST_OWNER_RECIPIENT to enable SMTP integration test")
 
-    if not (email_settings.RESEND_API_KEY and email_settings.RESEND_FROM_EMAIL):
-        pytest.skip("Resend email settings are not configured")
+    if not (email_settings.MAIL_USERNAME and email_settings.MAIL_SERVER):
+        pytest.skip("Email settings are not configured")
 
     async def fake_get_tenant(tenant_id):
         return {"id": tenant_id, "owner_email": owner_recipient}
