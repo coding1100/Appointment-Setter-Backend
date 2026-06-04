@@ -134,10 +134,18 @@ class VoiceAgent(Agent):
         instructions: str,
         tenant_id: Optional[str],
         call_id: Optional[str] = None,
+        job_ctx: Optional[agents.JobContext] = None,
     ):
         super().__init__(instructions=instructions)
         self.tenant_id = tenant_id
         self.call_id = call_id
+        # JobContext is the official handle for ending a SIP call —
+        # `job_ctx.api.room.delete_room(...)` disconnects the SIP participant
+        # (Twilio's leg) and drops the caller's phone. session.aclose() does
+        # NOT reliably terminate SIP, which is the production symptom we saw
+        # ("speech not done in time after interruption", "entrypoint did not
+        # exit in time"). Ref: https://docs.livekit.io/recipes/sip_lifecycle/
+        self._job_ctx = job_ctx
         self._booking_completed = False  # idempotency guard for book_appointment
 
     # ------------------------------------------------------------------
@@ -348,20 +356,20 @@ class VoiceAgent(Agent):
         )
 
     # ------------------------------------------------------------------
-    # Tools: end the call cleanly
+    # Tools: end the call cleanly — official LiveKit SIP recipe
     # ------------------------------------------------------------------
-    # The tool ITSELF owns the goodbye line. Previous design asked the LLM
-    # to speak the closing line, then call end_call — but the LLM did not
-    # reliably speak first, so `current_speech` was either None or a stale
-    # handle and `wait_for_playout()` hung the full timeout window. Owning
-    # the speech here removes the race: we call session.say() (which
-    # returns a SpeechHandle synchronously), await its wait_for_playout()
-    # so the audio actually drains to the caller, THEN aclose() to send
-    # the SIP BYE and let Twilio drop the line.
+    # Sequence (per https://docs.livekit.io/recipes/sip_lifecycle/):
+    #   1. session.say(closing_line)        — schedule the goodbye TTS
+    #   2. await handle.wait_for_playout()  — block until audio fully drains
+    #   3. job_ctx.api.room.delete_room(...) — disconnect SIP participant
     #
-    # Refs:
-    #   https://docs.livekit.io/agents/build/tools/    (function tool patterns)
-    #   https://docs.livekit.io/agents/voice-agent/    (session lifecycle)
+    # Why delete_room and not session.aclose():
+    #   "Deleting the room disconnects all remote users, including SIP
+    #    callers." — https://docs.livekit.io/agents/prebuilt/tools/end-call-tool/
+    # session.aclose() is the agent's view of teardown and does not
+    # reliably propagate SIP BYE to Twilio. The earlier production error
+    # ("speech not done in time after interruption, cancelling the speech
+    # arbitrarily") was the symptom of aclose() racing in-flight speech.
     DEFAULT_CLOSING_LINE = "Thanks for calling. Have a great day."
 
     async def _finish_call(self, closing_line: Optional[str] = None) -> str:
@@ -370,23 +378,44 @@ class VoiceAgent(Agent):
         )
 
         line = (closing_line or "").strip() or self.DEFAULT_CLOSING_LINE
+
+        # Step 1+2: speak goodbye and wait for the TTS to fully drain. We
+        # do NOT touch self.session.current_speech — per the official
+        # recipe, queuing behind any in-flight speech with `say` is the
+        # right behaviour. Bounded wait so a stuck TTS can't deadlock.
         try:
-            # Synchronous return — `say` schedules the speech and gives us a
-            # handle to track its lifecycle. `allow_interruptions=False`
-            # prevents an eager VAD frame from clipping the goodbye.
-            handle = self.session.say(line, allow_interruptions=False)
+            handle = self.session.say(line)
             try:
                 await asyncio.wait_for(handle.wait_for_playout(), timeout=20.0)
             except asyncio.TimeoutError:
-                logger.warning("[CALL] timed out (20s) playing out the closing line")
+                logger.warning("[CALL] timed out (20s) waiting for closing line playout")
         except Exception as exc:
             logger.warning("[CALL] error speaking closing line: %s", exc, exc_info=True)
+
+        # Step 3: hard hangup via room deletion — the only reliable way to
+        # terminate the SIP participant. Falls back to aclose() only if the
+        # job context isn't available.
+        if self._job_ctx is not None:
+            try:
+                from livekit import api as lk_api
+
+                await self._job_ctx.api.room.delete_room(
+                    lk_api.DeleteRoomRequest(room=self._job_ctx.room.name)
+                )
+                logger.info(
+                    "[CALL] room deleted; SIP participant disconnected (tenant=%s call=%s)",
+                    self.tenant_id, self.call_id,
+                )
+                return "Call ended."
+            except Exception as exc:
+                logger.warning(
+                    "[CALL] delete_room failed (%s); falling back to session.aclose()",
+                    exc,
+                )
 
         try:
             await self.session.aclose()
         except Exception as exc:
-            # aclose() may race with the watchdog/cleanup. Log and swallow —
-            # the session will still end via on_close.
             logger.warning("[CALL] aclose() raised during finish: %s", exc)
         return "Call ended."
 
@@ -490,8 +519,14 @@ async def entrypoint(ctx: agents.JobContext):
 
     greeting = config.get("agent_data", {}).get("greeting_message")
 
-    # 5️⃣ Create agent + TTS
-    agent = VoiceAgent(instructions=instructions, tenant_id=tenant_id, call_id=call_id)
+    # 5️⃣ Create agent + TTS. Pass the JobContext through so the agent can
+    # call `ctx.api.room.delete_room(...)` for the official SIP hangup.
+    agent = VoiceAgent(
+        instructions=instructions,
+        tenant_id=tenant_id,
+        call_id=call_id,
+        job_ctx=ctx,
+    )
     tts = get_tts_service(config.get("voice_id"), "en")
 
     # 6️⃣ PREWARMED VAD (REQUIRED)

@@ -9,10 +9,35 @@ from app.services.email.templates import EmailTemplates
 
 class EmailService:
     def __init__(self):
+        # Gmail SMTP (smtp.gmail.com / smtp.googlemail.com) rejects any
+        # send where the From header doesn't match the authenticated user,
+        # unless that From is set up as a verified alias on the Gmail
+        # account. If MAIL_SERVER is Gmail and MAIL_FROM != MAIL_USERNAME,
+        # we override From to the authenticated user so mail still goes
+        # out — and log loudly so the operator knows the .env should be
+        # corrected (or moved to a real transactional provider).
+        effective_from = email_settings.MAIL_FROM
+        server = (email_settings.MAIL_SERVER or "").strip().lower()
+        is_gmail = server in ("smtp.gmail.com", "smtp.googlemail.com")
+        if (
+            is_gmail
+            and email_settings.MAIL_USERNAME
+            and effective_from
+            and effective_from.strip().lower() != email_settings.MAIL_USERNAME.strip().lower()
+        ):
+            logging.warning(
+                "[EMAIL] Gmail SMTP requires MAIL_FROM to match the "
+                "authenticated MAIL_USERNAME; overriding From '%s' -> '%s' "
+                "so mail still sends. Update .env (or use a domain-verified "
+                "transactional provider) to silence this.",
+                effective_from, email_settings.MAIL_USERNAME,
+            )
+            effective_from = email_settings.MAIL_USERNAME
+
         self.conf = ConnectionConfig(
             MAIL_USERNAME=email_settings.MAIL_USERNAME,
             MAIL_PASSWORD=email_settings.MAIL_PASSWORD,
-            MAIL_FROM=email_settings.MAIL_FROM,
+            MAIL_FROM=effective_from,
             MAIL_PORT=email_settings.MAIL_PORT,
             MAIL_SERVER=email_settings.MAIL_SERVER,
             MAIL_STARTTLS=email_settings.MAIL_STARTTLS,
