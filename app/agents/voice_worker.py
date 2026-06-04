@@ -19,6 +19,7 @@ from livekit.plugins.google.realtime import RealtimeModel
 from google.genai.types import (
     AutomaticActivityDetection,
     EndSensitivity,
+    Modality,
     RealtimeInputConfig,
     StartSensitivity,
 )
@@ -95,14 +96,15 @@ def _parse_iso_datetime(value: str) -> datetime:
 class VoiceAgent(Agent):
     """Voice agent with the tools the prompt actually calls.
 
-    Three tools are exposed to the LLM:
-      * ``book_appointment`` — persist the booking and send confirmation
-        emails. Call exactly once after the user has confirmed every field.
-      * ``send_appointment_confirmation_email`` — direct email primitive
-        (customer + owner). Also callable directly from tests/admin code.
-      * ``end_call`` / ``close_session`` — terminate the session AFTER the
-        LLM has spoken the closing line. Both names exist so existing prompts
-        that reference ``close_session`` keep working; they share one impl.
+    Tools exposed to the LLM (kept minimal — every extra @function_tool
+    inflates the per-turn schema the model evaluates):
+      * ``book_appointment`` — appointment-booking agents; persists + emails.
+      * ``capture_lead``     — lead-capture agents (e.g. Lisa); emails team.
+      * ``end_call``         — terminate the session after the closing line.
+
+    Internal helpers (not @function_tool):
+      * ``send_appointment_confirmation_email`` — direct email primitive,
+        used by tests; not visible to the LLM.
     """
 
     def __init__(
@@ -624,11 +626,6 @@ class VoiceAgent(Agent):
         """
         return await self._finish_call(closing_line=closing_line)
 
-    @function_tool
-    async def close_session(self, closing_line: str = "") -> str:
-        """Legacy alias for end_call. Either name works."""
-        return await self._finish_call(closing_line=closing_line)
-
 
 # =========================================================
 # ENTRYPOINT
@@ -700,12 +697,22 @@ async def entrypoint(ctx: agents.JobContext):
         call_id = config.get("call_id") or config.get("session_id")
         logger.info(f"[WORKER ENTRYPOINT] Loaded browser test config for tenant: {tenant_id}, call_id: {call_id}")
 
-    # 4️⃣ Build instructions
+    # 4️⃣ Build instructions. Append the configured greeting as an explicit
+    # opening-line directive so the Live model produces it as its very first
+    # turn — no per-turn `instructions=...` round-trip needed. Falling back
+    # to a generic greeting if the agent record didn't configure one.
     service_type = config.get("service_type", "Home Services")
     agent_name = config.get("agent_data", {}).get("name", "Assistant")
     instructions = get_template(service_type=service_type, agent_name=agent_name)
 
-    greeting = config.get("agent_data", {}).get("greeting_message")
+    greeting = (config.get("agent_data", {}).get("greeting_message") or "").strip() or (
+        "Hello, thanks for calling. How can I help you today?"
+    )
+    instructions = (
+        f"{instructions}\n\n"
+        "# OPENING LINE (say this verbatim as your very first turn — exactly these words, nothing else)\n"
+        f"{greeting}\n"
+    )
 
     # 5️⃣ Create agent. Pass the JobContext through so the agent can call
     # `ctx.api.room.delete_room(...)` for the official SIP hangup.
@@ -747,7 +754,12 @@ async def entrypoint(ctx: agents.JobContext):
             model=GEMINI_LIVE_MODEL,
             voice=live_voice,
             language="en-US",
-            temperature=0.6,
+            temperature=0.4,
+            # Audio-only output — no parallel text generation overhead.
+            modalities=[Modality.AUDIO],
+            # Skip server-side transcription we never read.
+            input_audio_transcription=None,
+            output_audio_transcription=None,
             realtime_input_config=_GEMINI_LIVE_REALTIME_INPUT_CONFIG,
             proactivity=True,
         ),
@@ -756,25 +768,14 @@ async def entrypoint(ctx: agents.JobContext):
     await session.start(room=ctx.room, agent=agent)
     logger.info("[WORKER ENTRYPOINT] ✓ Agent session started")
 
-    # 7️⃣ Initial greeting. Gemini Live generates audio server-side, so
-    # `session.say(text)` is not supported on this realtime session. The
-    # right primitive is `session.generate_reply(instructions=...)` —
-    # we tell the Live model the exact greeting to speak as a per-turn
-    # instruction. This keeps the configured `greeting_message` as the
-    # single source of truth for the opening line.
-    opening_line = (greeting or "").strip() or (
-        "Hello, thanks for calling. How can I help you today?"
-    )
+    # 7️⃣ Trigger the Live model's first turn. The OPENING LINE directive
+    # appended to the prompt above tells the model exactly what to say;
+    # we just need to nudge it to start (Gemini Live doesn't auto-emit
+    # without a generate_reply call).
     try:
-        opening_handle = session.generate_reply(
-            instructions=(
-                f"Greet the caller now by saying exactly: \"{opening_line}\". "
-                "Do not add any other words. After speaking, wait for the "
-                "caller's response."
-            ),
-        )
+        opening_handle = session.generate_reply()
         await asyncio.wait_for(opening_handle.wait_for_playout(), timeout=15.0)
-        logger.info("[WORKER ENTRYPOINT] Greeting played: %r", opening_line)
+        logger.info("[WORKER ENTRYPOINT] Greeting played: %r", greeting)
     except Exception as exc:
         logger.warning("[WORKER ENTRYPOINT] greeting playout error: %s", exc)
 
