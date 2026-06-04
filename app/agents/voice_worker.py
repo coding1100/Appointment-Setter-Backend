@@ -14,9 +14,9 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from livekit import agents
-from livekit.agents import Agent, AgentSession, function_tool, tts
-from livekit.plugins import deepgram, google, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.agents import Agent, AgentSession, function_tool
+from livekit.plugins import silero
+from livekit.plugins.google.realtime import RealtimeModel
 
 from app.core.async_redis import async_redis_client
 from app.core.config import (
@@ -25,7 +25,18 @@ from app.core.config import (
     LIVEKIT_URL,
 )
 from app.core.prompts import get_template
-from app.services.tts_provider import build_tts_with_fallback
+
+# Gemini Live voices supported by `gemini-live-2.5-flash-native-audio`.
+# https://ai.google.dev/gemini-api/docs/live#voices
+_GEMINI_LIVE_VOICES = frozenset({
+    "Achernar", "Achird", "Algenib", "Algieba", "Alnilam", "Aoede", "Autonoe",
+    "Callirrhoe", "Charon", "Despina", "Enceladus", "Erinome", "Fenrir",
+    "Gacrux", "Iapetus", "Kore", "Laomedeia", "Leda", "Orus", "Pulcherrima",
+    "Puck", "Rasalgethi", "Sadachbia", "Sadaltager", "Schedar", "Sulafat",
+    "Umbriel", "Vindemiatrix", "Zephyr", "Zubenelgenubi",
+})
+GEMINI_LIVE_DEFAULT_VOICE = "Puck"
+GEMINI_LIVE_MODEL = "gemini-live-2.5-flash-native-audio"
 
 # Hard upper bound on any single call. Even if the LLM ignores the prompt's
 # "call end_call after the closing line" instruction, this watchdog guarantees
@@ -36,10 +47,6 @@ MAX_CALL_DURATION_SECONDS = int(os.environ.get("VOICE_AGENT_MAX_CALL_DURATION", 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VoiceAgentWorker")
-
-TTS_CACHE: Dict[str, tts.TTS] = {}
-DEFAULT_TTS_CACHE_KEY = "__default__"
-MAX_HISTORY_LOG_LINES = 40
 
 
 # =========================================================
@@ -80,20 +87,6 @@ def prewarm_vad(proc: agents.JobProcess):
         raise
     elapsed = time.monotonic() - started
     logger.info("[VAD] ✓ Silero VAD ready (%.2fs)", elapsed)
-
-
-# =========================================================
-# TTS CACHE
-# =========================================================
-def get_tts_service(voice_id: Optional[str], language_code: str) -> tts.TTS:
-    cache_key = voice_id or DEFAULT_TTS_CACHE_KEY
-
-    if cache_key in TTS_CACHE:
-        return TTS_CACHE[cache_key]
-
-    tts_service = build_tts_with_fallback(voice_id=voice_id, language_code=language_code)
-    TTS_CACHE[cache_key] = tts_service
-    return tts_service
 
 
 # =========================================================
@@ -723,8 +716,8 @@ async def entrypoint(ctx: agents.JobContext):
 
     greeting = config.get("agent_data", {}).get("greeting_message")
 
-    # 5️⃣ Create agent + TTS. Pass the JobContext through so the agent can
-    # call `ctx.api.room.delete_room(...)` for the official SIP hangup.
+    # 5️⃣ Create agent. Pass the JobContext through so the agent can call
+    # `ctx.api.room.delete_room(...)` for the official SIP hangup.
     # agent_name + service_type are forwarded so the generic capture_lead
     # tool can auto-inject them into the team notification email without
     # the LLM having to know its own identity.
@@ -736,9 +729,8 @@ async def entrypoint(ctx: agents.JobContext):
         service_type=service_type,
         job_ctx=ctx,
     )
-    tts = get_tts_service(config.get("voice_id"), "en")
 
-    # 6️⃣ PREWARMED VAD (REQUIRED)
+    # 6️⃣ PREWARMED VAD (REQUIRED — client-side activity detection)
     vad = ctx.proc.userdata.get("vad")
     if vad is None:
         # prewarm_vad failed or never ran for this process. Fail loudly so
@@ -748,21 +740,29 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
     # =====================================================
-    # ✅ AGENT SESSION (VAD + TURN DETECTOR)
+    # ✅ AGENT SESSION — Gemini Live (multimodal realtime)
     # =====================================================
+    # The Gemini Live model does STT + LLM + TTS in a single bidirectional
+    # stream, so we don't pass `stt=`, `tts=`, or `turn_detection=` —
+    # the model handles all three server-side. We keep `vad` for
+    # client-side activity tracking and pre-emption logic.
+    # https://ai.google.dev/gemini-api/docs/live
+    chosen_voice = (config.get("voice_id") or "").strip()
+    live_voice = chosen_voice if chosen_voice in _GEMINI_LIVE_VOICES else GEMINI_LIVE_DEFAULT_VOICE
+    logger.info(
+        "[REALTIME] Using Gemini Live model=%s voice=%s (requested=%r)",
+        GEMINI_LIVE_MODEL, live_voice, chosen_voice or None,
+    )
+
     session = AgentSession(
-        stt=deepgram.STT(model="nova-2-general", language="en-US"),
-        llm=google.LLM(model="gemini-2.5-flash-lite"),
-        tts=tts,
+        llm=RealtimeModel(
+            model=GEMINI_LIVE_MODEL,
+            voice=live_voice,
+            language="en-US",
+        ),
         vad=vad,
-
-        # 🔥 LiveKit Turn Detector (official recommendation)
-        turn_detection=MultilingualModel(),
-
-        # Endpointing tuned for telephony
-        min_endpointing_delay=0.35,
-        max_endpointing_delay=2.5,
-
+        min_endpointing_delay=0.2,
+        max_endpointing_delay=1.5,
         allow_interruptions=True,
         min_interruption_duration=0.35,
     )
