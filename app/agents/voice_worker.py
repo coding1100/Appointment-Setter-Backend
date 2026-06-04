@@ -311,6 +311,24 @@ class VoiceAgent(Agent):
     # ------------------------------------------------------------------
     async def _finish_call(self) -> str:
         logger.info("[CALL] finishing call (tenant=%s call=%s)", self.tenant_id, self.call_id)
+
+        # CRITICAL: wait for the closing-line TTS to actually finish playing
+        # to the caller before tearing the session down. session.aclose()
+        # interrupts any in-flight speech, which is why the caller never
+        # heard the goodbye and LiveKit logged "speech not done in time
+        # after interruption, cancelling the speech arbitrarily" 5s later.
+        # Bounded wait so a stuck TTS can never deadlock the watchdog.
+        speech = getattr(self.session, "current_speech", None)
+        if speech is not None:
+            wait_for_playout = getattr(speech, "wait_for_playout", None)
+            if wait_for_playout is not None:
+                try:
+                    await asyncio.wait_for(wait_for_playout(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    logger.warning("[CALL] timed out (15s) waiting for closing speech to finish")
+                except Exception as exc:
+                    logger.warning("[CALL] error awaiting closing speech: %s", exc)
+
         try:
             await self.session.aclose()
         except Exception as exc:
