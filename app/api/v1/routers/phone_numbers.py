@@ -8,13 +8,13 @@ from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.v1.routers.auth import get_current_user_from_token, require_admin_role, verify_tenant_access
+from app.api.v1.routers.auth import get_current_user_from_token, require_admin_role, require_app_access, verify_tenant_access
 from app.api.v1.schemas.phone_number import AgentPhoneAssignment, PhoneNumberCreate, PhoneNumberResponse, PhoneNumberUpdate
 from app.api.v1.services.phone_number import phone_number_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"])
+router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"], dependencies=[Depends(require_app_access("appointment_setter"))])
 
 
 @router.post("/tenant/{tenant_id}", response_model=PhoneNumberResponse, status_code=status.HTTP_201_CREATED)

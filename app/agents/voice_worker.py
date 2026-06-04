@@ -9,7 +9,7 @@ This worker connects to LiveKit and handles voice agent sessions for inbound tel
 import asyncio
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, function_tool, tts
@@ -21,12 +21,6 @@ from app.core.config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
     LIVEKIT_URL,
-    LIVEKIT_SIP_ATTRIBUTE_TENANT_ID,
-    LIVEKIT_SIP_ATTRIBUTE_CALL_ID,
-    LIVEKIT_SIP_ATTRIBUTE_CALLED_NUMBER,
-    LIVEKIT_SIP_HEADER_TENANT_ID,
-    LIVEKIT_SIP_HEADER_CALL_ID,
-    LIVEKIT_SIP_HEADER_CALLED_NUMBER,
 )
 from app.core.prompts import get_template
 from app.services.tts_provider import build_tts_with_fallback
@@ -56,10 +50,27 @@ def prewarm_vad(proc: agents.JobProcess):
     """
     Runs ONCE per worker process.
     This is the ONLY place Silero VAD should be loaded.
+
+    The Silero weights are baked into the image at build time
+    (`download-files`), so this should complete in well under a second.
+    If it stalls (e.g. CPU/memory starvation on the host), the worker's
+    `initialize_process_timeout` will recycle this process. We time and
+    guard the load so the failure is visible in logs rather than a silent
+    10-minute hang (the production symptom seen on 2026-04-28).
     """
+    import time
+
     logger.info("[VAD] Prewarming Silero VAD (once per worker process)")
-    proc.userdata["vad"] = silero.VAD.load(**VAD_SETTINGS)
-    logger.info("[VAD] ✓ Silero VAD ready")
+    started = time.monotonic()
+    try:
+        proc.userdata["vad"] = silero.VAD.load(**VAD_SETTINGS)
+    except Exception:
+        logger.exception("[VAD] ✗ Failed to load Silero VAD during prewarm")
+        # Re-raise so the supervisor recycles this process instead of
+        # serving jobs without a VAD (which would crash every call).
+        raise
+    elapsed = time.monotonic() - started
+    logger.info("[VAD] ✓ Silero VAD ready (%.2fs)", elapsed)
 
 
 # =========================================================
@@ -174,14 +185,20 @@ async def entrypoint(ctx: agents.JobContext):
     tts = get_tts_service(config.get("voice_id"), "en")
 
     # 6️⃣ PREWARMED VAD (REQUIRED)
-    vad = ctx.proc.userdata["vad"]
+    vad = ctx.proc.userdata.get("vad")
+    if vad is None:
+        # prewarm_vad failed or never ran for this process. Fail loudly so
+        # LiveKit recycles the process rather than crashing every turn.
+        raise RuntimeError(
+            "Silero VAD not available in process userdata — prewarm did not complete"
+        )
 
     # =====================================================
     # ✅ AGENT SESSION (VAD + TURN DETECTOR)
     # =====================================================
     session = AgentSession(
         stt=deepgram.STT(model="nova-2-general", language="en-US"),
-        llm=google.LLM(model="gemini-2.0-flash"),
+        llm=google.LLM(model="gemini-2.5-flash-lite"),
         tts=tts,
         vad=vad,
 

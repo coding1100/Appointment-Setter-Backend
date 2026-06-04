@@ -2,12 +2,15 @@
 Agent service layer for business logic.
 """
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.api.v1.schemas.agent import AgentCreate, AgentUpdate, VoiceOption
 from app.services.store import store
+
+logger = logging.getLogger(__name__)
 
 
 class AgentService:
@@ -80,8 +83,74 @@ class AgentService:
         return self._ensure_voice_agent_type(updated)
 
     async def delete_agent(self, agent_id: str) -> bool:
-        """Delete agent."""
+        """Delete an agent and free every phone number attached to it.
+
+        Production behavior:
+        - Any phone numbers currently assigned to this agent are unassigned
+          (agent_id cleared, status/role_status set to inactive) BEFORE the
+          agent row is deleted. This mirrors `unassign_phone_from_agent` so
+          freed numbers reappear in the tenant's "Unassigned Numbers" pool
+          and can be reattached to another agent.
+        - We do NOT delete the phone_number rows themselves — the tenant
+          still owns those Twilio numbers and should be able to reuse them.
+        - Historical records (appointments, call logs) are preserved on
+          purpose; only the live binding is cleaned up.
+        - If freeing the phone numbers fails, we abort the delete so the
+          system never ends up with orphan rows pointing at a missing agent.
+        """
+        agent = await store.get_agent(agent_id)
+        if not agent:
+            return False
+
+        tenant_id = agent.get("tenant_id")
+        try:
+            attached_phones = await self._list_phones_assigned_to_agent(tenant_id, agent_id)
+        except Exception:
+            logger.exception(
+                "[AGENT DELETE] Failed to enumerate attached phone numbers for agent %s; aborting delete",
+                agent_id,
+            )
+            raise
+
+        for phone in attached_phones:
+            phone_id = phone.get("id")
+            if not phone_id:
+                continue
+            try:
+                await store.update_phone_number(
+                    phone_id,
+                    {
+                        "agent_id": "",
+                        "status": "inactive",
+                        "role_status": "inactive",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                logger.info(
+                    "[AGENT DELETE] Unassigned phone %s (%s) from agent %s before delete",
+                    phone_id,
+                    phone.get("phone_number"),
+                    agent_id,
+                )
+            except Exception:
+                logger.exception(
+                    "[AGENT DELETE] Failed to unassign phone %s from agent %s; aborting delete",
+                    phone_id,
+                    agent_id,
+                )
+                raise
+
         return await store.delete_agent(agent_id)
+
+    @staticmethod
+    async def _list_phones_assigned_to_agent(
+        tenant_id: Optional[str], agent_id: str
+    ) -> List[Dict[str, Any]]:
+        """Return every phone_number row currently bound to this agent."""
+        if not tenant_id:
+            return []
+        phones = await store.list_phones_by_tenant(tenant_id) or []
+        return [p for p in phones if p.get("agent_id") == agent_id]
 
     async def activate_agent(self, agent_id: str) -> bool:
         """Activate an agent."""
@@ -96,22 +165,29 @@ class AgentService:
         return result is not None
 
     def get_available_voices(self) -> List[VoiceOption]:
-        """Get list of available ElevenLabs voices."""
-        from app.core.voice_metadata import get_all_voices
+        """Return the voice catalog for the *configured* TTS provider only.
 
-        # Use centralized voice metadata
-        voice_metadata = get_all_voices()
-        voices = [
+        The UI shows whatever this returns, so by filtering here we guarantee
+        the operator can only pick a voice their deployment can actually
+        speak. Switching `VOICE_TTS_PRIMARY_PROVIDER` between "elevenlabs" and
+        "gemini" swaps the entire dropdown without any code or UI change.
+        """
+        from app.core.config import VOICE_TTS_PRIMARY_PROVIDER
+        from app.core.voice_metadata import get_voices_by_provider
+
+        provider = (VOICE_TTS_PRIMARY_PROVIDER or "gemini").strip().lower()
+        voice_metadata = get_voices_by_provider(provider)
+        return [
             VoiceOption(
                 voice_id=voice["voice_id"],
                 name=voice["name"],
                 description=voice["description"],
                 category=voice["category"],
                 use_case=voice["use_case"],
+                provider=voice.get("provider"),
             )
             for voice in voice_metadata
         ]
-        return voices
 
 
 # Global agent service instance

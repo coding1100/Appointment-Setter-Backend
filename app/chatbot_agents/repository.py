@@ -63,5 +63,33 @@ class ChatbotAgentRepository:
         """Update global chatbot runtime settings."""
         return await store.update_chatbot_runtime_settings(enabled=enabled, updated_by=updated_by)
 
+    async def create_chat_session(self, session_data: Dict[str, Any]) -> Dict[str, Any]:
+        return await store.create_chatbot_chat_session(session_data)
+
+    async def get_chat_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        return await store.get_chatbot_chat_session(session_id)
+
+    async def update_chat_session(self, session_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        payload = {**update_data, "updated_at": datetime.now(timezone.utc).isoformat()}
+        return await store.update_chatbot_chat_session(session_id, payload)
+
+    async def find_open_chat_session(self, chatbot_id: str, visitor_session_id: str, origin: str) -> Optional[Dict[str, Any]]:
+        return await store.find_open_chatbot_chat_session(chatbot_id, visitor_session_id, origin)
+
+    async def list_chat_sessions_for_owner(self, owner_user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        return await store.list_chatbot_chat_sessions_by_owner(owner_user_id, limit=limit)
+
+    async def list_chat_sessions(self, limit: int = 100) -> List[Dict[str, Any]]:
+        return await store.list_chatbot_chat_sessions(limit=limit)
+
+    async def count_chat_sessions_for_visitor(self, chatbot_id: str, visitor_session_id: str, origin: str) -> int:
+        return await store.count_chatbot_chat_sessions_for_visitor(chatbot_id, visitor_session_id, origin)
+
+    async def create_chat_message(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+        return await store.create_chatbot_chat_message(message_data)
+
+    async def list_chat_messages(self, session_id: str, limit: int = 250) -> List[Dict[str, Any]]:
+        return await store.list_chatbot_chat_messages(session_id, limit=limit)
+
 
 chatbot_agent_repository = ChatbotAgentRepository()

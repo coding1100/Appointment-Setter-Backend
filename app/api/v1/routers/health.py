@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, status
-from livekit import api as livekit_api
 
 from app.core.async_redis import async_redis_client
 from app.core.config import ENVIRONMENT, LIVEKIT_URL

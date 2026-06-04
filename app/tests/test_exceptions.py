@@ -2,8 +2,6 @@
 Tests for custom exceptions.
 """
 
-import pytest
-
 from app.core.exceptions import AppException, AuthenticationError, LiveKitError, NotFoundError, TwilioError, ValidationError
 
 

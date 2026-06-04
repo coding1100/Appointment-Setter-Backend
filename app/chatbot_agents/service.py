@@ -15,10 +15,9 @@ from app.chatbot_agents.llm_providers import get_chatbot_llm_provider
 from app.chatbot_agents.repository import chatbot_agent_repository
 from app.chatbot_agents.token_service import chatbot_embed_token_service
 from app.core.config import (
-    CHATBOT_DEV_ALLOW_ANY_ORIGIN,
+    CHATBOT_ALLOW_ANY_ORIGIN,
     CHATBOT_LOADER_BASE_URL,
     CHATBOT_RUNTIME_ENABLED,
-    ENVIRONMENT,
 )
 
 
@@ -32,7 +31,7 @@ class ChatbotAgentService:
 
     @staticmethod
     def _is_dev_origin_bypass_enabled() -> bool:
-        return str(ENVIRONMENT).strip().lower() == "development" and CHATBOT_DEV_ALLOW_ANY_ORIGIN
+        return CHATBOT_ALLOW_ANY_ORIGIN
 
     @staticmethod
     def _build_url(base_url: str, token: str, embed_origin: Optional[str] = None) -> str:
@@ -194,7 +193,13 @@ class ChatbotAgentService:
     async def delete_chatbot_agent(self, chatbot_id: str) -> bool:
         return await self.repository.delete(chatbot_id)
 
-    async def create_embed_token(self, chatbot: Dict[str, Any], origin: str) -> Dict[str, str]:
+    async def create_embed_token(
+        self,
+        chatbot: Dict[str, Any],
+        origin: str,
+        expires_in_minutes: Optional[int] = None,
+        never_expires: bool = False,
+    ) -> Dict[str, Any]:
         self._ensure_runtime_fields(chatbot)
         normalized_origin = origin.rstrip("/")
         allowed_origins = [entry.rstrip("/") for entry in chatbot.get("allowed_origins", [])]
@@ -203,7 +208,11 @@ class ChatbotAgentService:
 
         token_version = int(chatbot["embed_token_version"])
         token_data = self.token_service.create_token(
-            chatbot_id=chatbot["id"], origin=normalized_origin, version=token_version
+            chatbot_id=chatbot["id"],
+            origin=normalized_origin,
+            version=token_version,
+            expires_in_minutes=expires_in_minutes,
+            never_expires=never_expires,
         )
         loader_base = CHATBOT_LOADER_BASE_URL.strip()
         if not loader_base:

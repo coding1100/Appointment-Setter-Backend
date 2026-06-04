@@ -2,26 +2,21 @@
 Tenant management API routes using PostgreSQL.
 """
 
-import uuid
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.v1.routers.auth import get_current_user_from_token, require_admin_role, verify_tenant_access
+from app.api.v1.routers.auth import get_current_user_from_token, require_admin_role, require_app_access, verify_tenant_access
 from app.api.v1.schemas.tenant import (
     AgentSettingsCreate,
-    AgentSettingsUpdate,
     BusinessInfoCreate,
-    BusinessInfoUpdate,
-    ServiceTypeCreate,
     TenantCreate,
     TenantResponse,
     TenantUpdate,
 )
-from app.api.v1.services.auth import auth_service
 from app.api.v1.services.tenant import tenant_service
 
-router = APIRouter(prefix="/tenants", tags=["tenants"])
+router = APIRouter(prefix="/tenants", tags=["tenants"], dependencies=[Depends(require_app_access("appointment_setter"))])
 
 
 # Match login endpoint pattern - use specific path without trailing slash
@@ -51,14 +46,20 @@ async def list_tenants(
     offset: int = Query(0, ge=0),
     current_user: Dict = Depends(get_current_user_from_token),
 ):
-    """List tenants with pagination. Requires admin role."""
-    require_admin_role(current_user)
+    """List tenants with pagination."""
     try:
-        tenants = await tenant_service.list_tenants(limit, offset)
-
         from app.core.response_mappers import to_tenant_response
 
-        return [to_tenant_response(tenant) for tenant in tenants]
+        if current_user.get("role") == "admin":
+            tenants = await tenant_service.list_tenants(limit, offset)
+            return [to_tenant_response(tenant) for tenant in tenants]
+
+        tenant_id = current_user.get("tenant_id")
+        if not tenant_id:
+            return []
+
+        tenant = await tenant_service.get_tenant(str(tenant_id))
+        return [to_tenant_response(tenant)] if tenant else []
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list tenants: {str(e)}")

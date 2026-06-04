@@ -5,11 +5,9 @@ Main FastAPI application.
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Any, Dict
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.exceptions import HTTPException as FastAPIHTTPException
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -43,8 +41,6 @@ warnings.filterwarnings("ignore", category=UserWarning, module="passlib.handlers
 warnings.filterwarnings("ignore", message=".*bcrypt.*")
 
 # Suppress passlib bcrypt logging warnings
-import logging
-
 logging.getLogger("passlib.handlers.bcrypt").setLevel(logging.ERROR)
 logging.getLogger("passlib").setLevel(logging.ERROR)
 
@@ -223,4 +219,14 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host=API_HOST, port=API_PORT, reload=DEBUG, log_level=LOG_LEVEL.lower(), proxy_headers=True)
+    uvicorn.run(
+        "app.main:app",
+        host=API_HOST,
+        port=API_PORT,
+        reload=DEBUG,
+        log_level=LOG_LEVEL.lower(),
+        proxy_headers=True,
+        # Trust X-Forwarded-* from the reverse proxy so request.url reflects the
+        # public https URL (required for Twilio webhook signature validation).
+        forwarded_allow_ips="*",
+    )

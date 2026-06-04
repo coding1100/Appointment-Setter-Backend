@@ -5,7 +5,6 @@ Uses Fernet symmetric encryption (AES-128 in CBC mode).
 
 import base64
 import logging
-from typing import Optional
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.backends import default_backend
