@@ -584,7 +584,15 @@ class VoiceAgent(Agent):
             pass
 
         try:
-            handle = self.session.say(line, allow_interruptions=False)
+            # Gemini Live generates audio server-side; `session.say()` is
+            # unsupported. Use `generate_reply` with explicit instructions
+            # so the Live model speaks the deterministic closing line.
+            handle = self.session.generate_reply(
+                instructions=(
+                    f"Say exactly: \"{line}\". Do not add any other words. "
+                    "Then stop speaking — the line will be disconnected."
+                ),
+            )
             try:
                 # Tight timeout — a single closing sentence rarely needs
                 # more than ~6s of TTS; 12s is a generous safety margin.
@@ -774,20 +782,23 @@ async def entrypoint(ctx: agents.JobContext):
     await session.start(room=ctx.room, agent=agent)
     logger.info("[WORKER ENTRYPOINT] ✓ Agent session started")
 
-    # 7️⃣ Initial greeting — spoken directly via TTS, NOT through the LLM.
-    # `session.generate_reply()` would trigger an LLM turn whose output races
-    # with whatever the prompt's step 1 ("GREETING") instructs, producing
-    # two greetings back-to-back. Using `session.say()` here makes the
-    # configured greeting message the single source of truth for the
-    # opening line; the prompt is updated to instruct the LLM to NOT speak
-    # a greeting (the system has already done it) and to wait for the
-    # caller's response. If no greeting is configured, a generic default
-    # is spoken so the line is never silent.
+    # 7️⃣ Initial greeting. Gemini Live generates audio server-side, so
+    # `session.say(text)` is not supported on this realtime session. The
+    # right primitive is `session.generate_reply(instructions=...)` —
+    # we tell the Live model the exact greeting to speak as a per-turn
+    # instruction. This keeps the configured `greeting_message` as the
+    # single source of truth for the opening line.
     opening_line = (greeting or "").strip() or (
         "Hello, thanks for calling. How can I help you today?"
     )
     try:
-        opening_handle = session.say(opening_line, allow_interruptions=False)
+        opening_handle = session.generate_reply(
+            instructions=(
+                f"Greet the caller now by saying exactly: \"{opening_line}\". "
+                "Do not add any other words. After speaking, wait for the "
+                "caller's response."
+            ),
+        )
         await asyncio.wait_for(opening_handle.wait_for_playout(), timeout=15.0)
         logger.info("[WORKER ENTRYPOINT] Greeting played: %r", opening_line)
     except Exception as exc:
