@@ -9,6 +9,8 @@ This worker connects to LiveKit and handles voice agent sessions for inbound tel
 import asyncio
 import json
 import logging
+import os
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from livekit import agents
@@ -24,6 +26,13 @@ from app.core.config import (
 )
 from app.core.prompts import get_template
 from app.services.tts_provider import build_tts_with_fallback
+
+# Hard upper bound on any single call. Even if the LLM ignores the prompt's
+# "call end_call after the closing line" instruction, this watchdog guarantees
+# the session is torn down so Twilio billing stops and worker capacity is
+# released. Tune per traffic; 5 minutes covers a full appointment booking with
+# headroom for slow speech / corrections.
+MAX_CALL_DURATION_SECONDS = int(os.environ.get("VOICE_AGENT_MAX_CALL_DURATION", "300"))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VoiceAgentWorker")
@@ -90,16 +99,235 @@ def get_tts_service(voice_id: Optional[str], language_code: str) -> tts.TTS:
 # =========================================================
 # AGENT
 # =========================================================
+def _parse_iso_datetime(value: str) -> datetime:
+    """Parse an ISO 8601 datetime string (incl. 'Z') into a tz-aware UTC datetime.
+
+    Raises ValueError with a clear message so the calling tool can return that
+    message to the LLM, which then knows to ask the user for a clearer time.
+    """
+    s = (value or "").strip()
+    if not s:
+        raise ValueError("empty datetime string")
+    iso = s[:-1] + "+00:00" if s.endswith("Z") else s
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError as exc:
+        raise ValueError(f"invalid ISO 8601 datetime: {value!r}") from exc
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
 class VoiceAgent(Agent):
-    def __init__(self, instructions: str, tenant_id: Optional[str]):
+    """Voice agent with the tools the prompt actually calls.
+
+    Three tools are exposed to the LLM:
+      * ``book_appointment`` — persist the booking and send confirmation
+        emails. Call exactly once after the user has confirmed every field.
+      * ``send_appointment_confirmation_email`` — direct email primitive
+        (customer + owner). Also callable directly from tests/admin code.
+      * ``end_call`` / ``close_session`` — terminate the session AFTER the
+        LLM has spoken the closing line. Both names exist so existing prompts
+        that reference ``close_session`` keep working; they share one impl.
+    """
+
+    def __init__(
+        self,
+        instructions: str,
+        tenant_id: Optional[str],
+        call_id: Optional[str] = None,
+    ):
         super().__init__(instructions=instructions)
         self.tenant_id = tenant_id
-        self._closing_task: Optional[asyncio.Task] = None
+        self.call_id = call_id
+        self._booking_completed = False  # idempotency guard for book_appointment
+
+    # ------------------------------------------------------------------
+    # Tool: book the appointment + send emails
+    # ------------------------------------------------------------------
+    @function_tool
+    async def book_appointment(
+        self,
+        customer_name: str,
+        customer_phone: str,
+        customer_email: str,
+        service_type: str,
+        service_address: str,
+        appointment_datetime: str,
+        service_details: str = "",
+    ) -> str:
+        """Persist the appointment and send confirmation emails.
+
+        Call this EXACTLY ONCE, after the caller has confirmed every field.
+        `appointment_datetime` must be ISO 8601 (e.g. "2025-12-25T14:30:00Z").
+        Returns a short status string for the LLM to react to: on success it
+        instructs the LLM to deliver the closing line and call end_call; on
+        failure it instructs the LLM to apologise and offer to retry.
+        """
+        if self._booking_completed:
+            return (
+                "Already booked. Deliver the closing line and call end_call."
+            )
+        if not self.tenant_id:
+            logger.error("[BOOK] tenant_id missing on VoiceAgent; cannot book")
+            return (
+                "Booking failed: missing tenant context. Apologise to the "
+                "caller and call end_call."
+            )
+        try:
+            appointment_dt = _parse_iso_datetime(appointment_datetime)
+        except ValueError as exc:
+            logger.warning("[BOOK] Bad datetime from LLM: %s", exc)
+            return (
+                f"Booking failed: {exc}. Ask the caller to restate the date "
+                "and time clearly."
+            )
+
+        from app.api.v1.services.appointment import appointment_service
+
+        try:
+            appointment = await appointment_service.create_appointment(
+                tenant_id=self.tenant_id,
+                customer_name=customer_name.strip(),
+                customer_phone=customer_phone.strip(),
+                customer_email=(customer_email or "").strip() or None,
+                service_type=service_type.strip(),
+                service_address=service_address.strip(),
+                appointment_datetime=appointment_dt,
+                service_details=(service_details or "").strip() or None,
+                call_id=self.call_id,
+            )
+        except Exception:
+            logger.exception("[BOOK] create_appointment crashed")
+            return (
+                "Booking failed due to a system error. Apologise to the "
+                "caller and call end_call."
+            )
+
+        if not appointment:
+            # create_appointment returns None on validation/persistence errors;
+            # it has already logged the cause.
+            return (
+                "Booking failed (the time may be unavailable). Offer the "
+                "caller a different time or call end_call."
+            )
+
+        # Owner notification is a courtesy email, not load-bearing for the
+        # booking. Treat its failure as non-fatal — never let it sink the call.
+        try:
+            await self._notify_owner(
+                customer_name=customer_name,
+                customer_email=customer_email,
+                appointment_datetime=appointment_dt,
+                service_type=service_type,
+                service_address=service_address,
+            )
+        except Exception as exc:
+            logger.warning("[BOOK] Owner notification failed (non-fatal): %s", exc)
+
+        self._booking_completed = True
+        logger.info(
+            "[BOOK] Created appointment id=%s tenant=%s call=%s",
+            appointment.get("id"), self.tenant_id, self.call_id,
+        )
+        return (
+            "Appointment booked and confirmation email sent. Now deliver the "
+            "closing line to the caller and call end_call."
+        )
+
+    # ------------------------------------------------------------------
+    # Email primitive — used internally + directly by tests/admin code
+    # ------------------------------------------------------------------
+    async def send_appointment_confirmation_email(
+        self,
+        customer_email: str,
+        customer_name: str,
+        appointment_time: str,
+        service_type: str,
+        service_address: str,
+    ) -> str:
+        """Send the customer confirmation + the tenant-owner notification.
+
+        Standalone primitive (no DB insert) — useful for retry/admin flows
+        and exercised by `tests/test_voice_worker_email.py`. Returns the
+        canonical success string for callers that need to detect success.
+        """
+        from app.services.email.service import EmailService
+        from app.services.store import store
+
+        appointment_dt = _parse_iso_datetime(appointment_time)
+
+        owner_email = ""
+        if self.tenant_id:
+            tenant = await store.get_tenant(self.tenant_id)
+            owner_email = (tenant or {}).get("owner_email") or ""
+
+        email_service = EmailService()
+        await email_service.send_appointment_confirmation(
+            customer_email,
+            customer_name,
+            appointment_dt,
+            service_type,
+            service_address,
+        )
+        if owner_email:
+            await email_service.send_appointment_owner_notification(
+                owner_email,
+                customer_name,
+                customer_email,
+                appointment_dt,
+                service_type,
+                service_address,
+            )
+        return "Appointment confirmation email sent successfully."
+
+    async def _notify_owner(
+        self,
+        customer_name: str,
+        customer_email: str,
+        appointment_datetime: datetime,
+        service_type: str,
+        service_address: str,
+    ) -> None:
+        """Send the tenant-owner the new-booking notification, if configured."""
+        from app.services.email.service import EmailService
+        from app.services.store import store
+
+        if not self.tenant_id:
+            return
+        tenant = await store.get_tenant(self.tenant_id)
+        owner_email = (tenant or {}).get("owner_email")
+        if not owner_email:
+            return
+        await EmailService().send_appointment_owner_notification(
+            owner_email,
+            customer_name,
+            customer_email,
+            appointment_datetime,
+            service_type,
+            service_address,
+        )
+
+    # ------------------------------------------------------------------
+    # Tools: end the call cleanly
+    # ------------------------------------------------------------------
+    async def _finish_call(self) -> str:
+        logger.info("[CALL] finishing call (tenant=%s call=%s)", self.tenant_id, self.call_id)
+        try:
+            await self.session.aclose()
+        except Exception as exc:
+            # aclose() may race with the watchdog/cleanup. Log and swallow —
+            # the session will still end via on_close.
+            logger.warning("[CALL] aclose() raised during finish: %s", exc)
+        return "Call ended."
 
     @function_tool
-    async def close_session(self):
-        await self.session.generate_reply(instructions="Say goodbye to the user.")
-        await self.session.aclose()
+    async def end_call(self) -> str:
+        """End the call. Call ONLY after speaking the closing line."""
+        return await self._finish_call()
+
+    @function_tool
+    async def close_session(self) -> str:
+        """Legacy alias for end_call. Either name works."""
+        return await self._finish_call()
 
 
 # =========================================================
@@ -181,7 +409,7 @@ async def entrypoint(ctx: agents.JobContext):
     greeting = config.get("agent_data", {}).get("greeting_message")
 
     # 5️⃣ Create agent + TTS
-    agent = VoiceAgent(instructions=instructions, tenant_id=tenant_id)
+    agent = VoiceAgent(instructions=instructions, tenant_id=tenant_id, call_id=call_id)
     tts = get_tts_service(config.get("voice_id"), "en")
 
     # 6️⃣ PREWARMED VAD (REQUIRED)
@@ -240,7 +468,31 @@ async def entrypoint(ctx: agents.JobContext):
 
         asyncio.create_task(cleanup())
 
-    await closed_event.wait()
+    # Hard cap on call duration. Even if the LLM ignores the prompt and never
+    # calls end_call, this guarantees the session is torn down so Twilio billing
+    # stops, the agent slot is released, and we have a predictable upper bound
+    # on call cost. The watchdog is cancelled when the session closes normally.
+    async def _call_duration_watchdog() -> None:
+        try:
+            await asyncio.sleep(MAX_CALL_DURATION_SECONDS)
+        except asyncio.CancelledError:
+            return
+        if closed_event.is_set():
+            return
+        logger.warning(
+            "[CALL] Max duration %ss reached for tenant=%s call=%s — force-closing",
+            MAX_CALL_DURATION_SECONDS, tenant_id, call_id,
+        )
+        try:
+            await session.aclose()
+        except Exception as exc:
+            logger.warning("[CALL] aclose() during watchdog raised: %s", exc)
+
+    watchdog_task = asyncio.create_task(_call_duration_watchdog())
+    try:
+        await closed_event.wait()
+    finally:
+        watchdog_task.cancel()
     logger.info(f"[WORKER ENTRYPOINT] Call completed for tenant {tenant_id}")
 
 
