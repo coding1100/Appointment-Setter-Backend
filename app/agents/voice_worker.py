@@ -183,17 +183,26 @@ class VoiceAgent(Agent):
 
         from app.api.v1.services.appointment import appointment_service
 
+        clean_email = (customer_email or "").strip() or None
+        clean_name = customer_name.strip()
+        clean_service = service_type.strip()
+        clean_address = service_address.strip()
+        clean_details = (service_details or "").strip() or None
+
         try:
             appointment = await appointment_service.create_appointment(
                 tenant_id=self.tenant_id,
-                customer_name=customer_name.strip(),
+                customer_name=clean_name,
                 customer_phone=customer_phone.strip(),
-                customer_email=(customer_email or "").strip() or None,
-                service_type=service_type.strip(),
-                service_address=service_address.strip(),
+                customer_email=clean_email,
+                service_type=clean_service,
+                service_address=clean_address,
                 appointment_datetime=appointment_dt,
-                service_details=(service_details or "").strip() or None,
+                service_details=clean_details,
                 call_id=self.call_id,
+                # Own the email path so we can tell the LLM whether it
+                # actually went out, instead of pretending success.
+                send_email=False,
             )
         except Exception:
             logger.exception("[BOOK] create_appointment crashed")
@@ -210,6 +219,30 @@ class VoiceAgent(Agent):
                 "caller a different time or call end_call."
             )
 
+        # Send the customer confirmation ourselves so we can read the
+        # boolean status. `send_appointment_confirmation` catches its own
+        # SMTP errors and returns False, logging the cause; we use that
+        # signal to tell the LLM the truth instead of empty-promising an
+        # email that never went out (common cause: MAIL_FROM domain does
+        # not match the authenticated SMTP user — the SMTP server rejects
+        # the send, the booking still succeeds in the DB).
+        customer_email_sent = False
+        if clean_email:
+            try:
+                customer_email_sent = bool(
+                    await appointment_service.email_service.send_appointment_confirmation(
+                        clean_email,
+                        clean_name,
+                        appointment_dt,
+                        clean_service,
+                        clean_address,
+                        appointment_id=appointment.get("id"),
+                        service_details=clean_details,
+                    )
+                )
+            except Exception:
+                logger.exception("[BOOK] customer confirmation email send raised")
+
         # Owner notification is a courtesy email, not load-bearing for the
         # booking. Treat its failure as non-fatal — never let it sink the call.
         try:
@@ -225,12 +258,20 @@ class VoiceAgent(Agent):
 
         self._booking_completed = True
         logger.info(
-            "[BOOK] Created appointment id=%s tenant=%s call=%s",
-            appointment.get("id"), self.tenant_id, self.call_id,
+            "[BOOK] Created appointment id=%s tenant=%s call=%s customer_email_sent=%s",
+            appointment.get("id"), self.tenant_id, self.call_id, customer_email_sent,
         )
+        if customer_email_sent:
+            return (
+                "Appointment booked AND confirmation email sent. Call "
+                "end_call with a closing_line that confirms the email is "
+                "on its way."
+            )
         return (
-            "Appointment booked and confirmation email sent. Now deliver the "
-            "closing line to the caller and call end_call."
+            "Appointment booked, BUT the confirmation email did NOT go "
+            "out (SMTP failure — check backend logs). Call end_call with "
+            "a closing_line that apologises briefly and says a teammate "
+            "will follow up by phone. Do NOT promise an email."
         )
 
     # ------------------------------------------------------------------
