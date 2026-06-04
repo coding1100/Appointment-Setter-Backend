@@ -36,7 +36,11 @@ _GEMINI_LIVE_VOICES = frozenset({
     "Umbriel", "Vindemiatrix", "Zephyr", "Zubenelgenubi",
 })
 GEMINI_LIVE_DEFAULT_VOICE = "Puck"
-GEMINI_LIVE_MODEL = "gemini-live-2.5-flash-native-audio"
+# Gemini-API-compatible Live model (uses GOOGLE_API_KEY). The plain
+# `gemini-live-2.5-flash-native-audio` alias is a VertexAI-only model and
+# requires a GCP project + `vertexai=True`. The `-preview-12-2025` suffix
+# is the corresponding Gemini API endpoint.
+GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
 # Hard upper bound on any single call. Even if the LLM ignores the prompt's
 # "call end_call after the closing line" instruction, this watchdog guarantees
