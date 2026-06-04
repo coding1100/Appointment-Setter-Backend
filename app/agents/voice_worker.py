@@ -56,7 +56,7 @@ _GEMINI_LIVE_REALTIME_INPUT_CONFIG = RealtimeInputConfig(
     automatic_activity_detection=AutomaticActivityDetection(
         start_of_speech_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
         end_of_speech_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
-        silence_duration_ms=300,
+        silence_duration_ms=100,
         prefix_padding_ms=200,
     ),
 )
