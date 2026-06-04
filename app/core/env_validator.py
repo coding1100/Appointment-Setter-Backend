@@ -40,8 +40,9 @@ OPTIONAL_ENV_VARS = {
     "GOOGLE_API_KEY": GOOGLE_API_KEY,
     "DEEPGRAM_API_KEY": DEEPGRAM_API_KEY,
     "ELEVEN_API_KEY": ELEVEN_API_KEY,
-    "RESEND_API_KEY": email_settings.RESEND_API_KEY,
-    "RESEND_FROM_EMAIL": email_settings.RESEND_FROM_EMAIL,
+    "MAIL_USERNAME": email_settings.MAIL_USERNAME,
+    "MAIL_PASSWORD": email_settings.MAIL_PASSWORD,
+    "MAIL_SERVER": email_settings.MAIL_SERVER,
     "CORS_ALLOW_ORIGINS": os.environ.get("CORS_ALLOW_ORIGINS", ""),
     "ACCESS_TOKEN_COOKIE_NAME": os.environ.get("ACCESS_TOKEN_COOKIE_NAME", ""),
     "REFRESH_TOKEN_COOKIE_NAME": os.environ.get("REFRESH_TOKEN_COOKIE_NAME", ""),
@@ -124,7 +125,7 @@ def get_environment_info() -> Dict[str, any]:
         "google_ai_configured": bool(GOOGLE_API_KEY),
         "deepgram_configured": bool(DEEPGRAM_API_KEY),
         "elevenlabs_configured": bool(ELEVEN_API_KEY),
-        "email_configured": bool(email_settings.RESEND_API_KEY and email_settings.RESEND_FROM_EMAIL),
+        "email_configured": bool(email_settings.MAIL_USERNAME and email_settings.MAIL_SERVER),
         "secret_key_configured": bool(SECRET_KEY),
     }
 

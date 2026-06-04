@@ -8,9 +8,6 @@ httpx
 python-jose[cryptography]
 passlib[bcrypt]
 bcrypt==4.3.0
-# Transactional email via Resend (https://resend.com/docs/send-with-python).
-# Sync SDK; we call it via asyncio.to_thread so the asyncio loop stays free.
-resend
 twilio
 
 # LiveKit Agents + Plugins
@@ -35,6 +32,7 @@ opentelemetry-sdk>=1.27.0,<2.0.0
 boto3
 structlog
 prometheus-client
+fastapi-mail
 pydantic-settings
 sqlalchemy>=2.0.0
 alembic>=1.13.0
