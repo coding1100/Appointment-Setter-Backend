@@ -64,17 +64,21 @@ GEMINI_TTS_VOICE_FEMALE = os.environ.get("GEMINI_TTS_VOICE_FEMALE", "Aoede")
 ELEVEN_TTS_MODEL = os.environ.get("ELEVEN_TTS_MODEL", "eleven_turbo_v2_5")
 
 
-# Email Settings (FastAPI-Mail)
+# Email Settings — Resend is the sole transport (see
+# app/services/email/service.py). Docs: https://resend.com/docs/send-with-python
 class EmailSettings:
-    MAIL_USERNAME = os.environ.get("MAIL_USERNAME", "")
-    MAIL_PASSWORD = os.environ.get("MAIL_PASSWORD", "")
-    MAIL_FROM = os.environ.get("MAIL_FROM", "")
-    MAIL_PORT = int(os.environ.get("MAIL_PORT", "587"))
-    MAIL_SERVER = os.environ.get("MAIL_SERVER", "")
-    MAIL_STARTTLS = os.environ.get("MAIL_STARTTLS", "True").lower() == "true"
-    MAIL_SSL_TLS = os.environ.get("MAIL_SSL_TLS", "False").lower() == "true"
-    USE_CREDENTIALS = os.environ.get("USE_CREDENTIALS", "True").lower() == "true"
-    VALIDATE_CERTS = os.environ.get("VALIDATE_CERTS", "True").lower() == "true"
+    # API key from https://resend.com/api-keys (must have "Sending access").
+    RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+    # From address. Either a single email ("noreply@yourdomain.com") or a
+    # "Display Name <noreply@yourdomain.com>" pair. The domain must be
+    # verified on the Resend dashboard before any send is accepted, with
+    # the documented exception of Resend's own "onboarding@resend.dev"
+    # which is suitable for early testing only.
+    # https://resend.com/docs/dashboard/domains/introduction
+    RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "")
+    # Optional explicit reply-to (e.g. a real human inbox). If empty the
+    # From address is used.
+    RESEND_REPLY_TO = os.environ.get("RESEND_REPLY_TO", "")
 
 email_settings = EmailSettings()
 

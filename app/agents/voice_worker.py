@@ -229,11 +229,13 @@ class VoiceAgent(Agent):
 
         # Send the customer confirmation ourselves so we can read the
         # boolean status. `send_appointment_confirmation` catches its own
-        # SMTP errors and returns False, logging the cause; we use that
-        # signal to tell the LLM the truth instead of empty-promising an
-        # email that never went out (common cause: MAIL_FROM domain does
-        # not match the authenticated SMTP user — the SMTP server rejects
-        # the send, the booking still succeeds in the DB).
+        # provider errors and returns False, logging the cause; we use
+        # that signal to tell the LLM the truth instead of empty-promising
+        # an email that never went out (common Resend causes per
+        # https://resend.com/docs/api-reference/errors : unverified
+        # RESEND_FROM_EMAIL domain (403), invalid RESEND_API_KEY (401), or
+        # daily/monthly quota exceeded (429)). The booking still succeeds
+        # in the DB regardless.
         customer_email_sent = False
         if clean_email:
             try:

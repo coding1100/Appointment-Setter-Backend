@@ -1,82 +1,162 @@
-from datetime import datetime
-import logging
-from typing import Optional
+"""Email service — Resend HTTP API as the sole transport.
 
-from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
+Official Python SDK: https://resend.com/docs/send-with-python
+REST reference:      https://resend.com/docs/api-reference/emails/send-email
+Errors:              https://resend.com/docs/api-reference/errors
+Domain verification: https://resend.com/docs/dashboard/domains/introduction
+
+Required environment:
+  * RESEND_API_KEY    — Resend API key with "Sending access".
+  * RESEND_FROM_EMAIL — From address. Format: "noreply@yourdomain.com" or
+                        "Display Name <noreply@yourdomain.com>". The domain
+                        must be verified on the Resend dashboard before any
+                        send is accepted (the documented exception is
+                        Resend's own "onboarding@resend.dev" address, which
+                        is fine for early testing).
+
+Optional environment:
+  * RESEND_REPLY_TO   — explicit reply-to (defaults to the From address).
+
+Behaviour:
+  * The Resend Python SDK is synchronous. We invoke it via
+    `asyncio.to_thread(...)` so the event loop is never blocked during
+    the HTTPS round-trip.
+  * `_send()` raises on hard failure; the public `send_*` methods catch
+    and return False so a single email hiccup never sinks a booking.
+  * Every send logs a single structured line: success carries the Resend
+    message id; failure carries the exception text so the operator can see
+    "unverified domain", "invalid api key", etc. straight from the docs.
+"""
+
+import asyncio
+import logging
+from datetime import datetime
+from typing import Dict, List, Optional
+
+import resend
 
 from app.core.config import email_settings
 from app.services.email.templates import EmailTemplates
 
+logger = logging.getLogger(__name__)
+
+# From values that look like a placeholder from .env.example — treat as
+# "not configured" so we never silently mail with "noreply@your-domain.com".
+_PLACEHOLDER_FROM_FRAGMENTS = ("your-domain.com", "example.com", "yourcompany.com")
+
+
+def _is_real_email_or_pair(value: str) -> bool:
+    """Accept either "addr@domain" or "Display Name <addr@domain>"."""
+    value = (value or "").strip()
+    if "@" not in value:
+        return False
+    lower = value.lower()
+    return not any(frag in lower for frag in _PLACEHOLDER_FROM_FRAGMENTS)
+
+
 class EmailService:
-    def __init__(self):
-        # Gmail SMTP (smtp.gmail.com / smtp.googlemail.com) rejects any
-        # send where the From header doesn't match the authenticated user,
-        # unless that From is set up as a verified alias on the Gmail
-        # account. If MAIL_SERVER is Gmail and MAIL_FROM != MAIL_USERNAME,
-        # we override From to the authenticated user so mail still goes
-        # out — and log loudly so the operator knows the .env should be
-        # corrected (or moved to a real transactional provider).
-        effective_from = email_settings.MAIL_FROM
-        server = (email_settings.MAIL_SERVER or "").strip().lower()
-        is_gmail = server in ("smtp.gmail.com", "smtp.googlemail.com")
-        if (
-            is_gmail
-            and email_settings.MAIL_USERNAME
-            and effective_from
-            and effective_from.strip().lower() != email_settings.MAIL_USERNAME.strip().lower()
-        ):
-            logging.warning(
-                "[EMAIL] Gmail SMTP requires MAIL_FROM to match the "
-                "authenticated MAIL_USERNAME; overriding From '%s' -> '%s' "
-                "so mail still sends. Update .env (or use a domain-verified "
-                "transactional provider) to silence this.",
-                effective_from, email_settings.MAIL_USERNAME,
+    """Resend-backed email service.
+
+    Public method signatures are unchanged from the prior implementations
+    (fastapi_mail -> SendGrid -> Resend), so callers (appointment_service,
+    voice worker, auth flow, tests) need no edits.
+    """
+
+    def __init__(self) -> None:
+        self._api_key: str = (email_settings.RESEND_API_KEY or "").strip()
+        self._from_email: str = (
+            email_settings.RESEND_FROM_EMAIL.strip()
+            if _is_real_email_or_pair(email_settings.RESEND_FROM_EMAIL)
+            else ""
+        )
+        self._reply_to: Optional[str] = (
+            email_settings.RESEND_REPLY_TO.strip()
+            if _is_real_email_or_pair(email_settings.RESEND_REPLY_TO)
+            else None
+        )
+
+        # The SDK reads its key from a module-level attribute; safe to set
+        # repeatedly (idempotent) and harmless if the key is empty — the
+        # send call itself will surface the auth error.
+        if self._api_key:
+            resend.api_key = self._api_key
+            logger.info(
+                "[EMAIL] transport=resend from=%s reply_to=%s",
+                self._from_email or "<unset>",
+                self._reply_to or self._from_email or "<unset>",
             )
-            effective_from = email_settings.MAIL_USERNAME
+        else:
+            logger.error(
+                "[EMAIL] RESEND_API_KEY is not configured — email sends will fail."
+            )
 
-        self.conf = ConnectionConfig(
-            MAIL_USERNAME=email_settings.MAIL_USERNAME,
-            MAIL_PASSWORD=email_settings.MAIL_PASSWORD,
-            MAIL_FROM=effective_from,
-            MAIL_PORT=email_settings.MAIL_PORT,
-            MAIL_SERVER=email_settings.MAIL_SERVER,
-            MAIL_STARTTLS=email_settings.MAIL_STARTTLS,
-            MAIL_SSL_TLS=email_settings.MAIL_SSL_TLS,
-            USE_CREDENTIALS=email_settings.USE_CREDENTIALS,
-            VALIDATE_CERTS=email_settings.VALIDATE_CERTS
-        )
-        self.fm = FastMail(self.conf)
+        if not self._from_email:
+            logger.error(
+                "[EMAIL] RESEND_FROM_EMAIL is not configured (or looks like a "
+                "placeholder). Set it to a verified Resend sender — see "
+                "https://resend.com/docs/dashboard/domains/introduction"
+            )
 
-    async def _send(self, subject: str, recipients: list[str], html_body: str):
-        message = MessageSchema(
-            subject=subject,
-            recipients=recipients,
-            body=html_body,
-            subtype=MessageType.html
-        )
+    # ------------------------------------------------------------------
+    # Transport
+    # ------------------------------------------------------------------
+    async def _send(self, subject: str, recipients: List[str], html_body: str) -> None:
+        """Send via Resend; raises on hard failure.
+
+        Resend documents specific error codes (401 missing/restricted key,
+        403 unverified domain, 422 invalid From, 429 quota/rate). The SDK
+        surfaces these as exceptions which we let propagate to the caller
+        after logging.
+        """
+        if not self._api_key:
+            raise RuntimeError("RESEND_API_KEY is not configured")
+        if not self._from_email:
+            raise RuntimeError("RESEND_FROM_EMAIL is not configured")
+        if not recipients:
+            raise ValueError("send() called with no recipients")
+
+        # Per https://resend.com/docs/api-reference/emails/send-email
+        params: Dict = {
+            "from": self._from_email,
+            "to": list(recipients),
+            "subject": subject,
+            "html": html_body,
+        }
+        if self._reply_to:
+            params["reply_to"] = self._reply_to
+
         try:
-            await self.fm.send_message(message)
-            logging.info(f"Email sent to {recipients}")
-        except Exception as e:
-            logging.error(f"Failed to send email: {e}")
-            raise e
-            
+            # SDK is sync; offload the HTTPS round-trip to a worker thread.
+            response = await asyncio.to_thread(resend.Emails.send, params)
+        except Exception as exc:
+            # Surface the exact provider message — for the common
+            # misconfigurations Resend's docs document the failure mode
+            # right there in the error text (unverified domain, invalid
+            # api key, daily quota exceeded, etc.).
+            logger.error(
+                "[EMAIL] Resend send failed for to=%s subject=%r: %s",
+                recipients, subject, exc, exc_info=True,
+            )
+            raise
+
+        message_id = (response or {}).get("id") if isinstance(response, dict) else getattr(response, "id", None)
+        logger.info(
+            "[EMAIL] sent (resend) to=%s subject=%r id=%s",
+            recipients, subject, message_id or "<unknown>",
+        )
+
+    # ------------------------------------------------------------------
+    # Public send_* methods (signatures unchanged across transport swaps)
+    # ------------------------------------------------------------------
     async def send_raw_email(self, to_email: str, subject: str, body: str) -> str:
-        """
-        Generic method to send an email to a specific recipient.
-        Used by the AI agent tool.
-        """
+        """Generic raw send used by the AI agent tool."""
         try:
-            # Wrap body in basic HTML if it's plain text, or trust generic_submission template
             html = EmailTemplates.generic_submission(to_email or "AI Agent User", body, "N/A")
             await self._send(subject, [to_email], html)
             return f"Email successfully sent to {to_email}"
         except Exception as e:
             return f"Failed to send email: {str(e)}"
 
-
-    # --- Existing Functionality (Ported and Adapted) ---
-    
     async def send_appointment_confirmation(
         self,
         customer_email: str,
@@ -102,7 +182,7 @@ class EmailService:
             await self._send(subject, [customer_email], html)
             return True
         except Exception as e:
-            logging.error(f"Error sending appointment confirmation email: {e}", exc_info=True)
+            logger.error(f"Error sending appointment confirmation email: {e}", exc_info=True)
             return False
 
     async def send_appointment_owner_notification(
@@ -132,7 +212,7 @@ class EmailService:
             await self._send(subject, [owner_email], html)
             return True
         except Exception as e:
-            logging.error(f"Error sending appointment owner email: {e}", exc_info=True)
+            logger.error(f"Error sending appointment owner email: {e}", exc_info=True)
             return False
 
     async def send_appointment_cancellation(
@@ -159,7 +239,7 @@ class EmailService:
             await self._send(subject, [customer_email], html)
             return True
         except Exception as e:
-            logging.error(f"Error sending appointment cancellation email: {e}", exc_info=True)
+            logger.error(f"Error sending appointment cancellation email: {e}", exc_info=True)
             return False
 
     async def send_appointment_reschedule(
@@ -189,7 +269,7 @@ class EmailService:
             await self._send(subject, [customer_email], html)
             return True
         except Exception as e:
-            logging.error(f"Error sending appointment reschedule email: {e}", exc_info=True)
+            logger.error(f"Error sending appointment reschedule email: {e}", exc_info=True)
             return False
 
     async def send_partner_owner_invite(
@@ -203,7 +283,7 @@ class EmailService:
         expires_in_hours: int = 48,
         platform_name: str = "MindRind",
     ) -> bool:
-        """Send onboarding invite email for partner owner."""
+        """Onboarding invite for a new partner owner."""
         try:
             subject, html = EmailTemplates.partner_owner_invite(
                 {
@@ -219,7 +299,7 @@ class EmailService:
             await self._send(subject, [owner_email], html)
             return True
         except Exception as e:
-            logging.error(f"Error sending partner owner invite email: {e}", exc_info=True)
+            logger.error(f"Error sending partner owner invite email: {e}", exc_info=True)
             return False
 
     async def send_user_setup_invite(
@@ -233,7 +313,7 @@ class EmailService:
         expires_in_hours: int = 48,
         platform_name: str = "MindRind",
     ) -> bool:
-        """Send setup invite email for a newly onboarded workspace user."""
+        """Setup invite for a newly onboarded workspace user."""
         try:
             subject, html = EmailTemplates.user_setup_invite(
                 {
@@ -249,7 +329,7 @@ class EmailService:
             await self._send(subject, [recipient_email], html)
             return True
         except Exception as e:
-            logging.error(f"Error sending user setup invite email: {e}", exc_info=True)
+            logger.error(f"Error sending user setup invite email: {e}", exc_info=True)
             return False
 
     async def send_password_reset_email(
@@ -261,7 +341,7 @@ class EmailService:
         expires_in_minutes: int = 60,
         platform_name: str = "MindRind",
     ) -> bool:
-        """Send password reset email."""
+        """Password reset email."""
         try:
             subject, html = EmailTemplates.password_reset(
                 {
@@ -275,7 +355,7 @@ class EmailService:
             await self._send(subject, [recipient_email], html)
             return True
         except Exception as e:
-            logging.error(f"Error sending password reset email: {e}", exc_info=True)
+            logger.error(f"Error sending password reset email: {e}", exc_info=True)
             return False
 
 
