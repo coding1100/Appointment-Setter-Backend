@@ -7,6 +7,7 @@ from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.v1.routers.auth import get_current_user_from_token, require_admin_role, require_app_access, verify_tenant_access
+from app.services.org_service import org_service
 from app.api.v1.schemas.tenant import (
     AgentSettingsCreate,
     BusinessInfoCreate,
@@ -23,10 +24,20 @@ router = APIRouter(prefix="/tenants", tags=["tenants"], dependencies=[Depends(re
 # This avoids redirects and matches how /api/v1/auth/login works
 @router.post("", response_model=TenantResponse)
 async def create_tenant(tenant_data: TenantCreate, current_user: Dict = Depends(get_current_user_from_token)):
-    """Create a new tenant. Requires admin role."""
+    """Create a new tenant. Requires admin role.
+
+    The creating user becomes the tenant's owner: they are recorded as
+    `created_by_user_id` and added as an admin member of the tenant's
+    customer org. Other admins do NOT automatically see this tenant — only
+    the creator and platform staff do. Anything created under the tenant
+    (voice agents, phone numbers, appointments) inherits the same scoping.
+    """
     require_admin_role(current_user)
     try:
-        tenant = await tenant_service.create_tenant(tenant_data)
+        tenant = await tenant_service.create_tenant(
+            tenant_data,
+            creator_user_id=str(current_user.get("id") or "") or None,
+        )
 
         from app.core.response_mappers import to_tenant_response
 
@@ -46,20 +57,43 @@ async def list_tenants(
     offset: int = Query(0, ge=0),
     current_user: Dict = Depends(get_current_user_from_token),
 ):
-    """List tenants with pagination."""
+    """List tenants the caller has access to.
+
+    Scoping rule:
+      * Platform staff (the SaaS operators) see every tenant.
+      * Everyone else — including tenant-level admins — sees only the
+        tenants they have a customer-org membership for, i.e. the tenants
+        they created (or were explicitly added to). The `role == "admin"`
+        short-circuit was removed: a customer-org admin is the admin of
+        THEIR tenant, not of every other customer's tenant.
+    """
     try:
         from app.core.response_mappers import to_tenant_response
 
-        if current_user.get("role") == "admin":
+        memberships = current_user.get("org_memberships") or []
+        if current_user.get("platform_scope") or org_service.is_platform_staff(memberships):
             tenants = await tenant_service.list_tenants(limit, offset)
             return [to_tenant_response(tenant) for tenant in tenants]
 
-        tenant_id = current_user.get("tenant_id")
-        if not tenant_id:
+        accessible_tenant_ids = [
+            str(t) for t in (current_user.get("accessible_tenant_ids") or []) if t
+        ]
+        # Back-compat for users not migrated to org memberships yet.
+        legacy_tenant_id = current_user.get("tenant_id")
+        if legacy_tenant_id and str(legacy_tenant_id) not in accessible_tenant_ids:
+            accessible_tenant_ids.append(str(legacy_tenant_id))
+
+        if not accessible_tenant_ids:
             return []
 
-        tenant = await tenant_service.get_tenant(str(tenant_id))
-        return [to_tenant_response(tenant)] if tenant else []
+        # Pagination over the already-scoped id list (small per user).
+        page_ids = accessible_tenant_ids[offset : offset + limit]
+        results = []
+        for tid in page_ids:
+            tenant = await tenant_service.get_tenant(tid)
+            if tenant:
+                results.append(to_tenant_response(tenant))
+        return results
 
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list tenants: {str(e)}")

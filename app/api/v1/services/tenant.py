@@ -24,8 +24,24 @@ class TenantService:
         """Initialize tenant service."""
         pass
 
-    async def create_tenant(self, tenant_data: TenantCreate) -> Dict[str, Any]:
-        """Create a new tenant."""
+    async def create_tenant(
+        self,
+        tenant_data: TenantCreate,
+        creator_user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a new tenant.
+
+        When `creator_user_id` is provided:
+          * the user id is recorded on the tenant payload as `created_by_user_id`
+            (kept as a durable audit trail of who owns the tenant), and
+          * the user is added as an admin member of the tenant's customer org.
+
+        That membership is what surfaces this tenant in the creator's
+        `accessible_tenant_ids`, which `verify_tenant_access` and
+        `list_tenants` use to scope visibility. End result: the creator —
+        and only them, plus platform staff — can see and manage this tenant
+        (and every voice agent / phone number / appointment that hangs off it).
+        """
         # Normalize name for case-insensitive uniqueness
         normalized_name = tenant_data.name.strip()
         normalized_name_lower = normalized_name.lower()
@@ -41,14 +57,26 @@ class TenantService:
             "name_lower": normalized_name_lower,
             "owner_email": tenant_data.owner_email.strip(),
         }
+        if creator_user_id:
+            tenant_dict["created_by_user_id"] = creator_user_id
         add_timestamps(tenant_dict)
 
         created_tenant = await store.create_tenant(tenant_dict)
-        await self.ensure_org_mapping_for_tenant(created_tenant)
+        await self.ensure_org_mapping_for_tenant(created_tenant, creator_user_id=creator_user_id)
         return created_tenant
 
-    async def ensure_org_mapping_for_tenant(self, tenant: Dict[str, Any]) -> None:
-        """Ensure partner/customer org hierarchy exists for a legacy tenant."""
+    async def ensure_org_mapping_for_tenant(
+        self,
+        tenant: Dict[str, Any],
+        creator_user_id: Optional[str] = None,
+    ) -> None:
+        """Ensure partner/customer org hierarchy exists for a legacy tenant.
+
+        When `creator_user_id` is provided AND the customer org was just
+        created (or already exists without that membership), the creator is
+        added as an admin member so the tenant lands in their
+        `accessible_tenant_ids`. Idempotent — safe to re-call.
+        """
         tenant_id = str(tenant.get("id", "")).strip()
         tenant_name = str(tenant.get("name", "")).strip() or "Tenant"
         if not tenant_id:
@@ -94,6 +122,26 @@ class TenantService:
                 "approval_notes": "Auto-approved for legacy tenant continuity",
             },
         )
+
+        # Bind the creator to the customer org so the tenant appears in
+        # their accessible_tenant_ids. `create_membership` is upsert-safe
+        # (no-ops if they're already a member).
+        if creator_user_id:
+            try:
+                await org_service.create_membership(
+                    org_id=customer_org_id,
+                    user_id=str(creator_user_id),
+                    role="admin",
+                )
+            except Exception:
+                # Never let a membership-bookkeeping failure sink tenant
+                # creation. The tenant row + org hierarchy are already
+                # persisted; ownership can be backfilled manually if needed.
+                import logging
+                logging.getLogger(__name__).exception(
+                    "[TENANT CREATE] Failed to bind creator %s to customer org %s",
+                    creator_user_id, customer_org_id,
+                )
 
     async def get_tenant(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Get tenant by ID (with caching)."""

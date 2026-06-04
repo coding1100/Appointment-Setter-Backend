@@ -209,18 +209,21 @@ def verify_tenant_access(user: Dict[str, Any], tenant_id: str) -> None:
     Verify that the authenticated user has access to the specified tenant.
 
     Tenant Binding Model:
-    - Users have a `tenant_id` field that binds them to a tenant
-    - Users with role 'admin' can access any tenant
-    - Regular users can only access their own tenant (matching `tenant_id`)
+    - Platform staff (`platform_scope` or `org_service.is_platform_staff`) can access ANY tenant.
+    - Everyone else — INCLUDING tenant-level `role == "admin"` users — must
+      have the tenant in their `accessible_tenant_ids` (driven by customer-org
+      membership). A tenant admin is the admin of THEIR tenant, not of every
+      other customer's tenant.
+    - Legacy back-compat: users not yet migrated to org memberships fall
+      through to their single `user.tenant_id` field.
 
     Raises HTTPException if access is denied.
     """
-    user_role = str(user.get("role", "user")).lower()
     user_tenant_id = user.get("tenant_id")
     accessible_tenant_ids = {str(item) for item in (user.get("accessible_tenant_ids") or []) if item}
     memberships = user.get("org_memberships") or []
 
-    if user_role == "admin" or user.get("platform_scope") or org_service.is_platform_staff(memberships):
+    if user.get("platform_scope") or org_service.is_platform_staff(memberships):
         return
 
     if tenant_id in accessible_tenant_ids:
