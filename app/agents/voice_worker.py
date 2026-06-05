@@ -714,9 +714,8 @@ async def entrypoint(ctx: agents.JobContext):
     # client-side endpointing knobs — they'd just add a redundant
     # processing hop before the model sees the audio.
     #
-    # Latency tuning lives on the RealtimeModel via `realtime_input_config`
-    # and `proactivity` — both of which push tightening to the model
-    # boundary where it actually matters.
+    # Latency tuning lives on the RealtimeModel via `realtime_input_config`,
+    # which pushes VAD tightening to the model boundary where it matters.
     # https://ai.google.dev/gemini-api/docs/live
     chosen_voice = (config.get("voice_id") or "").strip()
     live_voice = chosen_voice if chosen_voice in _GEMINI_LIVE_VOICES else GEMINI_LIVE_DEFAULT_VOICE
@@ -725,6 +724,12 @@ async def entrypoint(ctx: agents.JobContext):
         GEMINI_LIVE_MODEL, live_voice, chosen_voice or None,
     )
 
+    # NOTE: `proactivity=True` (proactive audio) is gated behind the v1alpha
+    # API surface for `gemini-2.5-flash-native-audio-preview-*`. The LiveKit
+    # plugin connects to v1beta, so enabling it makes Google close the
+    # websocket with 1008 "Operation is not implemented, or supported, or
+    # enabled." Keep it off until we either pin the plugin to v1alpha or
+    # move to a model that supports proactivity on v1beta.
     session = AgentSession(
         llm=RealtimeModel(
             model=GEMINI_LIVE_MODEL,
@@ -737,7 +742,6 @@ async def entrypoint(ctx: agents.JobContext):
             input_audio_transcription=None,
             output_audio_transcription=None,
             realtime_input_config=_GEMINI_LIVE_REALTIME_INPUT_CONFIG,
-            proactivity=True,
         ),
     )
 
