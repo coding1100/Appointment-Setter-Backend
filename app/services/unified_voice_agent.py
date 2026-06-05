@@ -1,7 +1,7 @@
 """
 Unified LiveKit Voice Agent Service
 ====================================
-Handles both browser-based testing and Twilio phone call integration.
+Handles Twilio inbound phone call integration for the LiveKit worker.
 
 ARCHITECTURE (LiveKit Official Telephony Flow):
 ===============================================
@@ -9,7 +9,7 @@ INBOUND CALL FLOW:
 1. Twilio PSTN â†’ Backend webhook (/twilio/webhook)
 2. Backend identifies tenant from called phone number (To)
 3. Backend generates unique call_id for this call
-4. Backend stores config under: tenant_config:<tenant_id>:<call_id>
+4. Backend stores config under: call_config:<twilio_call_sid>
 5. Backend returns TwiML <Dial><Sip> to LiveKit SIP domain
    - Passes tenant_id and call_id via SIP headers
    - Does NOT specify room name (LiveKit creates it)
@@ -17,27 +17,22 @@ INBOUND CALL FLOW:
 7. SIP Dispatch Rule creates auto-named room: call-+14438600638_x9fhA2Lt
 8. Dispatch Rule launches voice-agent worker
 9. Worker extracts tenant_id + call_id from SIP headers
-10. Worker loads config from Redis: tenant_config:<tenant_id>:<call_id>
+10. Worker loads config from Redis: call_config:<twilio_call_sid>
 11. Worker handles call with tenant-specific configuration
 
 KEY PRINCIPLES:
 - Backend NEVER creates LiveKit rooms for inbound calls
 - Backend NEVER depends on or generates room names
-- Backend stores config keyed by tenant_id + call_id (NOT room name)
+- Backend stores config keyed by Twilio CallSid (NOT room name)
 - Multiple tenants CAN share the same PSTN number
 - Each call gets isolated config via unique call_id
 """
 
-import asyncio
 import json
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from livekit import api
-from livekit.agents.voice.agent import Agent
-from livekit.plugins import deepgram, google, silero
-from twilio.rest import Client
 from twilio.twiml.voice_response import Dial, VoiceResponse
 
 from app.core.async_redis import async_redis_client
@@ -46,41 +41,29 @@ from app.core.config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
     LIVEKIT_SIP_DOMAIN,
-    LIVEKIT_SIP_HEADER_TENANT_ID,
-    LIVEKIT_SIP_HEADER_CALL_ID,
-    LIVEKIT_SIP_HEADER_CALLED_NUMBER,
     LIVEKIT_URL,
-    TWILIO_WEBHOOK_BASE_URL,
 )
-from app.core.encryption import encryption_service
 from app.core.utils import get_current_timestamp
 from app.services.store import store
 from app.utils.phone_number import normalize_phone_number_safe
-from app.services.tts_provider import build_tts_with_fallback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 class UnifiedVoiceAgentService:
     """
-    Unified voice agent service that handles both:
-    1. Browser-based testing (direct LiveKit connection)
-    2. Phone calls (Twilio SIP â†’ LiveKit bridge)
+    Unified voice agent service for phone calls (Twilio SIP -> LiveKit bridge).
 
     IMPORTANT: For inbound phone calls, this service:
     - Does NOT create LiveKit rooms (dispatch rule creates them)
     - Does NOT depend on room names for config
-    - Stores config by tenant_id + call_id for worker to retrieve
+    - Stores config by Twilio CallSid for the worker to retrieve
     """
 
     def __init__(self):
         """Initialize unified voice agent service."""
-        self.tenant_agents = {}  # tenant_id:service_type -> agent_instance (for browser testing)
         self.active_sessions = {}  # session_id -> session_data (for tracking)
-        self._livekit_api = None
-        self._vad = None  # Shared Silero VAD instance (lazy-loaded)
         self._session_ttl_seconds = max(CALL_CONFIG_TTL_SECONDS, 24 * 60 * 60)
 
         # Validate LiveKit configuration at startup
@@ -130,19 +113,6 @@ class UnifiedVoiceAgentService:
         await self._store_session(session_id, merged)
         return merged
 
-    async def _delete_session(self, session_id: str) -> None:
-        """Delete session and secondary indexes from Redis and memory."""
-        existing = await self._get_session(session_id)
-        await async_redis_client.delete(self._session_key(session_id))
-        if existing:
-            tenant_id = existing.get("tenant_id")
-            if tenant_id:
-                await async_redis_client.srem(self._tenant_session_set_key(str(tenant_id)), session_id)
-            twilio_call_sid = existing.get("twilio_call_sid")
-            if twilio_call_sid:
-                await async_redis_client.delete(self._callsid_session_key(str(twilio_call_sid)))
-        self.active_sessions.pop(session_id, None)
-
     async def _find_session_by_twilio_call_sid(self, call_sid: Optional[str]) -> Optional[Dict[str, Any]]:
         if not call_sid:
             return None
@@ -153,44 +123,6 @@ class UnifiedVoiceAgentService:
             if sess_data.get("twilio_call_sid") == call_sid:
                 return sess_data
         return None
-
-    async def list_tenant_sessions(self, tenant_id: str, active_only: bool = True) -> List[Dict[str, Any]]:
-        """List tenant sessions from Redis-backed session store."""
-        session_ids = await async_redis_client.smembers(self._tenant_session_set_key(tenant_id))
-        sessions: List[Dict[str, Any]] = []
-        for session_id in session_ids:
-            session = await self._get_session(session_id)
-            if not session:
-                continue
-            if active_only and session.get("status") == "ended":
-                continue
-            sessions.append({"session_id": session_id, **session})
-        sessions.sort(key=lambda row: row.get("created_at") or "", reverse=True)
-        return sessions
-
-    async def get_tenant_agent_stats(self, tenant_id: str) -> Dict[str, Any]:
-        """Aggregate tenant stats from Redis-backed sessions + in-memory agent cache."""
-        agent_instances = []
-        for key, agent_data in self.tenant_agents.items():
-            if agent_data["tenant_id"] == tenant_id:
-                created_at = agent_data.get("created_at")
-                agent_instances.append(
-                    {
-                        "service_type": agent_data["service_type"],
-                        "created_at": created_at if isinstance(created_at, str) else created_at.isoformat(),
-                    }
-                )
-
-        all_sessions = await self.list_tenant_sessions(tenant_id, active_only=False)
-        active_count = len([s for s in all_sessions if s.get("status") != "ended"])
-
-        return {
-            "tenant_id": tenant_id,
-            "agent_instances": agent_instances,
-            "agent_count": len(agent_instances),
-            "active_sessions": active_count,
-            "total_sessions": len(all_sessions),
-        }
 
     def _validate_livekit_config(self):
         """Validate LiveKit configuration at startup."""
@@ -216,285 +148,11 @@ class UnifiedVoiceAgentService:
 
         logger.info("=" * 60)
 
-    @property
-    def livekit_api(self):
-        """Get LiveKit API instance (lazy initialization)."""
-        if self._livekit_api is None:
-            if not LIVEKIT_URL:
-                raise ValueError("LIVEKIT_URL is not configured")
-            self._livekit_api = api.LiveKitAPI(url=LIVEKIT_URL, api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
-        return self._livekit_api
-
-    def _get_agent_key(self, tenant_id: str, service_type: str) -> str:
-        """Generate agent key for tenant and service type."""
-        return f"{tenant_id}:{service_type}"
-
-    @staticmethod
     def _resolve_agent_type(agent_data: Optional[Dict[str, Any]]) -> str:
         """Resolve agent type with migration fallback."""
         if not agent_data:
             return "voice"
         return agent_data.get("agent_type") or "voice"
-
-    async def get_or_create_agent(
-        self,
-        tenant_id: str,
-        service_type: str,
-        voice_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        agent_config: Optional[Dict[str, Any]] = None,
-    ) -> Agent:
-        """
-        Get existing agent instance or create new one for tenant.
-        Used for BROWSER TESTING only. Phone calls use the worker directly.
-        """
-        # Use agent_id in key if provided for agent-specific instances
-        agent_key = self._get_agent_key(tenant_id, service_type)
-        if agent_id:
-            agent_key = f"{agent_key}:{agent_id}"
-
-        # Check if agent exists and if voice_id has changed
-        should_recreate = False
-        if agent_key in self.tenant_agents:
-            cached_voice_id = self.tenant_agents[agent_key].get("voice_id")
-            if cached_voice_id != voice_id:
-                logger.info(f"Voice changed from {cached_voice_id} to {voice_id}, recreating agent")
-                should_recreate = True
-
-        if agent_key not in self.tenant_agents or should_recreate:
-            logger.info(f"Creating new agent for {agent_key} with voice_id={voice_id} (this may take 5-10 seconds...)")
-
-            # Get tenant-specific configuration
-            tenant_config = await self._get_tenant_config(tenant_id)
-
-            # Create agent with tenant-specific settings
-            system_prompt = self._get_system_prompt(tenant_config, service_type, agent_config)
-
-            # Lazily load and reuse a single Silero VAD instance
-            if self._vad is None:
-                self._vad = silero.VAD.load(sample_rate=8000)
-
-            language_code = "en"
-            if agent_config and "language" in agent_config:
-                language_code = agent_config.get("language", "en-US").split("-")[0]
-
-            tts_service = build_tts_with_fallback(voice_id=voice_id, language_code=language_code)
-            logger.info("TTS configured with Gemini primary + ElevenLabs fallback (voice_id=%s)", voice_id)
-
-            agent = Agent(
-                vad=self._vad,
-                stt=deepgram.STT(),
-                llm=google.LLM(model="gemini-2.5-flash-lite"),
-                tts=tts_service,
-                instructions=system_prompt,
-            )
-
-            self.tenant_agents[agent_key] = {
-                "agent": agent,
-                "created_at": get_current_timestamp(),
-                "tenant_id": tenant_id,
-                "service_type": service_type,
-                "voice_id": voice_id,
-                "agent_id": agent_id,
-            }
-
-            logger.info("âœ“ Agent instance created and cached successfully")
-        else:
-            logger.info("âœ“ Using cached agent instance")
-
-        return self.tenant_agents[agent_key]["agent"]
-
-    async def start_session(
-        self,
-        tenant_id: str,
-        service_type: str,
-        test_mode: bool = True,
-        phone_number: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Start a voice agent session.
-
-        For test_mode=True: Creates token with RoomConfiguration; room is created on join
-        For test_mode=False: Initiates outbound Twilio call (room still pre-created for outbound)
-        
-        NOTE: For INBOUND calls, the room is created by LiveKit dispatch rule, not here.
-        """
-        try:
-            session_id = str(uuid.uuid4())
-            
-            # For browser testing, we do NOT pre-create rooms.
-            # Rooms are created on first join using token RoomConfiguration.
-            # For outbound calls, we still create rooms (different from inbound).
-            room_name = f"agent-{tenant_id}-{session_id[:8]}"
-
-            logger.info(f"Starting session {session_id} for tenant {tenant_id}, test_mode={test_mode}")
-
-            # Extract agent_id from metadata if provided
-            agent_id = None
-            voice_id = None
-            agent_data = None
-
-            if metadata and "agent_id" in metadata:
-                agent_id = metadata["agent_id"]
-                logger.info(f"Using agent_id from metadata: {agent_id}")
-
-                try:
-                    agent_data = await store.get_agent(agent_id)
-                    if not agent_data:
-                        raise ValueError(f"Voice agent '{agent_id}' not found")
-
-                    agent_type = self._resolve_agent_type(agent_data)
-                    if agent_type != "voice":
-                        raise ValueError(
-                            f"Agent {agent_id} is type '{agent_type}'. Voice sessions require voice agents."
-                        )
-                    voice_id = agent_data.get("voice_id")
-                    logger.info(f"Fetched agent config - voice_id: {voice_id}, name: {agent_data.get('name')}")
-                except Exception as e:
-                    logger.error(f"Error fetching agent data: {e}")
-                    raise
-
-            # Store session data
-            session_data = {
-                "session_id": session_id,
-                "tenant_id": tenant_id,
-                "service_type": service_type,
-                "room_name": room_name,
-                "test_mode": test_mode,
-                "phone_number": phone_number,
-                "status": "initializing",
-                "metadata": metadata or {},
-                "created_at": get_current_timestamp(),
-                "started_at": None,
-                "ended_at": None,
-            }
-
-            if test_mode:
-                # BROWSER TESTING MODE: token-based dispatch on participant connection
-                logger.info(f"Preparing browser test room (token dispatch; room created on join): {room_name}")
-                
-                # Create room config for browser testing
-                room_config = {
-                    "tenant_id": tenant_id,
-                    "service_type": service_type,
-                    "agent_id": agent_id,
-                    "voice_id": voice_id,
-                    "agent_data": self._clean_agent_data(agent_data) if agent_data else None,
-                    "call_id": session_id,  # Use session_id as call_id for browser tests
-                    "session_id": session_id,  # Also store session_id for reference
-                }
-                
-                # For browser testing, store config under tenant_config for worker
-                await self._store_tenant_config(tenant_id, session_id, room_config)
-                
-                # ALSO store by room name for direct lookup by worker
-                await self._store_room_config(room_name, room_config)
-                
-                # Do NOT pre-create the room. When the participant joins with a token that
-                # includes RoomConfiguration, LiveKit creates the room and dispatches the agent.
-                # Pre-creating the room would skip token room_config and prevent dispatch.
-                logger.info(f"[ROOM] Skipping pre-create for browser testing: {room_name}")
-                
-                # Generate token for browser client
-                token = self._generate_room_token(room_name, f"client-{session_id[:8]}")
-                session_data["status"] = "ready"
-                session_data["connection_type"] = "browser"
-
-                livekit_url = self._format_livekit_url()
-
-                result = {
-                    "session_id": session_id,
-                    "room_name": room_name,
-                    "token": token,
-                    "livekit_url": livekit_url,
-                    "status": "ready",
-                    "message": "Connect your browser to the LiveKit room using the provided token",
-                }
-            else:
-                # OUTBOUND CALL MODE: Initiate Twilio call
-                if not phone_number:
-                    raise ValueError("phone_number is required when test_mode=False")
-
-                # For outbound, we still create room and initiate call
-                call_sid = await self._initiate_twilio_call(
-                    tenant_id=tenant_id, phone_number=phone_number, room_name=room_name
-                )
-
-                session_data["status"] = "calling"
-                session_data["connection_type"] = "phone"
-                session_data["twilio_call_sid"] = call_sid
-
-                result = {
-                    "session_id": session_id,
-                    "room_name": room_name,
-                    "status": "calling",
-                    "twilio_call_sid": call_sid,
-                    "phone_number": phone_number,
-                    "message": f"Calling {phone_number}...",
-                }
-
-            await self._store_session(session_id, session_data)
-            return result
-
-        except ValueError:
-            raise
-        except Exception as e:
-            logger.error(f"Error starting session: {e}")
-            raise Exception(f"Failed to start session: {str(e)}")
-
-    async def end_session(self, session_id: str) -> bool:
-        """End a voice agent session."""
-        try:
-            session = await self._get_session(session_id)
-            if not session:
-                logger.warning(f"Session {session_id} not found")
-                return False
-
-            room_name = session.get("room_name")
-
-            logger.info(f"Ending session {session_id}")
-
-            session = await self._update_session(
-                session_id, {"status": "ended", "ended_at": get_current_timestamp()}
-            ) or session
-
-            # Delete LiveKit room if it exists
-            if room_name:
-                await self._delete_room(room_name)
-
-            # If it's a phone call, hang up Twilio call
-            if not session["test_mode"] and "twilio_call_sid" in session:
-                await self._hangup_twilio_call(session["tenant_id"], session["twilio_call_sid"])
-
-            await self._delete_session(session_id)
-            return True
-
-        except Exception as e:
-            logger.error(f"Error ending session: {e}")
-            return False
-
-    async def get_session_status(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Get session status."""
-        return await self._get_session(session_id)
-
-    async def clear_agent_cache(self, tenant_id: Optional[str] = None, agent_id: Optional[str] = None) -> Dict[str, Any]:
-        """Clear cached agent instances."""
-        cleared = 0
-
-        if agent_id and tenant_id:
-            keys_to_remove = [key for key in self.tenant_agents.keys() if agent_id in key and tenant_id in key]
-        elif tenant_id:
-            keys_to_remove = [key for key in self.tenant_agents.keys() if tenant_id in key]
-        else:
-            keys_to_remove = list(self.tenant_agents.keys())
-
-        for key in keys_to_remove:
-            del self.tenant_agents[key]
-            cleared += 1
-
-        logger.info(f"Cleared {cleared} agent instance(s) from cache")
-        return {"cleared": cleared, "message": f"Successfully cleared {cleared} agent instance(s)"}
 
     async def handle_twilio_webhook(self, form_data: Dict[str, Any]) -> VoiceResponse:
         """
@@ -519,28 +177,6 @@ class UnifiedVoiceAgentService:
             to_number = form_data.get("To")
 
             logger.info(f"[TWILIO WEBHOOK] Inbound call: CallSid={call_sid}, From={from_number}, To={to_number}")
-
-            # Check if this is an outbound call we initiated (session already exists)
-            existing_session = await self._find_session_by_twilio_call_sid(call_sid)
-
-            if existing_session:
-                # OUTBOUND CALL: Use existing session (room was pre-created)
-                logger.info(f"[TWILIO WEBHOOK] Found existing session for outbound call {call_sid}")
-                room_name = existing_session["room_name"]
-                
-                # For outbound, use room-based SIP URI
-                sip_uri = self._get_livekit_sip_uri_with_room(room_name)
-                
-                response = VoiceResponse()
-                dial = Dial()
-                dial.sip(sip_uri)
-                response.append(dial)
-                
-                await self._update_session(
-                    existing_session.get("session_id", ""),
-                    {"status": "connecting", "started_at": get_current_timestamp()},
-                )
-                return response
 
             # ========================================
             # INBOUND CALL HANDLING (NEW ARCHITECTURE)
@@ -783,37 +419,6 @@ class UnifiedVoiceAgentService:
             logger.error(f"[REDIS STORE] âœ— Error storing config: {exc}", exc_info=True)
             return False
 
-    async def _store_room_config(
-        self, room_name: str, config: Dict[str, Any], ttl: int = CALL_CONFIG_TTL_SECONDS
-    ) -> bool:
-        """
-        Store call configuration in Redis by room name (for browser test sessions).
-        
-        Key format: room_config:<room_name>
-        
-        This allows the worker to look up config directly from the room name
-        when handling browser test sessions (WebRTC participants).
-        """
-        try:
-            config_key = f"room_config:{room_name}"
-            config_json = json.dumps(config)
-            
-            logger.info(f"[REDIS STORE] Storing config by room name: {config_key}")
-            await async_redis_client.set(config_key, config_json, ttl=ttl)
-            
-            # Verify storage
-            verify_data = await async_redis_client.get(config_key)
-            if verify_data:
-                logger.info("[REDIS STORE] âœ“ Successfully stored config by room name")
-                return True
-            else:
-                logger.error("[REDIS STORE] âœ— Failed to verify config storage by room name")
-                return False
-                
-        except Exception as exc:
-            logger.error(f"[REDIS STORE] âœ— Error storing config by room name: {exc}", exc_info=True)
-            return False
-
     async def _store_config_by_twilio_callsid(
         self, twilio_call_sid: str, config: Dict[str, Any], ttl: int = CALL_CONFIG_TTL_SECONDS
     ) -> bool:
@@ -898,248 +503,5 @@ class UnifiedVoiceAgentService:
         
         return domain
 
-    def _build_sip_query_params(self, tenant_id: str, call_id: str, called_number: str) -> str:
-        """
-        Build SIP query parameters string for Twilio to LiveKit routing.
-        
-        TWILIO OFFICIAL FORMAT: Custom SIP headers must be passed as query parameters.
-        Format: ?header1=value1&header2=value2
-        
-        Twilio forwards these as SIP headers in the INVITE, and LiveKit maps them
-        to participant attributes:
-        - X-LK-TenantId -> sip.h.x-lk-tenantid (LiveKit normalizes to lowercase)
-        - X-LK-CallId -> sip.h.x-lk-callid
-        - X-LK-CalledNumber -> sip.h.x-lk-callednumber
-        
-        The worker reads these from sip_participant.attributes.
-        
-        Reference: https://www.twilio.com/docs/voice/twiml/sip
-        """
-        from urllib.parse import quote
-        
-        # URL encode values to handle special characters (like + in phone numbers)
-        params = [
-            f"{LIVEKIT_SIP_HEADER_TENANT_ID}={quote(tenant_id, safe='')}",
-            f"{LIVEKIT_SIP_HEADER_CALL_ID}={quote(call_id, safe='')}",
-            f"{LIVEKIT_SIP_HEADER_CALLED_NUMBER}={quote(called_number, safe='')}",
-        ]
-        
-        # Join with & and prepend with ?
-        query_string = "?" + "&".join(params)
-        
-        logger.info(f"[SIP HEADERS] Built query params: {query_string}")
-        return query_string
-
-    def _build_sip_uri_with_headers(self, tenant_id: str, call_id: str, called_number: str) -> str:
-        """
-        Build complete SIP URI with headers for inbound calls.
-        
-        TWILIO OFFICIAL FORMAT: Custom SIP headers as query parameters.
-        sip:agent@domain.sip.livekit.cloud?X-LK-TenantId=abc&X-LK-CallId=123&X-LK-CalledNumber=%2B1234567890
-        
-        This ensures:
-        - Twilio forwards headers to LiveKit via SIP INVITE
-        - LiveKit maps headers to participant attributes (sip.h.x-lk-*)
-        - Worker can extract tenant_id, call_id, and called_number reliably
-        
-        Reference: https://www.twilio.com/docs/voice/twiml/sip
-        """
-        domain = self._get_livekit_sip_domain()
-        query_params = self._build_sip_query_params(tenant_id, call_id, called_number)
-        
-        # Use "agent" as the user portion of the SIP URI
-        # Format: sip:agent@domain?params
-        sip_uri = f"sip:agent@{domain}{query_params}"
-        
-        logger.info(f"[SIP URI] Built complete URI: {sip_uri}")
-        return sip_uri
-
-    def _get_livekit_sip_uri_with_room(self, room_name: str) -> str:
-        """
-        Generate SIP URI with room name (for outbound calls where we pre-create rooms).
-        
-        Format: sip:room_name@domain
-        """
-        if not room_name:
-            raise ValueError("room_name is required")
-        
-        domain = self._get_livekit_sip_domain()
-        sip_uri = f"sip:{room_name}@{domain}"
-        
-        logger.info(f"[SIP URI] Generated room-based SIP URI: {sip_uri}")
-        return sip_uri
-
-    async def _get_tenant_config(self, tenant_id: str) -> Dict[str, Any]:
-        """Get tenant configuration from PostgreSQL."""
-        try:
-            config = await store.get_agent_settings(tenant_id)
-            return config or {}
-        except Exception as e:
-            logger.warning(f"Failed to get tenant config from PostgreSQL: {e}")
-            return {"business_name": "our company", "service_type": "Home Services"}
-
-    def _get_system_prompt(
-        self, tenant_config: Dict[str, Any], service_type: str, agent_config: Optional[Dict[str, Any]] = None
-    ) -> str:
-        """Generate system prompt for the agent."""
-        business_name = tenant_config.get("business_name", "our company")
-
-        if agent_config:
-            agent_name = agent_config.get("name", "Agent")
-            greeting = agent_config.get("greeting_message", "")
-            language = agent_config.get("language", "en-US")
-
-            return f"""You are {agent_name}, a professional appointment booking assistant for {business_name}, specializing in {service_type} services.
-
-Your greeting: "{greeting}"
-
-Your role is to help customers schedule appointments by collecting:
-- Customer name
-- Phone number
-- Email address
-- Service address
-- Preferred date and time
-- Service details and requirements
-
-Be friendly, professional, and efficient. Confirm all details before booking the appointment.
-
-Current service type: {service_type}
-Business: {business_name}
-Language: {language}"""
-        else:
-            return f"""You are a professional appointment booking assistant for {business_name}, specializing in {service_type} services.
-
-Your role is to help customers schedule appointments.
-
-Current service type: {service_type}
-Business: {business_name}"""
-
-    async def _create_browser_test_room(self, room_name: str) -> bool:
-        """Create a LiveKit room for browser testing."""
-        try:
-            await self.livekit_api.room.create_room(
-                api.CreateRoomRequest(name=room_name, empty_timeout=300, max_participants=10)
-            )
-            logger.info(f"[ROOM] Created room for browser testing: {room_name}")
-            return True
-        except Exception as e:
-            logger.error(f"[ROOM] Error creating room: {e}")
-            return False
-
-    async def _delete_room(self, room_name: str) -> bool:
-        """Delete a LiveKit room."""
-        try:
-            await self.livekit_api.room.delete_room(api.DeleteRoomRequest(room=room_name))
-            logger.info(f"[ROOM] Deleted room: {room_name}")
-            return True
-        except Exception as e:
-            logger.error(f"[ROOM] Error deleting room: {e}")
-            return False
-
-    def _generate_room_token(self, room_name: str, identity: str) -> str:
-        """Generate a LiveKit room token."""
-        try:
-            token = api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-            token.with_identity(identity)
-            token.with_name("Voice Agent Client")
-            token.with_grants(
-                api.VideoGrants(room_join=True, room=room_name, can_publish=True, can_subscribe=True, can_publish_data=True)
-            )
-            # Explicit agent dispatch is required because the worker sets agent_name.
-            # Dispatch the "voice-agent" when the participant connects (per LiveKit docs).
-            token.with_room_config(
-                api.RoomConfiguration(
-                    # Preserve previous room settings from create_room
-                    empty_timeout=300,
-                    max_participants=10,
-                    agents=[
-                        api.RoomAgentDispatch(
-                            agent_name="voice-agent",
-                            metadata=json.dumps({"room": room_name}),
-                        )
-                    ],
-                )
-            )
-            return token.to_jwt()
-        except Exception as e:
-            logger.error(f"Error generating token: {e}")
-            raise
-
-    def _format_livekit_url(self) -> str:
-        """Format LiveKit URL for WebSocket connection."""
-        livekit_url = LIVEKIT_URL
-        
-        if not livekit_url or livekit_url.strip() == "":
-            raise ValueError("LIVEKIT_URL is not configured")
-
-        livekit_url = livekit_url.strip().rstrip("/")
-
-        if not livekit_url.startswith(("ws://", "wss://")):
-            if livekit_url.startswith("https://"):
-                livekit_url = livekit_url.replace("https://", "wss://", 1)
-            elif livekit_url.startswith("http://"):
-                livekit_url = livekit_url.replace("http://", "ws://", 1)
-            else:
-                livekit_url = f"wss://{livekit_url}"
-
-        return livekit_url
-
-    async def _initiate_twilio_call(self, tenant_id: str, phone_number: str, room_name: str) -> str:
-        """Initiate an outbound Twilio phone call."""
-        try:
-            twilio_integration = await store.get_twilio_integration(tenant_id)
-            if twilio_integration and "auth_token" in twilio_integration:
-                try:
-                    twilio_integration["auth_token"] = encryption_service.decrypt(twilio_integration["auth_token"])
-                except Exception as e:
-                    logger.error(f"Failed to decrypt auth_token: {e}")
-                    raise
-
-            if not twilio_integration:
-                raise ValueError(f"No Twilio integration found for tenant {tenant_id}")
-
-            webhook_url = f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/webhook"
-
-            def _initiate_call_sync():
-                twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
-                call = twilio_client.calls.create(
-                    from_=twilio_integration["phone_number"],
-                    to=phone_number,
-                    url=webhook_url,
-                    status_callback=f"{TWILIO_WEBHOOK_BASE_URL}/api/v1/voice-agent/twilio/status",
-                    status_callback_event=["initiated", "ringing", "answered", "completed"],
-                )
-                logger.info(f"Initiated Twilio call: {call.sid}")
-                return call.sid
-
-            return await asyncio.to_thread(_initiate_call_sync)
-
-        except Exception as e:
-            logger.error(f"Error initiating Twilio call: {e}")
-            raise
-
-    async def _hangup_twilio_call(self, tenant_id: str, call_sid: str):
-        """Hang up a Twilio call."""
-        try:
-            twilio_integration = await store.get_twilio_integration(tenant_id)
-            if twilio_integration and "auth_token" in twilio_integration:
-                try:
-                    twilio_integration["auth_token"] = encryption_service.decrypt(twilio_integration["auth_token"])
-                except Exception as e:
-                    logger.error(f"Failed to decrypt auth_token: {e}")
-                    return
-                    
-            if twilio_integration:
-                def _hangup_call_sync():
-                    twilio_client = Client(twilio_integration["account_sid"], twilio_integration["auth_token"])
-                    twilio_client.calls(call_sid).update(status="completed")
-                    logger.info(f"Hung up Twilio call: {call_sid}")
-
-                await asyncio.to_thread(_hangup_call_sync)
-        except Exception as e:
-            logger.error(f"Error hanging up call: {e}")
-
-
 # Global instance
 unified_voice_agent_service = UnifiedVoiceAgentService()
-

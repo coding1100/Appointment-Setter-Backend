@@ -3,7 +3,6 @@ Core configuration settings for the AI Phone Scheduler SaaS platform.
 """
 
 import os
-from typing import Dict
 
 from dotenv import load_dotenv
 
@@ -52,16 +51,10 @@ TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_WEBHOOK_BASE_URL = os.environ.get("TWILIO_WEBHOOK_BASE_URL", "")
 
-# AI Services settings
+# AI Services — only Google API key is required (Gemini Live).
+# OpenAI key kept around since other modules may consult it.
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
-DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
-ELEVEN_API_KEY = os.environ.get("ELEVEN_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-VOICE_TTS_PRIMARY_PROVIDER = os.environ.get("VOICE_TTS_PRIMARY_PROVIDER", "gemini")
-GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
-GEMINI_TTS_VOICE_MALE = os.environ.get("GEMINI_TTS_VOICE_MALE", "Orus")
-GEMINI_TTS_VOICE_FEMALE = os.environ.get("GEMINI_TTS_VOICE_FEMALE", "Aoede")
-ELEVEN_TTS_MODEL = os.environ.get("ELEVEN_TTS_MODEL", "eleven_turbo_v2_5")
 
 
 # Email Settings — SMTP via fastapi_mail (see app/services/email/service.py).
@@ -131,22 +124,3 @@ PLATFORM_BRAND_SECONDARY_COLOR = os.environ.get("PLATFORM_BRAND_SECONDARY_COLOR"
 PLATFORM_BRAND_ACCENT_COLOR = os.environ.get("PLATFORM_BRAND_ACCENT_COLOR", "#f59e0b")
 PLATFORM_APP_BASE_URL = os.environ.get("PLATFORM_APP_BASE_URL", "http://localhost:3000")
 
-# Home Services voice mapping
-VOICE_MAP: Dict[str, str] = {
-    "Home Services": "en_us_006",
-    "Plumbing": "en_us_006",
-    "Electrician": "en_us_006",
-    "Painter": "en_us_006",
-    "Carpenter": "en_us_006",
-    "Maids": "en_us_006",
-}
-
-# Home Services prompt mapping
-PROMPT_MAP: Dict[str, str] = {
-    "Home Services": "custom_prompt_home_services",
-    "Plumbing": "custom_prompt_plumbing",
-    "Electrician": "custom_prompt_electrician",
-    "Painter": "custom_prompt_painter",
-    "Carpenter": "custom_prompt_carpenter",
-    "Maids": "custom_prompt_maids",
-}

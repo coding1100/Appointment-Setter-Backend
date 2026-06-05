@@ -5,8 +5,8 @@
 ## 🚀 Features
 
 ### Core Capabilities
-- **AI Voice Agents**: Powered by LiveKit with Gemini 2.0, Deepgram STT, and ElevenLabs TTS
-- **Dual-Mode Operation**: Browser testing and real phone call integration
+- **AI Voice Agents**: Powered by LiveKit Agents running Google's Gemini Live native-audio model (single-model VAD + STT + LLM + TTS)
+- **Phone Call Operation**: Twilio SIP integration for real inbound calls
 - **Multi-Tenant Architecture**: Complete tenant isolation with dedicated configurations
 - **Appointment Management**: Full CRUD operations with scheduling and slot management
 - **Real-time Communication**: WebSocket-based voice interactions via LiveKit
@@ -45,9 +45,7 @@
 - **Database**: PostgreSQL
 - **Cache/Queue**: Redis
 - **Voice AI**: LiveKit Agents Framework
-- **Speech-to-Text**: Deepgram
-- **Text-to-Speech**: ElevenLabs
-- **LLM**: Google Gemini 2.0 Flash
+- **Realtime Voice Model**: Google Gemini Live (`gemini-2.5-flash-native-audio-preview-12-2025`) — VAD, STT, LLM and TTS in one server-side model
 - **Telephony**: Twilio SIP Trunks
 - **Email**: SMTP (FastAPI-Mail)
 - **Frontend**: React.js with Tailwind CSS
@@ -76,9 +74,10 @@
 ┌───▼────┐    ┌────────▼────────┐   ┌────▼──────┐
 │PostgreSQL│    │  LiveKit Agent  │   │  Twilio   │
 │PostgreSQL│    │    Worker       │   │  SIP      │
-└────────┘    │  - Gemini 2.0   │   └───────────┘
-              │  - Deepgram STT │
-              │  - ElevenLabs   │
+└────────┘    │  - Gemini Live  │   └───────────┘
+              │    native audio │
+              │    (VAD+STT+    │
+              │     LLM+TTS)    │
               └─────────────────┘
 ```
 
@@ -106,9 +105,7 @@
    - Configure SIP domain
 
 5. **AI Services API Keys**
-   - **Google AI (Gemini)**: [Get API Key](https://makersuite.google.com/app/apikey)
-   - **Deepgram**: [Sign up](https://deepgram.com/)
-   - **ElevenLabs**: [Get API Key](https://elevenlabs.io/)
+   - **Google AI (Gemini Live)**: [Get API Key](https://aistudio.google.com/app/apikey) — the only key required for the voice pipeline.
    - **SMTP Server**: Get credentials from your email provider
 
 ### System Requirements
@@ -182,11 +179,9 @@ TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_AUTH_TOKEN=your-twilio-auth-token
 TWILIO_WEBHOOK_BASE_URL=https://your-domain.com
 
-# AI Services
+# AI Services (Gemini Live powers the voice pipeline end-to-end)
 GOOGLE_API_KEY=your-google-ai-api-key
-DEEPGRAM_API_KEY=your-deepgram-api-key
-ELEVEN_API_KEY=your-elevenlabs-api-key
-OPENAI_API_KEY=your-openai-api-key
+OPENAI_API_KEY=your-openai-api-key   # optional, only if other modules need it
 
 # Email Service (SMTP)
 MAIL_USERNAME=your-email@example.com
@@ -279,11 +274,9 @@ POST   /api/v1/tenants/{tenant_id}/deactivate   # Deactivate tenant
 
 ### Voice Agent Operations
 ```
-POST   /api/v1/voice-agent/start-session       # Start voice session
-POST   /api/v1/voice-agent/end-session/{id}    # End session
-GET    /api/v1/voice-agent/session-status/{id} # Get session status
-POST   /api/v1/voice-agent/twilio/webhook      # Twilio webhook
+POST   /api/v1/voice-agent/twilio/webhook      # Twilio inbound webhook
 POST   /api/v1/voice-agent/twilio/status       # Twilio status callback
+GET    /api/v1/agents/voices/list              # Gemini Live voice catalog
 ```
 
 ### Chatbot Agent Operations

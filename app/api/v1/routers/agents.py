@@ -148,57 +148,12 @@ async def deactivate_agent(agent_id: str, current_user: Dict = Depends(get_curre
 @router.get("/voices/list", response_model=VoiceListResponse)
 async def list_available_voices():
     """
-    Get list of available ElevenLabs voices.
+    Get list of available Gemini Live voices.
 
-    Returns predefined list of popular ElevenLabs voices for agent configuration.
+    Returns the 30 prebuilt voices supported by Gemini Live for agent configuration.
     """
     try:
         voices = agent_service.get_available_voices()
         return VoiceListResponse(voices=voices, total=len(voices))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get voices: {str(e)}")
-
-
-@router.get("/voices/preview/{voice_id}")
-async def get_voice_preview_url(voice_id: str):
-    """
-    Get the audio file URL for a voice preview.
-
-    Returns the static file URL for pre-generated voice samples.
-    Audio files are generated once using generate_voice_samples.py script.
-
-    - **voice_id**: ElevenLabs voice ID
-
-    Returns:
-        - **audio_url**: URL to the MP3 audio file
-        - **voice_id**: The requested voice ID
-    """
-    try:
-        # Use centralized voice metadata
-        from app.core.voice_metadata import get_voice_preview_filename
-
-        filename = get_voice_preview_filename(voice_id)
-
-        if not filename:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Voice ID {voice_id} not found")
-
-        # Check if audio file exists
-        import os
-
-        audio_path = os.path.join("app", "static", "voices", filename)
-
-        if not os.path.exists(audio_path):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Audio file not found. Please run 'python generate_voice_samples.py' to generate voice samples.",
-            )
-
-        # Return the static file URL
-        audio_url = f"/static/voices/{filename}"
-
-        return {"audio_url": audio_url, "voice_id": voice_id, "filename": filename}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get voice preview: {str(e)}")
