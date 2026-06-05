@@ -148,6 +148,7 @@ class UnifiedVoiceAgentService:
 
         logger.info("=" * 60)
 
+    @staticmethod
     def _resolve_agent_type(agent_data: Optional[Dict[str, Any]]) -> str:
         """Resolve agent type with migration fallback."""
         if not agent_data:
