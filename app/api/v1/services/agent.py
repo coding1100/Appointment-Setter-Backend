@@ -165,18 +165,13 @@ class AgentService:
         return result is not None
 
     def get_available_voices(self) -> List[VoiceOption]:
-        """Return the voice catalog for the *configured* TTS provider only.
+        """Return the voice catalog the agent can speak with.
 
-        The UI shows whatever this returns, so by filtering here we guarantee
-        the operator can only pick a voice their deployment can actually
-        speak. Switching `VOICE_TTS_PRIMARY_PROVIDER` between "elevenlabs" and
-        "gemini" swaps the entire dropdown without any code or UI change.
+        Gemini Live ships a fixed catalog of 30 prebuilt voices; that's the
+        list, no filtering needed.
         """
-        from app.core.config import VOICE_TTS_PRIMARY_PROVIDER
-        from app.core.voice_metadata import get_voices_by_provider
+        from app.core.voice_metadata import get_all_voices
 
-        provider = (VOICE_TTS_PRIMARY_PROVIDER or "gemini").strip().lower()
-        voice_metadata = get_voices_by_provider(provider)
         return [
             VoiceOption(
                 voice_id=voice["voice_id"],
@@ -184,9 +179,8 @@ class AgentService:
                 description=voice["description"],
                 category=voice["category"],
                 use_case=voice["use_case"],
-                provider=voice.get("provider"),
             )
-            for voice in voice_metadata
+            for voice in get_all_voices()
         ]
 
 

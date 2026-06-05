@@ -118,7 +118,7 @@ app.add_middleware(
 # Runs after CORS middleware (inner to CORS)
 app.add_middleware(TrailingSlashMiddleware)
 
-# Mount backend static files (voice samples) under /api-static
+# Mount backend static assets under /api-static.
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/api-static", StaticFiles(directory=static_dir), name="api-static")

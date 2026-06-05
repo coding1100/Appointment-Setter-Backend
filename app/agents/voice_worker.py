@@ -1,9 +1,10 @@
 """
 LiveKit Voice Agent Worker
 ===========================
-(UPDATED: Official Silero VAD + Turn Detector)
-
-This worker connects to LiveKit and handles voice agent sessions for inbound telephony.
+Runs Gemini Live (`gemini-2.5-flash-native-audio-preview-12-2025`) end-to-end:
+the model handles VAD, turn-taking, STT, LLM reasoning and TTS in a single
+realtime session. This worker connects to LiveKit and handles voice agent
+sessions for inbound telephony.
 """
 
 import asyncio
@@ -268,15 +269,15 @@ class VoiceAgent(Agent):
         )
         if customer_email_sent:
             return (
-                "Appointment booked AND confirmation email sent. Call "
-                "end_call with a closing_line that confirms the email is "
-                "on its way."
+                "Appointment booked AND confirmation email sent. Speak a "
+                "short closing line out loud that confirms the email is on "
+                "its way, then call end_call."
             )
         return (
             "Appointment booked, BUT the confirmation email did NOT go "
-            "out (SMTP failure — check backend logs). Call end_call with "
-            "a closing_line that apologises briefly and says a teammate "
-            "will follow up by phone. Do NOT promise an email."
+            "out (SMTP failure - check backend logs). Speak a short closing "
+            "line out loud that apologises briefly and says a teammate will "
+            "follow up by phone, then call end_call. Do NOT promise an email."
         )
 
     # ------------------------------------------------------------------
@@ -324,13 +325,13 @@ class VoiceAgent(Agent):
                               Due: 2025-12-25 14:30 EST
                               Subject: Statistics
 
-        Returns a status string the LLM uses to choose its closing_line:
+        Returns a status string the LLM uses to choose its spoken closing line:
           * success -> closing should confirm the team will follow up.
           * failure -> closing should say a teammate will call back; do
                        NOT promise a specific follow-up channel.
         """
         if self._lead_captured:
-            return "Lead already captured. Call end_call now."
+            return "Lead already captured. Speak a brief closing line out loud, then call end_call."
         if not self.tenant_id:
             logger.error("[LEAD] tenant_id missing on VoiceAgent; cannot capture lead")
             return (
@@ -400,14 +401,14 @@ class VoiceAgent(Agent):
         if email_sent:
             return (
                 "Lead captured and the team has been notified by email. "
-                "Call end_call with a closing_line that confirms a teammate "
-                "will follow up shortly."
+                "Speak a short closing line out loud that confirms a teammate "
+                "will follow up shortly, then call end_call."
             )
         return (
             "Lead captured but the team-notification email did NOT go out "
-            "(check backend logs). Call end_call with a closing_line saying "
-            "a teammate will call the caller back; do NOT promise a specific "
-            "channel like text or email."
+            "(check backend logs). Speak a short closing line out loud saying "
+            "a teammate will call the caller back, then call end_call. Do "
+            "NOT promise a specific channel like text or email."
         )
 
     # ------------------------------------------------------------------
@@ -523,11 +524,6 @@ class VoiceAgent(Agent):
     # ------------------------------------------------------------------
     # Tools: end the call cleanly — official LiveKit SIP recipe
     # ------------------------------------------------------------------
-    # Sequence (per https://docs.livekit.io/recipes/sip_lifecycle/):
-    #   1. session.say(closing_line)        — schedule the goodbye TTS
-    #   2. await handle.wait_for_playout()  — block until audio fully drains
-    #   3. job_ctx.api.room.delete_room(...) — disconnect SIP participant
-    #
     # Why delete_room and not session.aclose():
     #   "Deleting the room disconnects all remote users, including SIP
     #    callers." — https://docs.livekit.io/agents/prebuilt/tools/end-call-tool/
@@ -535,53 +531,37 @@ class VoiceAgent(Agent):
     # reliably propagate SIP BYE to Twilio. The earlier production error
     # ("speech not done in time after interruption, cancelling the speech
     # arbitrarily") was the symptom of aclose() racing in-flight speech.
-    DEFAULT_CLOSING_LINE = "Thanks for calling. Have a great day."
-
-    async def _finish_call(self, closing_line: Optional[str] = None) -> str:
+    async def _finish_call(self) -> str:
         logger.info(
-            "[CALL] finishing call (tenant=%s call=%s)", self.tenant_id, self.call_id,
+            "[CALL] finishing call (tenant=%s call=%s)",
+            self.tenant_id, self.call_id,
         )
 
-        line = (closing_line or "").strip() or self.DEFAULT_CLOSING_LINE
-
-        # Single-source-of-truth closing:
-        #   1. Forcibly interrupt whatever the LLM may have started
-        #      emitting in the same turn (Flash Lite occasionally tacks
-        #      a "Perfect, thanks!" onto the end_call turn — we don't
-        #      want that to play because it would race with our
-        #      deterministic closing line).
-        #   2. Speak OUR closing line via session.say(). This is the
-        #      only speech the caller hears.
-        #   3. Hard hangup via delete_room.
+        # Gemini Live closes the call the natural way: the model speaks the
+        # goodbye line as part of the same turn that invokes end_call (per
+        # the prompt's END CALL section). All this method does is wait for
+        # that in-flight audio to finish playing — then delete the room.
+        #
+        # We do NOT call generate_reply here, and we do NOT interrupt the
+        # current speech: doing either fights the Live model and produces
+        # the silent-hangup symptom (model emits goodbye -> we cancel it ->
+        # delete_room before audio drains -> caller hears nothing).
         try:
             current = self.session.current_speech
-            if current is not None and not current.done:
+            if current is not None:
                 try:
-                    current.interrupt()
-                    logger.info("[CALL] interrupted in-flight LLM speech before closing line")
-                except Exception as exc:
-                    logger.warning("[CALL] interrupt() raised: %s", exc)
-        except Exception:
-            pass
-
-        try:
-            # Gemini Live generates audio server-side; `session.say()` is
-            # unsupported. Use `generate_reply` with explicit instructions
-            # so the Live model speaks the deterministic closing line.
-            handle = self.session.generate_reply(
-                instructions=(
-                    f"Say exactly: \"{line}\". Do not add any other words. "
-                    "Then stop speaking — the line will be disconnected."
-                ),
-            )
-            try:
-                # Tight timeout — a single closing sentence rarely needs
-                # more than ~6s of TTS; 12s is a generous safety margin.
-                await asyncio.wait_for(handle.wait_for_playout(), timeout=12.0)
-            except asyncio.TimeoutError:
-                logger.warning("[CALL] timed out (12s) playing closing line; hanging up anyway")
+                    await asyncio.wait_for(
+                        current.wait_for_playout(), timeout=15.0,
+                    )
+                    logger.info("[CALL] closing-line audio drained")
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[CALL] timed out (15s) waiting for closing-line playout; hanging up anyway",
+                    )
+            else:
+                logger.warning("[CALL] no current Gemini speech to drain before hangup")
         except Exception as exc:
-            logger.warning("[CALL] error speaking closing line: %s", exc, exc_info=True)
+            logger.warning("[CALL] error draining closing-line audio: %s", exc)
 
         # Step 3: hard hangup via room deletion — the only reliable way to
         # terminate the SIP participant. Falls back to aclose() only if the
@@ -611,20 +591,16 @@ class VoiceAgent(Agent):
         return "Call ended."
 
     @function_tool
-    async def end_call(self, closing_line: str = "") -> str:
-        """End the call after speaking a short closing line.
-
-        Pass `closing_line` as the message you want the caller to hear
-        before the line drops (e.g. "You're all set — a confirmation is
-        on the way. Take care!"). If empty, a generic "Thanks for calling,
-        have a great day." is spoken. The tool speaks the line, waits for
-        it to finish playing, and then hangs up — do NOT speak it yourself
-        first or the caller will hear it twice.
+    async def end_call(self) -> str:
+        """End the call after Gemini has spoken its goodbye out loud.
 
         Call exactly ONCE per call: after book_appointment succeeds, when
         the caller asks to hang up, or after retry discipline is exhausted.
+        The same Gemini turn must include the spoken goodbye before this tool
+        call; this tool only waits for the current speech to finish playing
+        and then hangs up.
         """
-        return await self._finish_call(closing_line=closing_line)
+        return await self._finish_call()
 
 
 # =========================================================

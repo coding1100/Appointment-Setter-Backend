@@ -26,33 +26,14 @@ WORKDIR /app
 
 # Set env early (rarely changes, so cached)
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    HF_HOME=/root/.cache/huggingface \
-    HF_HUB_CACHE=/root/.cache/huggingface \
-    HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface
+    PYTHONDONTWRITEBYTECODE=1
 
 # Copy system-wide Python packages (cached unless requirements.txt changes)
 COPY --from=builder /usr/local /usr/local
 
-# Copy minimal files required to run LiveKit `download-files` during build
-COPY run_voice_worker.py .
-COPY app/__init__.py app/
-COPY app/agents/__init__.py app/agents/
-COPY app/agents/voice_worker.py app/agents/
-COPY app/core/__init__.py app/core/
-COPY app/core/config.py app/core/
-COPY app/core/async_redis.py app/core/
-COPY app/core/prompts.py app/core/
-COPY app/core/voice_metadata.py app/core/
-COPY app/core/platform_apps.py app/core/
-COPY app/services/__init__.py app/services/
-COPY app/services/tts_provider.py app/services/
-
-# Download models/plugins at build time per LiveKit docs
-RUN mkdir -p /root/.cache/huggingface && \
-    python run_voice_worker.py download-files
-
-# Copy application code
+# Copy application code. Gemini Live's native-audio model ships VAD, STT,
+# TTS and turn detection server-side, so there are no local model weights
+# to prefetch — the runtime image just needs the source.
 COPY . .
 
 EXPOSE 8000
