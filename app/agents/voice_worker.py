@@ -1,9 +1,9 @@
 """
 LiveKit Voice Agent Worker
 ===========================
-Runs Gemini Live (`gemini-2.5-flash-native-audio-preview-12-2025`) end-to-end:
-the model handles VAD, turn-taking, STT, LLM reasoning and TTS in a single
-realtime session. This worker connects to LiveKit and handles voice agent
+Runs Gemini Live (`gemini-3.1-flash-live-preview`) end-to-end: the model
+handles VAD, turn-taking, STT, LLM reasoning and TTS in a single realtime
+session. This worker connects to LiveKit and handles voice agent
 sessions for inbound telephony.
 """
 
@@ -47,7 +47,7 @@ GEMINI_LIVE_DEFAULT_VOICE = "Puck"
 # `gemini-live-2.5-flash-native-audio` alias is a VertexAI-only model and
 # requires a GCP project + `vertexai=True`. The `-preview-12-2025` suffix
 # is the corresponding Gemini API endpoint.
-GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview"
 
 # Server-side automatic activity detection — replaces client-side VAD +
 # AgentSession endpointing. The defaults Live ships with are tuned for
