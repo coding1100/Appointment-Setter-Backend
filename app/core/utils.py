@@ -3,9 +3,12 @@ Core utility functions for common operations.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi.responses import JSONResponse
+from starlette.requests import Request
+
+from app.core.cors import get_cors_settings, resolve_allowed_origin
 
 
 def get_current_timestamp() -> str:
@@ -18,7 +21,7 @@ def get_current_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def add_cors_headers(response: JSONResponse) -> JSONResponse:
+def add_cors_headers(response: JSONResponse, request: Optional[Request] = None) -> JSONResponse:
     """
     Add CORS headers to a JSONResponse.
 
@@ -27,13 +30,19 @@ def add_cors_headers(response: JSONResponse) -> JSONResponse:
 
     Args:
         response: JSONResponse to add headers to
+        request: Optional request used to echo the allowed Origin
 
     Returns:
         Response with CORS headers added
     """
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    allowed_origin = resolve_allowed_origin(request)
+    if allowed_origin:
+        response.headers["Access-Control-Allow-Origin"] = allowed_origin
     response.headers["Access-Control-Allow-Methods"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "*"
+    _, allow_credentials = get_cors_settings()
+    if allow_credentials:
+        response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
 

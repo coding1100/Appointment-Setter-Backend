@@ -10,11 +10,13 @@ services:
       - "8001:8000"
 
     environment:
-      ENVIRONMENT: production
+      ENVIRONMENT: development
       DEBUG: "false"
       LOG_LEVEL: INFO
       API_HOST: 0.0.0.0
       API_PORT: 8000
+      CORS_ALLOW_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      AUTH_COOKIE_SECURE: "false"
 
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-appointment_setter}
@@ -30,10 +32,6 @@ services:
       TWILIO_WEBHOOK_BASE_URL: ${TWILIO_WEBHOOK_BASE_URL}
 
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY}
-      ELEVEN_API_KEY: ${ELEVEN_API_KEY}
-      AGENT_VOICE: ${AGENT_VOICE}
-
       MAIL_USERNAME: ${MAIL_USERNAME}
       MAIL_PASSWORD: ${MAIL_PASSWORD}
       MAIL_FROM: ${MAIL_FROM}
@@ -155,10 +153,6 @@ services:
       TWILIO_WEBHOOK_BASE_URL: ${TWILIO_WEBHOOK_BASE_URL}
 
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY}
-      ELEVEN_API_KEY: ${ELEVEN_API_KEY}
-      AGENT_VOICE: ${AGENT_VOICE}
-
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
       SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL}
 
@@ -169,17 +163,7 @@ services:
 
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
 
-      # HuggingFace cache configuration
-      HF_HOME: /root/.cache/huggingface
-      HF_HUB_CACHE: /root/.cache/huggingface
-      TRANSFORMERS_CACHE: /root/.cache/huggingface
-      HUGGINGFACE_HUB_CACHE: /root/.cache/huggingface
-
-      # Disable offline mode to allow fallback downloads if needed
-      HF_HUB_OFFLINE: "0"
-      TRANSFORMERS_OFFLINE: "0"
-
-      # VAD + Turn Detector performance
+      # Numerical library thread caps for predictable worker CPU usage.
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
@@ -202,11 +186,8 @@ services:
     command: ["python", "run_voice_worker.py", "start"]
 
     # -------------------------------------------------------------------
-    # Resource sizing — LiveKit production guidance is ~4 cores / 8GB per
-    # agent server (handles 10-25 concurrent jobs; the turn detector needs
-    # more headroom). Limits cap a runaway worker; reservations guarantee
-    # enough CPU/RAM that VAD/turn-detector prewarm cannot starve and hang
-    # (root cause of the 2026-04-28 10-minute prewarm stall).
+    # Resource sizing. Limits cap a runaway worker; reservations guarantee
+    # enough CPU/RAM for concurrent Gemini Live sessions.
     # Honored by `docker compose up` (Compose v2) without Swarm.
     # https://docs.livekit.io/deploy/custom/deployments/
     # -------------------------------------------------------------------

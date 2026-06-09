@@ -13,10 +13,16 @@ class AgentCreate(BaseModel):
     """Schema for creating a new agent."""
 
     name: str = Field(..., min_length=1, max_length=100, description="Agent name (e.g., 'Receptionist Sarah')")
-    voice_id: str = Field(..., description="ElevenLabs voice ID")
+    voice_id: str = Field(..., description="Gemini Live voice ID")
     language: str = Field(default="en-US", description="Language code (e.g., en-US, es-ES)")
     greeting_message: str = Field(..., min_length=10, max_length=1000, description="Agent greeting message")
     service_type: str = Field(..., description="Service type")
+    system_prompt: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=4000,
+        description="Custom system prompt for the agent. Falls back to service-type template when omitted.",
+    )
 
     @validator("service_type")
     def validate_service_type(cls, v):
@@ -32,6 +38,7 @@ class AgentUpdate(BaseModel):
     language: Optional[str] = None
     greeting_message: Optional[str] = Field(None, min_length=10, max_length=1000)
     service_type: Optional[str] = None
+    system_prompt: Optional[str] = Field(None, min_length=1, max_length=4000)
     status: Optional[str] = None
 
     @validator("service_type")
@@ -53,6 +60,7 @@ class AgentResponse(BaseModel):
     language: str
     greeting_message: str
     service_type: str
+    system_prompt: str = ""
     status: str
     created_at: str
     updated_at: str
@@ -62,15 +70,13 @@ class AgentResponse(BaseModel):
 
 
 class VoiceOption(BaseModel):
-    """Schema for a TTS voice option."""
+    """Schema for a Gemini Live voice option."""
 
     voice_id: str
     name: str
     description: str
-    preview_url: Optional[str] = None
     category: str  # male, female, neutral
     use_case: str  # conversational, narration, customer_service, general
-    provider: Optional[str] = None  # "elevenlabs" or "gemini" — which TTS speaks this voice
 
 
 class VoiceListResponse(BaseModel):
@@ -80,11 +86,23 @@ class VoiceListResponse(BaseModel):
     total: int
 
 
-class VoicePreviewRequest(BaseModel):
-    """Schema for voice preview request."""
+class PromptTemplateOption(BaseModel):
+    """Starter prompt template for agent configuration UI."""
 
-    voice_id: str
-    text: Optional[str] = Field(
-        default="Hello! This is a preview of my voice. I'm here to help you schedule appointments and answer your questions.",
-        max_length=500,
-    )
+    id: str
+    label: str
+    text: str
+
+
+class PromptTemplateListResponse(BaseModel):
+    """List of starter prompt templates."""
+
+    templates: list[PromptTemplateOption]
+
+
+class PromptPreviewResponse(BaseModel):
+    """Default system prompt preview for a service type."""
+
+    prompt: str
+    service_type: str
+    agent_name: str
