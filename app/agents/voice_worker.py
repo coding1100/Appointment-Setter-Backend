@@ -31,7 +31,7 @@ from app.core.config import (
     LIVEKIT_API_SECRET,
     LIVEKIT_URL,
 )
-from app.core.prompts import get_template
+from app.core.prompts import build_agent_instructions
 
 # Gemini Live voices supported by `gemini-live-2.5-flash-native-audio`.
 # https://ai.google.dev/gemini-api/docs/live#voices
@@ -678,16 +678,13 @@ async def entrypoint(ctx: agents.JobContext):
     # turn — no per-turn `instructions=...` round-trip needed. Falling back
     # to a generic greeting if the agent record didn't configure one.
     service_type = config.get("service_type", "Home Services")
-    agent_name = config.get("agent_data", {}).get("name", "Assistant")
-    instructions = get_template(service_type=service_type, agent_name=agent_name)
-
-    greeting = (config.get("agent_data", {}).get("greeting_message") or "").strip() or (
-        "Hello, thanks for calling. How can I help you today?"
-    )
-    instructions = (
-        f"{instructions}\n\n"
-        "# OPENING LINE (say this verbatim as your very first turn — exactly these words, nothing else)\n"
-        f"{greeting}\n"
+    agent_data = config.get("agent_data") or {}
+    agent_name = agent_data.get("name", "Assistant")
+    instructions = build_agent_instructions(
+        service_type=service_type,
+        agent_name=agent_name,
+        greeting_message=agent_data.get("greeting_message") or "",
+        system_prompt=agent_data.get("system_prompt"),
     )
 
     # 5️⃣ Create agent. Pass the JobContext through so the agent can call

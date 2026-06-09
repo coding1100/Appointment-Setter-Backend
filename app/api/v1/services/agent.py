@@ -40,6 +40,7 @@ class AgentService:
             "language": agent_data.language,
             "greeting_message": agent_data.greeting_message,
             "service_type": agent_data.service_type,
+            "system_prompt": (agent_data.system_prompt or "").strip(),
             "status": "active",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -76,6 +77,8 @@ class AgentService:
             update_data["greeting_message"] = agent_data.greeting_message
         if agent_data.service_type is not None:
             update_data["service_type"] = agent_data.service_type
+        if agent_data.system_prompt is not None:
+            update_data["system_prompt"] = agent_data.system_prompt.strip()
         if agent_data.status is not None:
             update_data["status"] = agent_data.status
 
