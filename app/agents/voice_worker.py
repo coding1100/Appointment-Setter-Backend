@@ -12,7 +12,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Optional
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, function_tool
@@ -680,10 +680,11 @@ async def entrypoint(ctx: agents.JobContext):
     service_type = config.get("service_type", "Home Services")
     agent_data = config.get("agent_data") or {}
     agent_name = agent_data.get("name", "Assistant")
+    greeting_message = agent_data.get("greeting_message") or ""
     instructions = build_agent_instructions(
         service_type=service_type,
         agent_name=agent_name,
-        greeting_message=agent_data.get("greeting_message") or "",
+        greeting_message=greeting_message,
         system_prompt=agent_data.get("system_prompt"),
     )
 
@@ -752,7 +753,7 @@ async def entrypoint(ctx: agents.JobContext):
     try:
         opening_handle = session.generate_reply()
         await asyncio.wait_for(opening_handle.wait_for_playout(), timeout=15.0)
-        logger.info("[WORKER ENTRYPOINT] Greeting played: %r", greeting)
+        logger.info("[WORKER ENTRYPOINT] Greeting played: %r", greeting_message)
     except Exception as exc:
         logger.warning("[WORKER ENTRYPOINT] greeting playout error: %s", exc)
 
