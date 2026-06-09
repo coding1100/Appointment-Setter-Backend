@@ -4,6 +4,8 @@ This module contains the base template and domain-specific templates for differe
 Production-hardened: injection-resistant, validation-forward, and conversationally engaging.
 """
 
+from typing import Optional
+
 # ----------------------------
 # Production BASE TEMPLATE
 # ----------------------------
@@ -619,3 +621,54 @@ def get_template(service_type: str, agent_name: str = "Assistant") -> str:
     """Get the appropriate template for the service type."""
     template_func = TEMPLATE_MAP.get(service_type, create_home_services_template)
     return template_func(agent_name)
+
+
+STARTER_PROMPT_TEMPLATES = [
+    {
+        "id": "receptionist",
+        "label": "Receptionist",
+        "text": (
+            "You are a professional receptionist for a home services company. Greet callers warmly, "
+            "collect their name and service need, and offer to schedule an appointment. "
+            "Stay concise and helpful."
+        ),
+    },
+    {
+        "id": "support",
+        "label": "Customer support",
+        "text": (
+            "You are a customer support agent. Help callers with account questions, troubleshoot common "
+            "issues, and escalate to a human when needed. Always confirm understanding before proceeding."
+        ),
+    },
+    {
+        "id": "scheduler",
+        "label": "Appointment scheduler",
+        "text": (
+            "You are an appointment scheduling assistant. Ask for preferred date and time, confirm service "
+            "address, and summarize booking details before ending the call."
+        ),
+    },
+]
+
+
+def build_agent_instructions(
+    *,
+    service_type: str,
+    agent_name: str,
+    greeting_message: str,
+    system_prompt: Optional[str] = None,
+) -> str:
+    """Compose runtime instructions from a custom or default system prompt plus greeting."""
+    custom_prompt = (system_prompt or "").strip()
+    if custom_prompt:
+        instructions = custom_prompt
+    else:
+        instructions = get_template(service_type=service_type, agent_name=agent_name)
+
+    greeting = (greeting_message or "").strip() or "Hello, thanks for calling. How can I help you today?"
+    return (
+        f"{instructions}\n\n"
+        "# OPENING LINE (say this verbatim as your very first turn — exactly these words, nothing else)\n"
+        f"{greeting}\n"
+    )

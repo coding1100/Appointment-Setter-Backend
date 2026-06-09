@@ -17,6 +17,12 @@ class AgentCreate(BaseModel):
     language: str = Field(default="en-US", description="Language code (e.g., en-US, es-ES)")
     greeting_message: str = Field(..., min_length=10, max_length=1000, description="Agent greeting message")
     service_type: str = Field(..., description="Service type")
+    system_prompt: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=4000,
+        description="Custom system prompt for the agent. Falls back to service-type template when omitted.",
+    )
 
     @validator("service_type")
     def validate_service_type(cls, v):
@@ -32,6 +38,7 @@ class AgentUpdate(BaseModel):
     language: Optional[str] = None
     greeting_message: Optional[str] = Field(None, min_length=10, max_length=1000)
     service_type: Optional[str] = None
+    system_prompt: Optional[str] = Field(None, min_length=1, max_length=4000)
     status: Optional[str] = None
 
     @validator("service_type")
@@ -53,6 +60,7 @@ class AgentResponse(BaseModel):
     language: str
     greeting_message: str
     service_type: str
+    system_prompt: str = ""
     status: str
     created_at: str
     updated_at: str
@@ -76,3 +84,25 @@ class VoiceListResponse(BaseModel):
 
     voices: list[VoiceOption]
     total: int
+
+
+class PromptTemplateOption(BaseModel):
+    """Starter prompt template for agent configuration UI."""
+
+    id: str
+    label: str
+    text: str
+
+
+class PromptTemplateListResponse(BaseModel):
+    """List of starter prompt templates."""
+
+    templates: list[PromptTemplateOption]
+
+
+class PromptPreviewResponse(BaseModel):
+    """Default system prompt preview for a service type."""
+
+    prompt: str
+    service_type: str
+    agent_name: str

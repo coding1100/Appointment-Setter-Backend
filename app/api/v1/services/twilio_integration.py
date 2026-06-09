@@ -29,6 +29,30 @@ async def _run_twilio_sync(func: Callable) -> Any:
     return await asyncio.to_thread(func)
 
 
+def _append_credential_verification_hint(message: str) -> str:
+    """Add guidance when Twilio rejects credentials (expired, rotated, or invalid)."""
+    if not message:
+        return message
+
+    lower = message.lower()
+    hint = "Please verify your Twilio credentials again."
+    if hint.lower() in lower:
+        return message
+
+    auth_indicators = (
+        "authenticate",
+        "authentication failed",
+        "401",
+        "invalid account sid",
+        "invalid auth token",
+        "credential test failed",
+    )
+    if any(indicator in lower for indicator in auth_indicators):
+        return f"{message.rstrip('.')}. {hint}"
+
+    return message
+
+
 class TwilioIntegrationService:
     """Service for managing Twilio integrations for tenants."""
 
@@ -100,7 +124,9 @@ class TwilioIntegrationService:
                         except TwilioException as test_error:
                             return TwilioCredentialTestResponse(
                                 success=False,
-                                message=f"Invalid Twilio test account credentials. Error: {str(test_error)}",
+                                message=_append_credential_verification_hint(
+                                    f"Invalid Twilio test account credentials. Error: {str(test_error)}"
+                                ),
                                 phone_number=None,
                                 account_info=None,
                                 is_test_account=True,
@@ -117,7 +143,7 @@ class TwilioIntegrationService:
                         # Not a test account, but other error occurred
                         return TwilioCredentialTestResponse(
                             success=False,
-                            message=f"Twilio error: {str(e)}",
+                            message=_append_credential_verification_hint(f"Twilio error: {str(e)}"),
                             phone_number=None,
                             account_info=None,
                             is_test_account=False,
@@ -180,7 +206,11 @@ class TwilioIntegrationService:
 
         except TwilioException as e:
             return TwilioCredentialTestResponse(
-                success=False, message=f"Twilio error: {str(e)}", phone_number=None, account_info=None, is_test_account=False
+                success=False,
+                message=_append_credential_verification_hint(f"Twilio error: {str(e)}"),
+                phone_number=None,
+                account_info=None,
+                is_test_account=False,
             )
         except Exception as e:
             return TwilioCredentialTestResponse(
