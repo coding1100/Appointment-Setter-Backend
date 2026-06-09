@@ -45,7 +45,7 @@
 - **Database**: PostgreSQL
 - **Cache/Queue**: Redis
 - **Voice AI**: LiveKit Agents Framework
-- **Realtime Voice Model**: Google Gemini Live (`gemini-2.5-flash-native-audio-preview-12-2025`) — VAD, STT, LLM and TTS in one server-side model
+- **Realtime Voice Model**: Google Gemini Live (`gemini-3.1-flash-live-preview`) — VAD, STT, LLM and TTS in one server-side model
 - **Telephony**: Twilio SIP Trunks
 - **Email**: SMTP (FastAPI-Mail)
 - **Frontend**: React.js with Tailwind CSS
