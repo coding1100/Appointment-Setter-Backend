@@ -445,7 +445,7 @@ def _to_chat_message_row(doc: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-TRANSFORMERS = {
+ROW_MAPPERS = {
     "users": _to_user_row,
     "orgs": _to_org_row,
     "org_memberships": _to_org_membership_row,
@@ -656,7 +656,7 @@ def run_migration(input_dir: Path, apply: bool, report_file: Optional[Path], chu
     for spec in SPECS:
         docs = _load_collection(input_dir, spec.collection)
         source_counts[spec.collection] = len(docs)
-        transformer = TRANSFORMERS[spec.collection]
+        transformer = ROW_MAPPERS[spec.collection]
         transformed = [transformer(doc) for doc in docs]
         valid_rows, invalid = _filter_valid_rows(spec, transformed)
         transformed_counts[spec.collection] = len(valid_rows)

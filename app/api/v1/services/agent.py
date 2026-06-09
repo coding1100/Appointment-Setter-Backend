@@ -40,6 +40,7 @@ class AgentService:
             "language": agent_data.language,
             "greeting_message": agent_data.greeting_message,
             "service_type": agent_data.service_type,
+            "system_prompt": (agent_data.system_prompt or "").strip(),
             "status": "active",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -76,6 +77,8 @@ class AgentService:
             update_data["greeting_message"] = agent_data.greeting_message
         if agent_data.service_type is not None:
             update_data["service_type"] = agent_data.service_type
+        if agent_data.system_prompt is not None:
+            update_data["system_prompt"] = agent_data.system_prompt.strip()
         if agent_data.status is not None:
             update_data["status"] = agent_data.status
 
@@ -165,18 +168,13 @@ class AgentService:
         return result is not None
 
     def get_available_voices(self) -> List[VoiceOption]:
-        """Return the voice catalog for the *configured* TTS provider only.
+        """Return the voice catalog the agent can speak with.
 
-        The UI shows whatever this returns, so by filtering here we guarantee
-        the operator can only pick a voice their deployment can actually
-        speak. Switching `VOICE_TTS_PRIMARY_PROVIDER` between "elevenlabs" and
-        "gemini" swaps the entire dropdown without any code or UI change.
+        Gemini Live ships a fixed catalog of 30 prebuilt voices; that's the
+        list, no filtering needed.
         """
-        from app.core.config import VOICE_TTS_PRIMARY_PROVIDER
-        from app.core.voice_metadata import get_voices_by_provider
+        from app.core.voice_metadata import get_all_voices
 
-        provider = (VOICE_TTS_PRIMARY_PROVIDER or "gemini").strip().lower()
-        voice_metadata = get_voices_by_provider(provider)
         return [
             VoiceOption(
                 voice_id=voice["voice_id"],
@@ -184,9 +182,8 @@ class AgentService:
                 description=voice["description"],
                 category=voice["category"],
                 use_case=voice["use_case"],
-                provider=voice.get("provider"),
             )
-            for voice in voice_metadata
+            for voice in get_all_voices()
         ]
 
 

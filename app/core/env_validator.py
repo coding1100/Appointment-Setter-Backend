@@ -7,10 +7,8 @@ import os
 import sys
 from typing import Dict, List, Tuple
 
-from app.core.config import (  # Redis; LiveKit; AI Services; SendGrid; Application
+from app.core.config import (
     DATABASE_URL,
-    DEEPGRAM_API_KEY,
-    ELEVEN_API_KEY,
     ENVIRONMENT,
     GOOGLE_API_KEY,
     LIVEKIT_API_KEY,
@@ -38,8 +36,6 @@ REQUIRED_ENV_VARS = {
 OPTIONAL_ENV_VARS = {
     # Nice to have but not critical for basic operation
     "GOOGLE_API_KEY": GOOGLE_API_KEY,
-    "DEEPGRAM_API_KEY": DEEPGRAM_API_KEY,
-    "ELEVEN_API_KEY": ELEVEN_API_KEY,
     "MAIL_USERNAME": email_settings.MAIL_USERNAME,
     "MAIL_PASSWORD": email_settings.MAIL_PASSWORD,
     "MAIL_SERVER": email_settings.MAIL_SERVER,
@@ -123,8 +119,6 @@ def get_environment_info() -> Dict[str, any]:
         "redis_configured": bool(REDIS_URL),
         "livekit_configured": bool(LIVEKIT_API_KEY and LIVEKIT_API_SECRET and LIVEKIT_URL),
         "google_ai_configured": bool(GOOGLE_API_KEY),
-        "deepgram_configured": bool(DEEPGRAM_API_KEY),
-        "elevenlabs_configured": bool(ELEVEN_API_KEY),
         "email_configured": bool(email_settings.MAIL_USERNAME and email_settings.MAIL_SERVER),
         "secret_key_configured": bool(SECRET_KEY),
     }
@@ -141,9 +135,7 @@ def print_environment_summary():
     logger.info(f"PostgreSQL: {'✅' if info['database_configured'] else '❌'}")
     logger.info(f"Redis: {'✅' if info['redis_configured'] else '❌'}")
     logger.info(f"LiveKit: {'✅' if info['livekit_configured'] else '❌'}")
-    logger.info(f"Google AI (Gemini): {'✅' if info['google_ai_configured'] else '❌'}")
-    logger.info(f"Deepgram (STT): {'✅' if info['deepgram_configured'] else '❌'}")
-    logger.info(f"ElevenLabs (TTS): {'✅' if info['elevenlabs_configured'] else '❌'}")
+    logger.info(f"Google AI (Gemini Live): {'✅' if info['google_ai_configured'] else '❌'}")
     logger.info(f"Email Service: {'✅' if info['email_configured'] else '❌'}")
     logger.info(f"Secret Key: {'✅' if info['secret_key_configured'] else '❌'}")
     logger.info("=" * 80)

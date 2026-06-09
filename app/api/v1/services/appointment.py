@@ -37,8 +37,16 @@ class AppointmentService:
         appointment_data: Optional[Dict[str, Any]] = None,
         call_id: Optional[str] = None,
         duration_minutes: int = 60,
+        send_email: bool = True,
     ) -> Optional[Dict[str, Any]]:
-        """Create a new appointment."""
+        """Create a new appointment.
+
+        When `send_email` is True (default) the customer confirmation email
+        is sent as part of the call. Callers that need visibility into
+        email success/failure (e.g. the voice worker, which has to tell
+        the caller whether to expect an email) should pass `send_email=False`
+        and call `email_service.send_appointment_confirmation` themselves.
+        """
         try:
             # Validate appointment time
             is_valid, error_message = await self.scheduling_service.validate_appointment_time(
@@ -72,8 +80,10 @@ class AppointmentService:
 
             appointment = await store.create_appointment(appointment_dict)
 
-            # Send confirmation email
-            if customer_email:
+            # Send confirmation email — opt-out for callers that own the
+            # email path themselves (the voice worker does, so it can report
+            # the actual delivery status back to the LLM).
+            if send_email and customer_email:
                 await self.email_service.send_appointment_confirmation(
                     customer_email, customer_name, appointment_datetime, service_type, service_address
                 )

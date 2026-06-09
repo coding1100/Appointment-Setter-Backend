@@ -8,23 +8,14 @@ httpx
 python-jose[cryptography]
 passlib[bcrypt]
 bcrypt==4.3.0
-sendgrid
 twilio
 
-# LiveKit Agents + Plugins
-# Pinned for reproducible production builds. Floating versions caused
-# SDK/protocol drift against LiveKit Cloud (the periodic "unexpected
-# message type" reconnects). Bump deliberately, not implicitly.
+# LiveKit Agents + Gemini Live (the native-audio model handles the full
+# voice pipeline server-side).
 livekit-agents==1.5.6
-livekit-plugins-deepgram==1.5.6
-livekit-plugins-elevenlabs==1.5.6
 livekit-plugins-google==1.5.6
 google-genai>=1.71.0
-livekit-plugins-silero==1.5.6
-transformers>=4.36.0
 packaging>=23.2
-sentencepiece>=0.1.99
-livekit-plugins-turn-detector==1.5.6
 
 # OpenTelemetry (pinned to avoid conflicts with livekit-agents)
 opentelemetry-api>=1.27.0,<2.0.0

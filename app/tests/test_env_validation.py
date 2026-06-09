@@ -16,8 +16,6 @@ def test_get_environment_info():
     assert "redis_configured" in info
     assert "livekit_configured" in info
     assert "google_ai_configured" in info
-    assert "deepgram_configured" in info
-    assert "elevenlabs_configured" in info
     assert "email_configured" in info
     assert "secret_key_configured" in info
 
@@ -27,8 +25,6 @@ def test_get_environment_info():
         "redis_configured",
         "livekit_configured",
         "google_ai_configured",
-        "deepgram_configured",
-        "elevenlabs_configured",
         "email_configured",
         "secret_key_configured",
     ]:

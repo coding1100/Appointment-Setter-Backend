@@ -7,7 +7,15 @@ from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.v1.routers.auth import get_current_user_from_token, require_app_access, verify_tenant_access
-from app.api.v1.schemas.agent import AgentCreate, AgentResponse, AgentUpdate, VoiceListResponse
+from app.api.v1.schemas.agent import (
+    AgentCreate,
+    AgentResponse,
+    AgentUpdate,
+    PromptPreviewResponse,
+    PromptTemplateListResponse,
+    PromptTemplateOption,
+    VoiceListResponse,
+)
 from app.api.v1.services.agent import agent_service
 from app.core.decorators import handle_router_errors
 
@@ -46,6 +54,35 @@ async def list_agents(tenant_id: str, current_user: Dict = Depends(get_current_u
     from app.core.response_mappers import to_agent_response
 
     return [to_agent_response(agent) for agent in agents]
+
+
+@router.get("/prompt-templates", response_model=PromptTemplateListResponse)
+async def list_prompt_templates():
+    """Return starter prompt templates for the agent configuration UI."""
+    from app.core.prompts import STARTER_PROMPT_TEMPLATES
+
+    return PromptTemplateListResponse(
+        templates=[PromptTemplateOption(**template) for template in STARTER_PROMPT_TEMPLATES]
+    )
+
+
+@router.get("/prompt-preview", response_model=PromptPreviewResponse)
+async def preview_default_prompt(
+    service_type: str = "Home Services",
+    agent_name: str = "Assistant",
+    current_user: Dict = Depends(get_current_user_from_token),
+):
+    """Return the default system prompt for a service type (used when no custom prompt is saved)."""
+    from app.core.prompts import get_template
+    from app.core.validators import validate_service_type
+
+    validated_service_type = validate_service_type(service_type)
+    prompt = get_template(service_type=validated_service_type, agent_name=agent_name)
+    return PromptPreviewResponse(
+        prompt=prompt,
+        service_type=validated_service_type,
+        agent_name=agent_name,
+    )
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)
@@ -148,57 +185,12 @@ async def deactivate_agent(agent_id: str, current_user: Dict = Depends(get_curre
 @router.get("/voices/list", response_model=VoiceListResponse)
 async def list_available_voices():
     """
-    Get list of available ElevenLabs voices.
+    Get list of available Gemini Live voices.
 
-    Returns predefined list of popular ElevenLabs voices for agent configuration.
+    Returns the 30 prebuilt voices supported by Gemini Live for agent configuration.
     """
     try:
         voices = agent_service.get_available_voices()
         return VoiceListResponse(voices=voices, total=len(voices))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get voices: {str(e)}")
-
-
-@router.get("/voices/preview/{voice_id}")
-async def get_voice_preview_url(voice_id: str):
-    """
-    Get the audio file URL for a voice preview.
-
-    Returns the static file URL for pre-generated voice samples.
-    Audio files are generated once using generate_voice_samples.py script.
-
-    - **voice_id**: ElevenLabs voice ID
-
-    Returns:
-        - **audio_url**: URL to the MP3 audio file
-        - **voice_id**: The requested voice ID
-    """
-    try:
-        # Use centralized voice metadata
-        from app.core.voice_metadata import get_voice_preview_filename
-
-        filename = get_voice_preview_filename(voice_id)
-
-        if not filename:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Voice ID {voice_id} not found")
-
-        # Check if audio file exists
-        import os
-
-        audio_path = os.path.join("app", "static", "voices", filename)
-
-        if not os.path.exists(audio_path):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Audio file not found. Please run 'python generate_voice_samples.py' to generate voice samples.",
-            )
-
-        # Return the static file URL
-        audio_url = f"/static/voices/{filename}"
-
-        return {"audio_url": audio_url, "voice_id": voice_id, "filename": filename}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get voice preview: {str(e)}")

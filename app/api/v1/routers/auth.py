@@ -164,8 +164,9 @@ async def get_current_user_from_token(
             token = request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)
         if not token:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Not authenticated",
+                headers={"WWW-Authenticate": "Bearer"},
             )
 
         # Decode JWT token
@@ -209,18 +210,21 @@ def verify_tenant_access(user: Dict[str, Any], tenant_id: str) -> None:
     Verify that the authenticated user has access to the specified tenant.
 
     Tenant Binding Model:
-    - Users have a `tenant_id` field that binds them to a tenant
-    - Users with role 'admin' can access any tenant
-    - Regular users can only access their own tenant (matching `tenant_id`)
+    - Platform staff (`platform_scope` or `org_service.is_platform_staff`) can access ANY tenant.
+    - Everyone else — INCLUDING tenant-level `role == "admin"` users — must
+      have the tenant in their `accessible_tenant_ids` (driven by customer-org
+      membership). A tenant admin is the admin of THEIR tenant, not of every
+      other customer's tenant.
+    - Legacy back-compat: users not yet migrated to org memberships fall
+      through to their single `user.tenant_id` field.
 
     Raises HTTPException if access is denied.
     """
-    user_role = str(user.get("role", "user")).lower()
     user_tenant_id = user.get("tenant_id")
     accessible_tenant_ids = {str(item) for item in (user.get("accessible_tenant_ids") or []) if item}
     memberships = user.get("org_memberships") or []
 
-    if user_role == "admin" or user.get("platform_scope") or org_service.is_platform_staff(memberships):
+    if user.get("platform_scope") or org_service.is_platform_staff(memberships):
         return
 
     if tenant_id in accessible_tenant_ids:
@@ -589,7 +593,7 @@ async def forgot_password(forgot_data: ForgotPasswordRequest, request: Request):
             if user_id:
                 token = auth_service.create_password_reset_token(user_id=user_id, expires_minutes=60)
                 base_url = (PLATFORM_APP_BASE_URL or "").strip().rstrip("/") or "http://localhost:3000"
-                reset_password_url = f"{base_url}/reset-password?token={token}"
+                reset_password_url = f"{base_url}/mindrind/admin/reset-password?token={token}"
                 recipient_name = f"{str(user.get('first_name', '')).strip()} {str(user.get('last_name', '')).strip()}".strip() or "there"
                 await email_service.send_password_reset_email(
                     recipient_email=str(user.get("email", "")),

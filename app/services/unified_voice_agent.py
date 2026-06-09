@@ -35,8 +35,6 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from livekit import api
-from livekit.agents.voice.agent import Agent
-from livekit.plugins import deepgram, google, silero
 from twilio.rest import Client
 from twilio.twiml.voice_response import Dial, VoiceResponse
 
@@ -56,7 +54,6 @@ from app.core.encryption import encryption_service
 from app.core.utils import get_current_timestamp
 from app.services.store import store
 from app.utils.phone_number import normalize_phone_number_safe
-from app.services.tts_provider import build_tts_with_fallback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -80,7 +77,6 @@ class UnifiedVoiceAgentService:
         self.tenant_agents = {}  # tenant_id:service_type -> agent_instance (for browser testing)
         self.active_sessions = {}  # session_id -> session_data (for tracking)
         self._livekit_api = None
-        self._vad = None  # Shared Silero VAD instance (lazy-loaded)
         self._session_ttl_seconds = max(CALL_CONFIG_TTL_SECONDS, 24 * 60 * 60)
 
         # Validate LiveKit configuration at startup
@@ -225,84 +221,12 @@ class UnifiedVoiceAgentService:
             self._livekit_api = api.LiveKitAPI(url=LIVEKIT_URL, api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
         return self._livekit_api
 
-    def _get_agent_key(self, tenant_id: str, service_type: str) -> str:
-        """Generate agent key for tenant and service type."""
-        return f"{tenant_id}:{service_type}"
-
     @staticmethod
     def _resolve_agent_type(agent_data: Optional[Dict[str, Any]]) -> str:
         """Resolve agent type with migration fallback."""
         if not agent_data:
             return "voice"
         return agent_data.get("agent_type") or "voice"
-
-    async def get_or_create_agent(
-        self,
-        tenant_id: str,
-        service_type: str,
-        voice_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        agent_config: Optional[Dict[str, Any]] = None,
-    ) -> Agent:
-        """
-        Get existing agent instance or create new one for tenant.
-        Used for BROWSER TESTING only. Phone calls use the worker directly.
-        """
-        # Use agent_id in key if provided for agent-specific instances
-        agent_key = self._get_agent_key(tenant_id, service_type)
-        if agent_id:
-            agent_key = f"{agent_key}:{agent_id}"
-
-        # Check if agent exists and if voice_id has changed
-        should_recreate = False
-        if agent_key in self.tenant_agents:
-            cached_voice_id = self.tenant_agents[agent_key].get("voice_id")
-            if cached_voice_id != voice_id:
-                logger.info(f"Voice changed from {cached_voice_id} to {voice_id}, recreating agent")
-                should_recreate = True
-
-        if agent_key not in self.tenant_agents or should_recreate:
-            logger.info(f"Creating new agent for {agent_key} with voice_id={voice_id} (this may take 5-10 seconds...)")
-
-            # Get tenant-specific configuration
-            tenant_config = await self._get_tenant_config(tenant_id)
-
-            # Create agent with tenant-specific settings
-            system_prompt = self._get_system_prompt(tenant_config, service_type, agent_config)
-
-            # Lazily load and reuse a single Silero VAD instance
-            if self._vad is None:
-                self._vad = silero.VAD.load(sample_rate=8000)
-
-            language_code = "en"
-            if agent_config and "language" in agent_config:
-                language_code = agent_config.get("language", "en-US").split("-")[0]
-
-            tts_service = build_tts_with_fallback(voice_id=voice_id, language_code=language_code)
-            logger.info("TTS configured with Gemini primary + ElevenLabs fallback (voice_id=%s)", voice_id)
-
-            agent = Agent(
-                vad=self._vad,
-                stt=deepgram.STT(),
-                llm=google.LLM(model="gemini-2.5-flash-lite"),
-                tts=tts_service,
-                instructions=system_prompt,
-            )
-
-            self.tenant_agents[agent_key] = {
-                "agent": agent,
-                "created_at": get_current_timestamp(),
-                "tenant_id": tenant_id,
-                "service_type": service_type,
-                "voice_id": voice_id,
-                "agent_id": agent_id,
-            }
-
-            logger.info("âœ“ Agent instance created and cached successfully")
-        else:
-            logger.info("âœ“ Using cached agent instance")
-
-        return self.tenant_agents[agent_key]["agent"]
 
     async def start_session(
         self,
@@ -747,6 +671,7 @@ class UnifiedVoiceAgentService:
             "language": agent_data.get("language"),
             "greeting_message": agent_data.get("greeting_message"),
             "service_type": agent_data.get("service_type"),
+            "system_prompt": agent_data.get("system_prompt") or "",
             "tenant_id": agent_data.get("tenant_id"),
         }
 
