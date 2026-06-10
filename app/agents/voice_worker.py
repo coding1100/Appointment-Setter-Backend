@@ -569,6 +569,31 @@ class VoiceAgent(Agent):
         except Exception as exc:
             logger.warning("[CALL] error draining closing-line audio: %s", exc)
 
+        # Step 2b: suppress a repeated closing line.
+        #
+        # `proactivity=True` (which we need so the model OPENS the call with
+        # the greeting) also makes the model spontaneously start a SECOND
+        # turn — another goodbye / "is there anything else?" — in the gap
+        # between the intended goodbye draining above and the room being
+        # deleted below. The caller hears the closing line twice.
+        #
+        # Once the intended goodbye has drained, interrupt the session to
+        # cancel any proactive follow-up turn before we hang up. This runs
+        # AFTER the drain, so it never clips the real goodbye — it only
+        # kills the unwanted repeat.
+        try:
+            fut = self.session.interrupt()
+            # interrupt() returns a Future that resolves once the in-flight
+            # speech is actually cancelled; await it (briefly) so the proactive
+            # turn is stopped before we delete the room rather than racing it.
+            try:
+                await asyncio.wait_for(asyncio.ensure_future(fut), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+            logger.info("[CALL] interrupted any proactive follow-up turn before hangup")
+        except Exception as exc:
+            logger.warning("[CALL] error interrupting proactive follow-up: %s", exc)
+
         # Step 3: hard hangup via room deletion — the only reliable way to
         # terminate the SIP participant. Falls back to aclose() only if the
         # job context isn't available.
