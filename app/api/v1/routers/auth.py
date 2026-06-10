@@ -164,8 +164,9 @@ async def get_current_user_from_token(
             token = request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)
         if not token:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Not authenticated",
+                headers={"WWW-Authenticate": "Bearer"},
             )
 
         # Decode JWT token
@@ -592,7 +593,7 @@ async def forgot_password(forgot_data: ForgotPasswordRequest, request: Request):
             if user_id:
                 token = auth_service.create_password_reset_token(user_id=user_id, expires_minutes=60)
                 base_url = (PLATFORM_APP_BASE_URL or "").strip().rstrip("/") or "http://localhost:3000"
-                reset_password_url = f"{base_url}/reset-password?token={token}"
+                reset_password_url = f"{base_url}/mindrind/admin/reset-password?token={token}"
                 recipient_name = f"{str(user.get('first_name', '')).strip()} {str(user.get('last_name', '')).strip()}".strip() or "there"
                 await email_service.send_password_reset_email(
                     recipient_email=str(user.get("email", "")),

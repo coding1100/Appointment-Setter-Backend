@@ -671,6 +671,7 @@ class UnifiedVoiceAgentService:
             "language": agent_data.get("language"),
             "greeting_message": agent_data.get("greeting_message"),
             "service_type": agent_data.get("service_type"),
+            "system_prompt": agent_data.get("system_prompt") or "",
             "tenant_id": agent_data.get("tenant_id"),
         }
 
