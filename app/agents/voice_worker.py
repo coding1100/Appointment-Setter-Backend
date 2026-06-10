@@ -18,7 +18,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Optional
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, function_tool
@@ -37,7 +37,7 @@ from app.core.config import (
     LIVEKIT_API_SECRET,
     LIVEKIT_URL,
 )
-from app.core.prompts import get_template
+from app.core.prompts import build_agent_instructions
 
 # Gemini Live voices supported by `gemini-live-2.5-flash-native-audio`.
 # https://ai.google.dev/gemini-api/docs/live#voices
@@ -709,16 +709,14 @@ async def entrypoint(ctx: agents.JobContext):
     # turn — no per-turn `instructions=...` round-trip needed. Falling back
     # to a generic greeting if the agent record didn't configure one.
     service_type = config.get("service_type", "Home Services")
-    agent_name = config.get("agent_data", {}).get("name", "Assistant")
-    instructions = get_template(service_type=service_type, agent_name=agent_name)
-
-    greeting = (config.get("agent_data", {}).get("greeting_message") or "").strip() or (
-        "Hello, thanks for calling. How can I help you today?"
-    )
-    instructions = (
-        f"{instructions}\n\n"
-        "# OPENING LINE (say this verbatim as your very first turn — exactly these words, nothing else)\n"
-        f"{greeting}\n"
+    agent_data = config.get("agent_data") or {}
+    agent_name = agent_data.get("name", "Assistant")
+    greeting_message = agent_data.get("greeting_message") or ""
+    instructions = build_agent_instructions(
+        service_type=service_type,
+        agent_name=agent_name,
+        greeting_message=greeting_message,
+        system_prompt=agent_data.get("system_prompt"),
     )
 
     # 5️⃣ Create agent. Pass the JobContext through so the agent can call
@@ -785,7 +783,7 @@ async def entrypoint(ctx: agents.JobContext):
     try:
         opening_handle = session.generate_reply()
         await asyncio.wait_for(opening_handle.wait_for_playout(), timeout=15.0)
-        logger.info("[WORKER ENTRYPOINT] Greeting played: %r", greeting)
+        logger.info("[WORKER ENTRYPOINT] Greeting played: %r", greeting_message)
     except Exception as exc:
         logger.warning("[WORKER ENTRYPOINT] greeting playout error: %s", exc)
 
