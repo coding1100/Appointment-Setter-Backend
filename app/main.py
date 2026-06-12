@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.api import api_router
-from app.core.config import API_HOST, API_PORT, CORS_ALLOW_ORIGINS, DEBUG, ENVIRONMENT, LOG_LEVEL
+from app.core.config import API_HOST, API_PORT, DEBUG, ENVIRONMENT, LOG_LEVEL
+from app.core.cors import get_cors_settings
 from app.core.env_validator import print_environment_summary, validate_environment_variables
 from app.core.exceptions import (
     AppException,
@@ -101,9 +102,7 @@ app = FastAPI(
 
 # Add CORS middleware FIRST (becomes outermost, wraps all responses)
 # FastAPI's CORSMiddleware fully handles OPTIONS preflight requests with all required headers
-raw_cors_origins = [origin.strip().rstrip("/") for origin in CORS_ALLOW_ORIGINS.split(",") if origin.strip()]
-cors_origins = raw_cors_origins if raw_cors_origins else ["*"]
-allow_credentials = not (len(cors_origins) == 1 and cors_origins[0] == "*")
+cors_origins, allow_credentials = get_cors_settings()
 
 app.add_middleware(
     CORSMiddleware,
@@ -149,7 +148,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
             "details": {},
         },
     )
-    return add_cors_headers(response)
+    return add_cors_headers(response, request)
 
 
 # Custom exception handlers
@@ -159,7 +158,7 @@ async def validation_error_handler(request: Request, exc: ValidationError):
     """Handle validation errors."""
     logger.warning(f"Validation error: {exc.message}", extra={"details": exc.details})
     response = JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content=exc.to_dict())
-    return add_cors_headers(response)
+    return add_cors_headers(response, request)
 
 
 @app.exception_handler(NotFoundError)
@@ -167,7 +166,7 @@ async def not_found_error_handler(request: Request, exc: NotFoundError):
     """Handle not found errors."""
     logger.warning(f"Resource not found: {exc.message}", extra={"details": exc.details})
     response = JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content=exc.to_dict())
-    return add_cors_headers(response)
+    return add_cors_headers(response, request)
 
 
 @app.exception_handler(AuthenticationError)
@@ -177,7 +176,7 @@ async def authentication_error_handler(request: Request, exc: AuthenticationErro
     response = JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED, content=exc.to_dict(), headers={"WWW-Authenticate": "Bearer"}
     )
-    return add_cors_headers(response)
+    return add_cors_headers(response, request)
 
 
 @app.exception_handler(AuthorizationError)
@@ -185,7 +184,7 @@ async def authorization_error_handler(request: Request, exc: AuthorizationError)
     """Handle authorization errors."""
     logger.warning(f"Authorization failed: {exc.message}")
     response = JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content=exc.to_dict())
-    return add_cors_headers(response)
+    return add_cors_headers(response, request)
 
 
 @app.exception_handler(ExternalServiceError)
@@ -193,7 +192,7 @@ async def external_service_error_handler(request: Request, exc: ExternalServiceE
     """Handle external service errors."""
     logger.error(f"External service error: {exc.message}", extra={"details": exc.details})
     response = JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content=exc.to_dict())
-    return add_cors_headers(response)
+    return add_cors_headers(response, request)
 
 
 @app.exception_handler(AppException)
@@ -201,7 +200,7 @@ async def app_exception_handler(request: Request, exc: AppException):
     """Handle generic application exceptions."""
     logger.error(f"Application error: {exc.message}", extra={"details": exc.details})
     response = JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=exc.to_dict())
-    return add_cors_headers(response)
+    return add_cors_headers(response, request)
 
 
 # Global exception handler for uncaught exceptions
@@ -217,7 +216,7 @@ async def global_exception_handler(request: Request, exc: Exception):
             "details": {},
         },
     )
-    return add_cors_headers(response)
+    return add_cors_headers(response, request)
 
 
 if __name__ == "__main__":

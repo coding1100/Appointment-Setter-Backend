@@ -10,11 +10,13 @@ services:
       - "8001:8000"
 
     environment:
-      ENVIRONMENT: production
+      ENVIRONMENT: development
       DEBUG: "false"
       LOG_LEVEL: INFO
       API_HOST: 0.0.0.0
       API_PORT: 8000
+      CORS_ALLOW_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      AUTH_COOKIE_SECURE: "false"
 
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-appointment_setter}

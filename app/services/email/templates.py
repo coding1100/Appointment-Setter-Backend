@@ -17,7 +17,7 @@ eyebrow=..., badge=..., preheader=...)). Nothing else to invent.
 """
 
 from html import escape as _esc
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 
 class EmailTemplates:

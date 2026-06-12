@@ -73,7 +73,7 @@ def _build_setup_password_url(token: str, invite_base_url: Optional[str]) -> str
     base = (invite_base_url or PLATFORM_APP_BASE_URL or "").strip().rstrip("/")
     if not base:
         base = "http://localhost:3000"
-    return f"{base}/setup-password?token={token}"
+    return f"{base}/mindrind/admin/setup-password?token={token}"
 
 
 def _is_platform_staff(current_user: Dict[str, Any]) -> bool:
