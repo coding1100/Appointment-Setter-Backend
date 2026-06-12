@@ -7,7 +7,15 @@ from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.v1.routers.auth import get_current_user_from_token, require_app_access, verify_tenant_access
-from app.api.v1.schemas.agent import AgentCreate, AgentResponse, AgentUpdate, VoiceListResponse
+from app.api.v1.schemas.agent import (
+    AgentCreate,
+    AgentResponse,
+    AgentUpdate,
+    PromptPreviewResponse,
+    PromptTemplateListResponse,
+    PromptTemplateOption,
+    VoiceListResponse,
+)
 from app.api.v1.services.agent import agent_service
 from app.core.decorators import handle_router_errors
 
@@ -46,6 +54,35 @@ async def list_agents(tenant_id: str, current_user: Dict = Depends(get_current_u
     from app.core.response_mappers import to_agent_response
 
     return [to_agent_response(agent) for agent in agents]
+
+
+@router.get("/prompt-templates", response_model=PromptTemplateListResponse)
+async def list_prompt_templates():
+    """Return starter prompt templates for the agent configuration UI."""
+    from app.core.prompts import STARTER_PROMPT_TEMPLATES
+
+    return PromptTemplateListResponse(
+        templates=[PromptTemplateOption(**template) for template in STARTER_PROMPT_TEMPLATES]
+    )
+
+
+@router.get("/prompt-preview", response_model=PromptPreviewResponse)
+async def preview_default_prompt(
+    service_type: str = "Home Services",
+    agent_name: str = "Assistant",
+    current_user: Dict = Depends(get_current_user_from_token),
+):
+    """Return the default system prompt for a service type (used when no custom prompt is saved)."""
+    from app.core.prompts import get_template
+    from app.core.validators import validate_service_type
+
+    validated_service_type = validate_service_type(service_type)
+    prompt = get_template(service_type=validated_service_type, agent_name=agent_name)
+    return PromptPreviewResponse(
+        prompt=prompt,
+        service_type=validated_service_type,
+        agent_name=agent_name,
+    )
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)
