@@ -51,6 +51,8 @@ async def lifespan(app: FastAPI):
     logger.info("Starting AI Phone Scheduler API server...")
     logger.info(f"Environment: {ENVIRONMENT}")
     logger.info(f"Debug mode: {DEBUG}")
+    logger.info("CORS allowed origins: %s", ", ".join(cors_origins))
+    logger.info("CORS allow credentials: %s", allow_credentials)
 
     # Print environment configuration summary
     print_environment_summary()
@@ -99,7 +101,7 @@ app = FastAPI(
 
 # Add CORS middleware FIRST (becomes outermost, wraps all responses)
 # FastAPI's CORSMiddleware fully handles OPTIONS preflight requests with all required headers
-raw_cors_origins = [origin.strip() for origin in CORS_ALLOW_ORIGINS.split(",") if origin.strip()]
+raw_cors_origins = [origin.strip().rstrip("/") for origin in CORS_ALLOW_ORIGINS.split(",") if origin.strip()]
 cors_origins = raw_cors_origins if raw_cors_origins else ["*"]
 allow_credentials = not (len(cors_origins) == 1 and cors_origins[0] == "*")
 
