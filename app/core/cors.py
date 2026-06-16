@@ -20,8 +20,8 @@ def get_cors_settings() -> Tuple[List[str], bool]:
     """
     Return (allowed_origins, allow_credentials).
 
-  When CORS_ALLOW_ORIGINS is "*", development uses explicit localhost origins so
-  credentialed cross-origin requests (withCredentials) work in the browser.
+    When CORS_ALLOW_ORIGINS is "*", development uses explicit localhost origins so
+    credentialed cross-origin requests (withCredentials) work in the browser.
     """
     raw = (CORS_ALLOW_ORIGINS or "*").strip()
     if raw == "*":
@@ -29,7 +29,7 @@ def get_cors_settings() -> Tuple[List[str], bool]:
             return LOCAL_DEV_ORIGINS, True
         return ["*"], False
 
-    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    origins = [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
     if not origins:
         return LOCAL_DEV_ORIGINS, True
     if len(origins) == 1 and origins[0] == "*":

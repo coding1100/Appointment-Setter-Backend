@@ -62,6 +62,9 @@ class AgentResponse(BaseModel):
     service_type: str
     system_prompt: str = ""
     status: str
+    last_call_duration_seconds: Optional[int] = Field(
+        None, description="Duration in seconds of the agent's most recently completed call"
+    )
     created_at: str
     updated_at: str
 
@@ -106,3 +109,31 @@ class PromptPreviewResponse(BaseModel):
     prompt: str
     service_type: str
     agent_name: str
+
+
+class PromptEnhanceRequest(BaseModel):
+    """Request body for AI prompt enhancement."""
+
+    draft_prompt: str = Field(..., min_length=1, max_length=4000, description="Draft system prompt to enhance")
+    service_type: Optional[str] = Field(
+        None,
+        description="Service type used to select the production reference prompt from prompts.py",
+    )
+
+    @validator("service_type")
+    def validate_service_type_optional(cls, value):
+        if value is None:
+            return value
+        return validate_service_type(value)
+
+
+class PromptEnhanceResponse(BaseModel):
+    """Enhanced system prompt returned by Gemini."""
+
+    enhanced_prompt: str = Field(..., max_length=3899)
+
+
+class PromptEnhancementInstructionResponse(BaseModel):
+    """Pre-built enhancement instruction for the prompt-enhance API."""
+
+    enhancement_instruction: str
