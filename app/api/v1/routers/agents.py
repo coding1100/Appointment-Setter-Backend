@@ -11,12 +11,16 @@ from app.api.v1.schemas.agent import (
     AgentCreate,
     AgentResponse,
     AgentUpdate,
+    PromptEnhanceRequest,
+    PromptEnhanceResponse,
+    PromptEnhancementInstructionResponse,
     PromptPreviewResponse,
     PromptTemplateListResponse,
     PromptTemplateOption,
     VoiceListResponse,
 )
 from app.api.v1.services.agent import agent_service
+from app.api.v1.services.prompt_enhancement import prompt_enhancement_service
 from app.core.decorators import handle_router_errors
 
 router = APIRouter(prefix="/agents", tags=["agents"], dependencies=[Depends(require_app_access("appointment_setter"))])
@@ -83,6 +87,32 @@ async def preview_default_prompt(
         service_type=validated_service_type,
         agent_name=agent_name,
     )
+
+
+@router.get("/prompt/enhancement-instruction", response_model=PromptEnhancementInstructionResponse)
+async def get_prompt_enhancement_instruction(
+    current_user: Dict = Depends(get_current_user_from_token),
+):
+    """Return the pre-built instruction used to enhance draft voice-agent prompts."""
+    _ = current_user
+    return PromptEnhancementInstructionResponse(
+        enhancement_instruction=prompt_enhancement_service.get_enhancement_instruction(),
+    )
+
+
+@router.post("/prompt/enhance", response_model=PromptEnhanceResponse)
+@handle_router_errors(operation_name="enhance prompt")
+async def enhance_prompt(
+    body: PromptEnhanceRequest,
+    current_user: Dict = Depends(get_current_user_from_token),
+):
+    """Enhance a draft voice-agent system prompt using Gemini."""
+    _ = current_user
+    enhanced_prompt = await prompt_enhancement_service.enhance_prompt(
+        body.draft_prompt,
+        service_type=body.service_type,
+    )
+    return PromptEnhanceResponse(enhanced_prompt=enhanced_prompt)
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)
