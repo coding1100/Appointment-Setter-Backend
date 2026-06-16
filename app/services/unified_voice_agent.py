@@ -32,6 +32,7 @@ import asyncio
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from livekit import api
@@ -93,6 +94,76 @@ class UnifiedVoiceAgentService:
     @staticmethod
     def _callsid_session_key(twilio_call_sid: str) -> str:
         return f"voice_callsid_session:{twilio_call_sid}"
+
+    @staticmethod
+    def _session_agent_id(session: Dict[str, Any]) -> Optional[str]:
+        metadata = session.get("metadata") or {}
+        return (
+            session.get("agent_id")
+            or metadata.get("agent_id")
+            or metadata.get("agentId")
+        )
+
+    @staticmethod
+    def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        normalized = value[:-1] + "+00:00" if str(value).endswith("Z") else str(value)
+        try:
+            parsed = datetime.fromisoformat(normalized)
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        except ValueError:
+            return None
+
+    def _compute_session_duration_seconds(
+        self, session: Dict[str, Any], twilio_duration: Optional[str] = None
+    ) -> Optional[int]:
+        if twilio_duration is not None:
+            try:
+                return max(0, int(twilio_duration))
+            except (TypeError, ValueError):
+                pass
+
+        started = session.get("started_at") or session.get("created_at")
+        ended = session.get("ended_at")
+        start_dt = self._parse_iso_timestamp(started)
+        end_dt = self._parse_iso_timestamp(ended)
+        if not start_dt or not end_dt:
+            return None
+        return max(0, int((end_dt - start_dt).total_seconds()))
+
+    async def _record_agent_last_call_duration(
+        self, session: Dict[str, Any], twilio_duration: Optional[str] = None
+    ) -> None:
+        agent_id = self._session_agent_id(session)
+        if not agent_id:
+            return
+
+        duration_seconds = self._compute_session_duration_seconds(session, twilio_duration)
+        if duration_seconds is None:
+            return
+
+        try:
+            await store.update_agent(
+                agent_id,
+                {
+                    "last_call_duration_seconds": duration_seconds,
+                    "updated_at": get_current_timestamp(),
+                },
+            )
+            logger.info(
+                "[CALL] Recorded last_call_duration_seconds=%s for agent %s",
+                duration_seconds,
+                agent_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[CALL] Failed to record last call duration for agent %s: %s",
+                agent_id,
+                exc,
+            )
 
     async def _store_session(self, session_id: str, session_data: Dict[str, Any]) -> None:
         """Store session in Redis (authoritative) and mirror in memory as cache."""
@@ -289,6 +360,7 @@ class UnifiedVoiceAgentService:
                 "phone_number": phone_number,
                 "status": "initializing",
                 "metadata": metadata or {},
+                "agent_id": agent_id,
                 "created_at": get_current_timestamp(),
                 "started_at": None,
                 "ended_at": None,
@@ -324,6 +396,7 @@ class UnifiedVoiceAgentService:
                 token = self._generate_room_token(room_name, f"client-{session_id[:8]}")
                 session_data["status"] = "ready"
                 session_data["connection_type"] = "browser"
+                session_data["started_at"] = get_current_timestamp()
 
                 livekit_url = self._format_livekit_url()
 
@@ -382,6 +455,8 @@ class UnifiedVoiceAgentService:
             session = await self._update_session(
                 session_id, {"status": "ended", "ended_at": get_current_timestamp()}
             ) or session
+
+            await self._record_agent_last_call_duration(session)
 
             # Delete LiveKit room if it exists
             if room_name:
@@ -601,6 +676,7 @@ class UnifiedVoiceAgentService:
         try:
             call_sid = form_data.get("CallSid")
             call_status = form_data.get("CallStatus")
+            twilio_duration = form_data.get("CallDuration")
 
             logger.info(f"[TWILIO STATUS] CallSid={call_sid}, Status={call_status}")
 
@@ -622,6 +698,8 @@ class UnifiedVoiceAgentService:
                 return
 
             if call_status in ["completed", "failed", "busy", "no-answer"]:
+                await self._record_agent_last_call_duration(updated, twilio_duration)
+
                 # Cleanup: Delete configs from Redis
                 tenant_id = updated.get("tenant_id")
                 call_id = updated.get("call_id")

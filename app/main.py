@@ -2,6 +2,7 @@
 Main FastAPI application.
 """
 
+import utils.session
 import logging
 import os
 from contextlib import asynccontextmanager
