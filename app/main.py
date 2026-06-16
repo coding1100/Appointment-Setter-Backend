@@ -2,6 +2,7 @@
 Main FastAPI application.
 """
 
+import utils.session
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -52,6 +53,8 @@ async def lifespan(app: FastAPI):
     logger.info("Starting AI Phone Scheduler API server...")
     logger.info(f"Environment: {ENVIRONMENT}")
     logger.info(f"Debug mode: {DEBUG}")
+    logger.info("CORS allowed origins: %s", ", ".join(cors_origins))
+    logger.info("CORS allow credentials: %s", allow_credentials)
 
     # Print environment configuration summary
     print_environment_summary()
