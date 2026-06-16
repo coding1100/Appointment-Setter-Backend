@@ -1,10 +1,16 @@
 """
 LiveKit Voice Agent Worker
 ===========================
-Runs Gemini Live (`gemini-3.1-flash-live-preview`) end-to-end: the model
-handles VAD, turn-taking, STT, LLM reasoning and TTS in a single realtime
-session. This worker connects to LiveKit and handles voice agent
+Runs Gemini Live (`gemini-2.5-flash-native-audio-preview-12-2025`) end-to-end:
+the model handles VAD, turn-taking, STT, LLM reasoning and TTS in a single
+realtime session. This worker connects to LiveKit and handles voice agent
 sessions for inbound telephony.
+
+NOTE: We stay on the 2.5 native-audio model rather than 3.1-flash-live
+because 3.1 disables every programmatic "agent speaks first" mechanism
+(`proactivity`, `generate_reply()`, `update_instructions()` are all
+ignored/unsupported by the LiveKit google plugin), which breaks the
+opening greeting. See https://github.com/livekit/agents/issues/5260
 """
 
 import asyncio
@@ -47,7 +53,7 @@ GEMINI_LIVE_DEFAULT_VOICE = "Puck"
 # `gemini-live-2.5-flash-native-audio` alias is a VertexAI-only model and
 # requires a GCP project + `vertexai=True`. The `-preview-12-2025` suffix
 # is the corresponding Gemini API endpoint.
-GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview"
+GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
 # Server-side automatic activity detection — replaces client-side VAD +
 # AgentSession endpointing. The defaults Live ships with are tuned for
@@ -563,6 +569,31 @@ class VoiceAgent(Agent):
         except Exception as exc:
             logger.warning("[CALL] error draining closing-line audio: %s", exc)
 
+        # Step 2b: suppress a repeated closing line.
+        #
+        # `proactivity=True` (which we need so the model OPENS the call with
+        # the greeting) also makes the model spontaneously start a SECOND
+        # turn — another goodbye / "is there anything else?" — in the gap
+        # between the intended goodbye draining above and the room being
+        # deleted below. The caller hears the closing line twice.
+        #
+        # Once the intended goodbye has drained, interrupt the session to
+        # cancel any proactive follow-up turn before we hang up. This runs
+        # AFTER the drain, so it never clips the real goodbye — it only
+        # kills the unwanted repeat.
+        try:
+            fut = self.session.interrupt()
+            # interrupt() returns a Future that resolves once the in-flight
+            # speech is actually cancelled; await it (briefly) so the proactive
+            # turn is stopped before we delete the room rather than racing it.
+            try:
+                await asyncio.wait_for(asyncio.ensure_future(fut), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+            logger.info("[CALL] interrupted any proactive follow-up turn before hangup")
+        except Exception as exc:
+            logger.warning("[CALL] error interrupting proactive follow-up: %s", exc)
+
         # Step 3: hard hangup via room deletion — the only reliable way to
         # terminate the SIP participant. Falls back to aclose() only if the
         # job context isn't available.
@@ -712,8 +743,9 @@ async def entrypoint(ctx: agents.JobContext):
     # client-side endpointing knobs — they'd just add a redundant
     # processing hop before the model sees the audio.
     #
-    # Latency tuning lives on the RealtimeModel via `realtime_input_config`,
-    # which pushes VAD tightening to the model boundary where it matters.
+    # Latency tuning lives on the RealtimeModel via `realtime_input_config`
+    # and `proactivity` — both of which push tightening to the model
+    # boundary where it actually matters.
     # https://ai.google.dev/gemini-api/docs/live
     chosen_voice = (config.get("voice_id") or "").strip()
     live_voice = chosen_voice if chosen_voice in _GEMINI_LIVE_VOICES else GEMINI_LIVE_DEFAULT_VOICE
@@ -722,12 +754,6 @@ async def entrypoint(ctx: agents.JobContext):
         GEMINI_LIVE_MODEL, live_voice, chosen_voice or None,
     )
 
-    # NOTE: `proactivity=True` (proactive audio) is gated behind the v1alpha
-    # API surface for `gemini-2.5-flash-native-audio-preview-*`. The LiveKit
-    # plugin connects to v1beta, so enabling it makes Google close the
-    # websocket with 1008 "Operation is not implemented, or supported, or
-    # enabled." Keep it off until we either pin the plugin to v1alpha or
-    # move to a model that supports proactivity on v1beta.
     session = AgentSession(
         llm=RealtimeModel(
             model=GEMINI_LIVE_MODEL,
@@ -740,6 +766,10 @@ async def entrypoint(ctx: agents.JobContext):
             input_audio_transcription=None,
             output_audio_transcription=None,
             realtime_input_config=_GEMINI_LIVE_REALTIME_INPUT_CONFIG,
+            # Proactive audio: lets the model open the conversation (the
+            # greeting) and supports generate_reply()-driven first turns.
+            # Supported on the 2.5 native-audio model.
+            proactivity=True,
         ),
     )
 

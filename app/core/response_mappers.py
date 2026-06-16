@@ -128,6 +128,7 @@ def to_agent_response(agent_dict: Dict[str, Any]) -> AgentResponse:
             service_type=agent_dict.get("service_type", ""),
             system_prompt=agent_dict.get("system_prompt", "") or "",
             status=agent_dict.get("status", "inactive"),
+            last_call_duration_seconds=agent_dict.get("last_call_duration_seconds"),
             created_at=agent_dict.get("created_at", ""),
             updated_at=agent_dict.get("updated_at", ""),
         )
