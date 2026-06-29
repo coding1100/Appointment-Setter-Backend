@@ -17,18 +17,24 @@ from app.api.v1.schemas.sms import (
     SmsCampaignUpdate,
     SmsConversationDetail,
     SmsConversationResponse,
+    SmsCredentials,
+    SmsIntegrationResponse,
     SmsLeadBulkImport,
     SmsLeadCreate,
     SmsLeadResponse,
+    SmsNumberResponse,
     SmsSendNow,
     SmsSuppressionCreate,
     SmsSuppressionResponse,
+    SmsTestSend,
 )
 from app.api.v1.services.sms import (
     sms_campaign_service,
     sms_inbox_service,
+    sms_integration_service,
     sms_lead_service,
     sms_number_service,
+    sms_send_service,
     sms_suppression_service,
     sms_webhook_service,
 )
@@ -52,23 +58,104 @@ def _security() -> SecurityService:
 
 
 # ---------------------------------------------------------------------------
-# Numbers
+# Twilio integration (dedicated SMS credentials) + numbers + test
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{tenant_id}/numbers/{phone_number}/bind-sms")
-async def bind_sms_number(
-    tenant_id: str, phone_number: str, current_user: Dict = Depends(get_current_user_from_token)
+@router.post("/{tenant_id}/integration/test-credentials")
+async def test_sms_credentials(
+    tenant_id: str, creds: SmsCredentials, current_user: Dict = Depends(get_current_user_from_token)
 ):
-    """Bind a tenant-owned number for SMS outbound + inbound webhook."""
+    """Validate Twilio credentials without saving them."""
+    verify_tenant_access(current_user, tenant_id)
+    result = await sms_integration_service.test_credentials(creds.account_sid, creds.auth_token)
+    if not result["success"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["message"])
+    return result
+
+
+@router.post("/{tenant_id}/integration", response_model=SmsIntegrationResponse, status_code=status.HTTP_201_CREATED)
+async def attach_sms_integration(
+    tenant_id: str, creds: SmsCredentials, current_user: Dict = Depends(get_current_user_from_token)
+):
+    """Attach (or replace) the SMS app's Twilio credentials for this tenant."""
     verify_tenant_access(current_user, tenant_id)
     try:
-        result = await sms_number_service.bind_sms_number(tenant_id, phone_number)
-        return {"message": "Number bound for SMS", "phone": result}
+        await sms_integration_service.create_integration(tenant_id, creds.account_sid, creds.auth_token)
+        return await sms_integration_service.get_safe_integration(tenant_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:  # pragma: no cover - defensive
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to bind number: {e}")
+
+
+@router.put("/{tenant_id}/integration", response_model=SmsIntegrationResponse)
+async def update_sms_integration(
+    tenant_id: str, creds: SmsCredentials, current_user: Dict = Depends(get_current_user_from_token)
+):
+    verify_tenant_access(current_user, tenant_id)
+    try:
+        await sms_integration_service.create_integration(tenant_id, creds.account_sid, creds.auth_token)
+        return await sms_integration_service.get_safe_integration(tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/{tenant_id}/integration", response_model=SmsIntegrationResponse)
+async def get_sms_integration(tenant_id: str, current_user: Dict = Depends(get_current_user_from_token)):
+    verify_tenant_access(current_user, tenant_id)
+    integration = await sms_integration_service.get_safe_integration(tenant_id)
+    if not integration:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SMS integration not configured")
+    return integration
+
+
+@router.delete("/{tenant_id}/integration")
+async def delete_sms_integration(tenant_id: str, current_user: Dict = Depends(get_current_user_from_token)):
+    verify_tenant_access(current_user, tenant_id)
+    deleted = await sms_integration_service.delete_integration(tenant_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SMS integration not configured")
+    return {"message": "SMS integration deleted"}
+
+
+@router.get("/{tenant_id}/numbers", response_model=List[SmsNumberResponse])
+async def list_sms_numbers(tenant_id: str, current_user: Dict = Depends(get_current_user_from_token)):
+    """List SMS-capable numbers on the connected Twilio account (for the from-number picker)."""
+    verify_tenant_access(current_user, tenant_id)
+    try:
+        return await sms_integration_service.list_sms_capable_numbers(tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/{tenant_id}/numbers/{phone_number}/configure-webhook")
+async def configure_number_webhook(
+    tenant_id: str, phone_number: str, current_user: Dict = Depends(get_current_user_from_token)
+):
+    """Point a number's inbound SMS webhook at our handler (so replies are received)."""
+    verify_tenant_access(current_user, tenant_id)
+    try:
+        return await sms_number_service.configure_inbound_webhook(tenant_id, phone_number)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/{tenant_id}/test")
+async def send_test_sms(
+    tenant_id: str, payload: SmsTestSend, current_user: Dict = Depends(get_current_user_from_token)
+):
+    """Send a single test SMS and return the Twilio SID / status / error."""
+    verify_tenant_access(current_user, tenant_id)
+    security = _security()
+    if security:
+        await security.enforce_rate_limit(tenant_id, limit=30, window_seconds=60, operation="sms_test")
+    try:
+        return await sms_send_service.send_test(
+            tenant_id, payload.to, payload.body, from_number=payload.from_phone_number
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Test send failed: {e}")
 
 
 # ---------------------------------------------------------------------------
