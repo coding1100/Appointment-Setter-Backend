@@ -51,6 +51,34 @@ TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_WEBHOOK_BASE_URL = os.environ.get("TWILIO_WEBHOOK_BASE_URL", "")
 
+# SMS App (cold-SMS outreach) settings
+# Base URL Twilio uses to reach the SMS inbound/status webhooks. Falls back to
+# TWILIO_WEBHOOK_BASE_URL when unset so both apps can share one public host.
+SMS_WEBHOOK_BASE_URL = os.environ.get("SMS_WEBHOOK_BASE_URL", "") or TWILIO_WEBHOOK_BASE_URL
+# Default per-tenant outbound throttle (messages per minute) for the drip worker.
+SMS_DEFAULT_THROTTLE_PER_MIN = int(os.environ.get("SMS_DEFAULT_THROTTLE_PER_MIN", "60"))
+# How many due rows the worker claims per poll iteration.
+SMS_WORKER_BATCH_SIZE = int(os.environ.get("SMS_WORKER_BATCH_SIZE", "50"))
+# Seconds the worker sleeps between polls when there is no due work.
+SMS_WORKER_POLL_INTERVAL_SECONDS = float(os.environ.get("SMS_WORKER_POLL_INTERVAL_SECONDS", "2.0"))
+# Max delivery attempts before a scheduled send is marked failed.
+SMS_MAX_SEND_ATTEMPTS = int(os.environ.get("SMS_MAX_SEND_ATTEMPTS", "3"))
+# Default quiet hours window (local to the campaign timezone), inclusive start / exclusive end (24h).
+SMS_QUIET_HOURS_START = int(os.environ.get("SMS_QUIET_HOURS_START", "21"))  # 9pm
+SMS_QUIET_HOURS_END = int(os.environ.get("SMS_QUIET_HOURS_END", "9"))  # 9am
+# Inbound keywords that trigger automatic opt-out (matched case-insensitively, whole message).
+SMS_STOP_KEYWORDS = {
+    kw.strip().upper()
+    for kw in os.environ.get("SMS_STOP_KEYWORDS", "STOP,STOPALL,UNSUBSCRIBE,CANCEL,END,QUIT").split(",")
+    if kw.strip()
+}
+# Inbound keywords that resume messaging after an opt-out.
+SMS_START_KEYWORDS = {
+    kw.strip().upper()
+    for kw in os.environ.get("SMS_START_KEYWORDS", "START,YES,UNSTOP").split(",")
+    if kw.strip()
+}
+
 # AI Services — only Google API key is required (Gemini Live).
 # OpenAI key kept around since other modules may consult it.
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")

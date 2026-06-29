@@ -31,6 +31,9 @@ services:
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
       TWILIO_WEBHOOK_BASE_URL: ${TWILIO_WEBHOOK_BASE_URL}
 
+      SMS_WEBHOOK_BASE_URL: ${SMS_WEBHOOK_BASE_URL:-${TWILIO_WEBHOOK_BASE_URL}}
+      SMS_DEFAULT_THROTTLE_PER_MIN: ${SMS_DEFAULT_THROTTLE_PER_MIN:-60}
+
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       MAIL_USERNAME: ${MAIL_USERNAME}
       MAIL_PASSWORD: ${MAIL_PASSWORD}
@@ -207,6 +210,63 @@ services:
       retries: 3
       # Generous so first-boot model/process prewarm never trips the check.
       start_period: 90s
+
+  sms-worker:
+    image: appointment-setter-backend:latest
+    # Scale horizontally with: docker compose up -d --scale sms-worker=3
+    # FOR UPDATE SKIP LOCKED guarantees no double-send across replicas.
+    restart: unless-stopped
+
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-appointment_setter}
+
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_WEBHOOK_BASE_URL: ${TWILIO_WEBHOOK_BASE_URL}
+      SMS_WEBHOOK_BASE_URL: ${SMS_WEBHOOK_BASE_URL:-${TWILIO_WEBHOOK_BASE_URL}}
+      SMS_DEFAULT_THROTTLE_PER_MIN: ${SMS_DEFAULT_THROTTLE_PER_MIN:-60}
+      SMS_WORKER_BATCH_SIZE: ${SMS_WORKER_BATCH_SIZE:-50}
+
+      SECRET_KEY: ${SECRET_KEY}
+
+    env_file:
+      - .env
+
+    volumes:
+      - ./.env:/app/.env:ro
+
+    networks:
+      - app-network
+
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+    entrypoint: []
+    command: ["python", "run_sms_worker.py", "start"]
+
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f run_sms_worker.py || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
 networks:
   app-network:

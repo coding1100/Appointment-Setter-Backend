@@ -15,6 +15,7 @@ from app.api.v1.routers import (
     orgs,
     phone_numbers,
     platform,
+    sms,
     telephony,
     tenants,
     twilio_integration,
@@ -38,3 +39,5 @@ api_router.include_router(twilio_integration.router)
 api_router.include_router(contacts.router)
 api_router.include_router(chatbot_agents.router)
 api_router.include_router(chatbot_embed.router)
+api_router.include_router(sms.router)
+api_router.include_router(sms.webhook_router)

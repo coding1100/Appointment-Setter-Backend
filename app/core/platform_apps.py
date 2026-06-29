@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 
 APPOINTMENT_SETTER_APP_ID = "appointment_setter"
 CHATBOT_AGENTS_APP_ID = "chatbot_agents"
+SMS_APP_ID = "sms"
 USERS_APP_ID = "users"
 
 PLATFORM_APPS: List[Dict[str, str]] = [
@@ -27,6 +28,15 @@ PLATFORM_APPS: List[Dict[str, str]] = [
         "default_route": "/app/chatbot-agents",
         "icon_key": CHATBOT_AGENTS_APP_ID,
         "description": "Launchers and embeds",
+        "status": "active",
+    },
+    {
+        "id": SMS_APP_ID,
+        "slug": "sms",
+        "label": "SMS Outreach",
+        "default_route": "/app/sms/dashboard",
+        "icon_key": SMS_APP_ID,
+        "description": "Cold-SMS campaigns and inbox",
         "status": "active",
     },
     {
@@ -78,7 +88,7 @@ def get_default_allowed_app_ids_for_role(role: str) -> List[str]:
     if role_name == "admin":
         return get_platform_app_ids()
     if role_name in {"tenant_admin", "tenant_user", "user"}:
-        return [APPOINTMENT_SETTER_APP_ID, CHATBOT_AGENTS_APP_ID]
+        return [APPOINTMENT_SETTER_APP_ID, CHATBOT_AGENTS_APP_ID, SMS_APP_ID]
 
     return [APPOINTMENT_SETTER_APP_ID]
 
