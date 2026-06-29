@@ -59,12 +59,16 @@ class SmsCampaignStep(BaseModel):
 
 class SmsCampaignCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    from_phone_number: str = Field(..., pattern=E164_PATTERN, description="Tenant SMS-bound number")
+    # From-number is sourced from Twilio (SMS-capable). Optional: when omitted the
+    # first SMS-capable number on the account is used; when provided it is validated
+    # against the account's SMS-capable numbers (never free-text trusted).
+    from_phone_number: Optional[str] = Field(None, pattern=E164_PATTERN, description="An SMS-capable Twilio number")
     steps: List[SmsCampaignStep] = Field(..., min_length=1, max_length=20)
     throttle_per_min: Optional[int] = Field(None, ge=1, le=600, description="Per-tenant send rate cap")
     timezone: str = Field("UTC", description="IANA timezone for quiet-hours evaluation")
     respect_quiet_hours: bool = Field(True, description="Defer sends that land in quiet hours")
-    lead_ids: List[str] = Field(default_factory=list, description="Leads to enroll on start")
+    lead_ids: List[str] = Field(default_factory=list, description="Existing leads to enroll on start")
+    to_numbers: List[str] = Field(default_factory=list, description="Recipient numbers pasted directly (become leads)")
 
 
 class SmsCampaignUpdate(BaseModel):
@@ -173,3 +177,45 @@ class SmsSuppressionResponse(BaseModel):
     class Config:
         from_attributes = True
         extra = "ignore"
+
+
+# ---------------------------------------------------------------------------
+# Twilio credentials (dedicated SMS integration) + test send
+# ---------------------------------------------------------------------------
+
+
+class SmsCredentials(BaseModel):
+    """Twilio credentials attached explicitly within the SMS app."""
+
+    account_sid: str = Field(..., min_length=10)
+    auth_token: str = Field(..., min_length=10)
+
+
+class SmsIntegrationResponse(BaseModel):
+    tenant_id: Optional[str] = None
+    account_sid: Optional[str] = None
+    account_info: Optional[Dict[str, Any]] = None
+    is_test_account: Optional[bool] = None
+    status: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
+
+
+class SmsNumberResponse(BaseModel):
+    phone_number: str
+    friendly_name: Optional[str] = None
+    capabilities: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        extra = "ignore"
+
+
+class SmsTestSend(BaseModel):
+    """Send one test SMS to a single number."""
+
+    to: str = Field(..., pattern=E164_PATTERN, description="Recipient number (E.164)")
+    body: str = Field(..., min_length=1, max_length=1600)
+    from_phone_number: Optional[str] = Field(None, pattern=E164_PATTERN, description="Optional SMS-capable from-number")

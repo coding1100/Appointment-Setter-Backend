@@ -470,6 +470,21 @@ class SmsConversationModel(Base):
     )
 
 
+class SmsIntegrationModel(Base):
+    """Per-tenant Twilio credentials for the SMS app, separate from the voice
+    ``twilio_integrations`` record. ``data`` holds account_sid + encrypted auth_token."""
+
+    __tablename__ = "sms_integrations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    data: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class SmsSuppressionModel(Base):
     """Per-tenant opt-out / do-not-contact list. Enforced pre-send."""
 
