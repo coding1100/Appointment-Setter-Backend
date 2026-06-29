@@ -21,9 +21,11 @@ from zoneinfo import ZoneInfo
 from twilio.base.exceptions import TwilioException
 from twilio.rest import Client
 
+from app.api.v1.schemas.voice_agent import TwilioCredentialTest
 from app.api.v1.services.twilio_integration import twilio_integration_service
 from app.core import config
 from app.core.async_redis import async_redis_client
+from app.core.encryption import encryption_service
 from app.core.retry import retry_async
 from app.services.audit_service import audit_service
 from app.services.store import store
@@ -64,6 +66,94 @@ def render_template(body: str, lead: Dict[str, Any]) -> str:
         return "" if value is None else str(value)
 
     return _MERGE_TOKEN_RE.sub(_replace, body)
+
+
+# ---------------------------------------------------------------------------
+# Twilio credentials (dedicated SMS integration, separate from voice creds)
+# ---------------------------------------------------------------------------
+
+
+class SmsIntegrationService:
+    """Manage the tenant's SMS-app Twilio credentials.
+
+    Reuses the validation flow (``twilio_integration_service.test_credentials``)
+    and ``encryption_service`` from the voice integration, but persists to the
+    dedicated ``sms_integrations`` record so SMS creds are independent of voice.
+    """
+
+    async def test_credentials(self, account_sid: str, auth_token: str) -> Dict[str, Any]:
+        """Validate creds against Twilio (reuses the voice integration validator)."""
+        result = await twilio_integration_service.test_credentials(
+            TwilioCredentialTest(account_sid=account_sid, auth_token=auth_token, phone_number=None)
+        )
+        return {
+            "success": result.success,
+            "message": result.message,
+            "account_info": result.account_info,
+            "is_test_account": result.is_test_account,
+        }
+
+    async def create_integration(self, tenant_id: str, account_sid: str, auth_token: str) -> Dict[str, Any]:
+        test = await self.test_credentials(account_sid, auth_token)
+        if not test["success"]:
+            raise ValueError(f"Credential test failed: {test['message']}")
+
+        now = datetime.now(timezone.utc).isoformat()
+        existing = await store.get_sms_integration(tenant_id)
+        payload = {
+            "tenant_id": tenant_id,
+            "account_sid": account_sid,
+            "auth_token": encryption_service.encrypt(auth_token),  # encrypted at rest
+            "account_info": test["account_info"],
+            "is_test_account": test["is_test_account"],
+            "status": "active",
+            "updated_at": now,
+        }
+        if existing:
+            return await store.update_sms_integration(tenant_id, payload)
+        payload.update({"id": str(uuid.uuid4()), "created_at": now})
+        return await store.create_sms_integration(payload)
+
+    async def get_integration(self, tenant_id: str, *, decrypt: bool = True) -> Optional[Dict[str, Any]]:
+        """Return the SMS integration. ``auth_token`` is decrypted unless ``decrypt=False``."""
+        integration = await store.get_sms_integration(tenant_id)
+        if not integration:
+            return None
+        if decrypt and integration.get("auth_token"):
+            try:
+                integration["auth_token"] = encryption_service.decrypt(integration["auth_token"])
+            except Exception as exc:
+                logger.error("Failed to decrypt SMS auth_token for tenant %s: %s", tenant_id, exc)
+                return None
+        return integration
+
+    async def get_safe_integration(self, tenant_id: str) -> Optional[Dict[str, Any]]:
+        """Integration without the auth token (safe to return to the client)."""
+        integration = await store.get_sms_integration(tenant_id)
+        if not integration:
+            return None
+        return {
+            "tenant_id": integration.get("tenant_id"),
+            "account_sid": integration.get("account_sid"),
+            "account_info": integration.get("account_info"),
+            "is_test_account": integration.get("is_test_account"),
+            "status": integration.get("status"),
+            "created_at": integration.get("created_at"),
+            "updated_at": integration.get("updated_at"),
+        }
+
+    async def delete_integration(self, tenant_id: str) -> bool:
+        return await store.delete_sms_integration(tenant_id)
+
+    async def list_sms_capable_numbers(self, tenant_id: str) -> List[Dict[str, Any]]:
+        """Numbers on the account that can send SMS (capabilities.sms == True)."""
+        integration = await self.get_integration(tenant_id)
+        if not integration:
+            raise ValueError("SMS Twilio integration not configured for this tenant")
+        numbers = await twilio_integration_service.get_available_phone_numbers(
+            integration["account_sid"], integration["auth_token"]
+        )
+        return [n for n in numbers if (n.get("capabilities") or {}).get("sms")]
 
 
 # ---------------------------------------------------------------------------
@@ -109,38 +199,37 @@ class SmsLeadService:
 
 
 class SmsNumberService:
-    async def bind_sms_number(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
-        """Mark a tenant-owned number as SMS-bound and point its sms_url at our inbound webhook."""
+    async def configure_inbound_webhook(self, tenant_id: str, phone_number: str) -> Dict[str, Any]:
+        """Point a Twilio number's sms_url at our inbound webhook so replies are received.
+
+        Uses the dedicated SMS integration creds. The number does not need to exist
+        in the voice phone-number pool (SMS from-numbers come live from Twilio).
+        """
         normalized = normalize_phone_number(phone_number)
-        phone = await store.get_phone_by_number(normalized)
-        if not phone or phone.get("tenant_id") != tenant_id:
-            raise ValueError(f"Phone number {normalized} not found for this tenant")
-
-        integration = await twilio_integration_service.get_integration(tenant_id)
+        integration = await sms_integration_service.get_integration(tenant_id)
         if not integration:
-            raise ValueError("Twilio integration not configured for this tenant")
+            raise ValueError("SMS Twilio integration not configured for this tenant")
 
-        # Configure the inbound SMS webhook on Twilio (mirrors the voice _configure_webhook pattern).
-        if config.SMS_WEBHOOK_BASE_URL:
-            inbound_url = f"{config.SMS_WEBHOOK_BASE_URL.rstrip('/')}/api/v1/sms/twilio/inbound"
+        if not config.SMS_WEBHOOK_BASE_URL:
+            return {"phone_number": normalized, "configured": False, "reason": "SMS_WEBHOOK_BASE_URL not set"}
 
-            def _configure_sms_webhook() -> None:
-                client = Client(integration["account_sid"], integration["auth_token"])
-                for number in client.incoming_phone_numbers.list():
-                    if number.phone_number == normalized:
-                        number.update(sms_url=inbound_url, sms_method="POST")
-                        break
+        inbound_url = f"{config.SMS_WEBHOOK_BASE_URL.rstrip('/')}/api/v1/sms/twilio/inbound"
+        status_url = f"{config.SMS_WEBHOOK_BASE_URL.rstrip('/')}/api/v1/sms/twilio/status"
 
-            try:
-                await _run_twilio_sync(_configure_sms_webhook)
-            except Exception as exc:  # non-fatal: number still bound in our DB
-                logger.warning("Could not configure sms_url for %s: %s", normalized, exc)
+        def _configure_sms_webhook() -> bool:
+            client = Client(integration["account_sid"], integration["auth_token"])
+            for number in client.incoming_phone_numbers.list():
+                if number.phone_number == normalized:
+                    number.update(sms_url=inbound_url, sms_method="POST", status_callback=status_url)
+                    return True
+            return False
 
-        updated = await store.update_phone_number(
-            phone["id"],
-            {"sms_enabled": True, "sms_usage_role": SMS_OUTBOUND_ROLE},
-        )
-        return updated or phone
+        try:
+            configured = await _run_twilio_sync(_configure_sms_webhook)
+            return {"phone_number": normalized, "configured": bool(configured)}
+        except Exception as exc:
+            logger.warning("Could not configure sms_url for %s: %s", normalized, exc)
+            return {"phone_number": normalized, "configured": False, "reason": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -150,9 +239,9 @@ class SmsNumberService:
 
 class SmsSendService:
     async def _get_client_creds(self, tenant_id: str) -> Dict[str, str]:
-        integration = await twilio_integration_service.get_integration(tenant_id)
+        integration = await sms_integration_service.get_integration(tenant_id)
         if not integration:
-            raise ValueError("Twilio integration not configured for this tenant")
+            raise ValueError("SMS Twilio integration not configured for this tenant")
         return {"account_sid": integration["account_sid"], "auth_token": integration["auth_token"]}
 
     @retry_async(max_attempts=3, delay=1.0, backoff=2.0, exceptions=(TwilioException,))
@@ -216,6 +305,37 @@ class SmsSendService:
         )
         return message or {"twilio_sid": result.get("sid"), "status": result.get("status")}
 
+    async def resolve_from_number(self, tenant_id: str, preferred: Optional[str] = None) -> str:
+        """Pick an SMS-capable from-number from Twilio. Validates ``preferred`` if given."""
+        capable = await sms_integration_service.list_sms_capable_numbers(tenant_id)
+        if not capable:
+            raise ValueError("No SMS-capable numbers found on the connected Twilio account")
+        numbers = [n.get("phone_number") for n in capable if n.get("phone_number")]
+        if preferred:
+            normalized = normalize_phone_number(preferred)
+            if normalized not in numbers:
+                raise ValueError(f"{normalized} is not an SMS-capable number on this account")
+            return normalized
+        return numbers[0]
+
+    async def send_test(self, tenant_id: str, to_number: str, body: str, from_number: Optional[str] = None) -> Dict[str, Any]:
+        """Send a single test SMS and return the raw Twilio result (sid/status/error)."""
+        normalized_to = normalize_phone_number(to_number)
+        resolved_from = await self.resolve_from_number(tenant_id, from_number)
+        message = await self.send(
+            tenant_id=tenant_id,
+            to_number=normalized_to,
+            from_number=resolved_from,
+            body=body,
+        )
+        return {
+            "to": normalized_to,
+            "from": resolved_from,
+            "twilio_sid": message.get("twilio_sid"),
+            "status": message.get("status"),
+            "error_code": message.get("error_code"),
+        }
+
 
 # ---------------------------------------------------------------------------
 # Campaigns + drip scheduling
@@ -224,17 +344,30 @@ class SmsSendService:
 
 class SmsCampaignService:
     async def create(self, tenant_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        # The from-number is sourced from Twilio (SMS-capable), never free-text.
+        from_number = await sms_send_service.resolve_from_number(tenant_id, payload.get("from_phone_number"))
+
+        # Pasted recipient numbers become leads (deduped), merged with selected leads.
+        lead_ids: List[str] = list(payload.get("lead_ids") or [])
+        for raw in payload.get("to_numbers") or []:
+            normalized = normalize_phone_number_safe(raw)
+            if not normalized:
+                continue
+            lead = await sms_lead_service.import_lead(tenant_id, {"phone_number": normalized})
+            if lead["id"] not in lead_ids:
+                lead_ids.append(lead["id"])
+
         campaign = {
             "id": str(uuid.uuid4()),
             "tenant_id": tenant_id,
-            "from_phone_number": payload["from_phone_number"],
+            "from_phone_number": from_number,
             "status": "draft",
             "name": payload["name"],
             "steps": payload["steps"],
             "throttle_per_min": payload.get("throttle_per_min") or config.SMS_DEFAULT_THROTTLE_PER_MIN,
             "timezone": payload.get("timezone") or "UTC",
             "respect_quiet_hours": payload.get("respect_quiet_hours", True),
-            "lead_ids": payload.get("lead_ids") or [],
+            "lead_ids": lead_ids,
         }
         return await store.create_sms_campaign(campaign)
 
@@ -598,6 +731,7 @@ class SmsNotificationService:
 
 
 # Global singletons (match existing service style).
+sms_integration_service = SmsIntegrationService()
 sms_number_service = SmsNumberService()
 sms_lead_service = SmsLeadService()
 sms_send_service = SmsSendService()
