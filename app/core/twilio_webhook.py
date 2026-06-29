@@ -28,7 +28,7 @@ async def _resolve_auth_token(form_data: Dict[str, Any]) -> str | None:
         logger.warning("Missing AccountSid in Twilio webhook request")
         return None
 
-    # Resolve via the receiving number (To) -> phone record -> tenant integration.
+    # Resolve via the receiving number (To) -> phone record -> tenant voice integration.
     try:
         to_number = form_data.get("To")
         if to_number:
@@ -40,7 +40,23 @@ async def _resolve_auth_token(form_data: Dict[str, Any]) -> str | None:
                     if encrypted_token:
                         return encryption_service.decrypt(encrypted_token)
     except Exception as exc:
-        logger.warning("Could not resolve auth_token from integration: %s", exc)
+        logger.warning("Could not resolve auth_token from voice integration: %s", exc)
+
+    # SMS app: the receiving number lives on the dedicated SMS integration, which
+    # may not be in the voice phone pool. Match any sms_integration by AccountSid.
+    try:
+        from app.services.postgres_models import SmsIntegrationModel
+        from app.services.database import session_scope
+        from sqlalchemy import select
+
+        with session_scope() as session:
+            rows = session.scalars(select(SmsIntegrationModel)).all()
+            for row in rows:
+                data = row.data or {}
+                if data.get("account_sid") == account_sid and data.get("auth_token"):
+                    return encryption_service.decrypt(data["auth_token"])
+    except Exception as exc:
+        logger.warning("Could not resolve auth_token from SMS integration: %s", exc)
 
     # Fall back to system credentials.
     if config.TWILIO_ACCOUNT_SID == account_sid and config.TWILIO_AUTH_TOKEN:

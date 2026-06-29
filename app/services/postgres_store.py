@@ -32,6 +32,7 @@ from app.services.postgres_models import (
     SmsCampaignEnrollmentModel,
     SmsCampaignModel,
     SmsConversationModel,
+    SmsIntegrationModel,
     SmsLeadModel,
     SmsMessageModel,
     SmsSuppressionModel,
@@ -1728,6 +1729,50 @@ class PostgresStore:
                 .limit(limit)
             ).all()
             return [_sms_suppression_to_dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # SMS App: dedicated Twilio integration (separate from voice creds)
+    # ------------------------------------------------------------------
+
+    async def create_sms_integration(self, integration_data: Dict[str, Any]) -> Dict[str, Any]:
+        with session_scope() as session:
+            row = SmsIntegrationModel(
+                id=integration_data["id"],
+                tenant_id=str(integration_data.get("tenant_id") or ""),
+                data=dict(integration_data),
+            )
+            session.add(row)
+            session.flush()
+            session.refresh(row)
+            return _merge_payload(row.data, {"id": row.id, "tenant_id": row.tenant_id, "created_at": _iso(row.created_at), "updated_at": _iso(row.updated_at)})
+
+    async def get_sms_integration(self, tenant_id: str) -> Optional[Dict[str, Any]]:
+        with session_scope() as session:
+            row = session.scalar(select(SmsIntegrationModel).where(SmsIntegrationModel.tenant_id == tenant_id).limit(1))
+            if row is None:
+                return None
+            return _merge_payload(row.data, {"id": row.id, "tenant_id": row.tenant_id, "created_at": _iso(row.created_at), "updated_at": _iso(row.updated_at)})
+
+    async def update_sms_integration(self, tenant_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        with session_scope() as session:
+            row = session.scalar(select(SmsIntegrationModel).where(SmsIntegrationModel.tenant_id == tenant_id).limit(1))
+            if row is None:
+                return None
+            merged = dict(row.data or {})
+            merged.update(update_data)
+            row.data = merged
+            row.updated_at = self._now()
+            session.flush()
+            session.refresh(row)
+            return _merge_payload(row.data, {"id": row.id, "tenant_id": row.tenant_id, "created_at": _iso(row.created_at), "updated_at": _iso(row.updated_at)})
+
+    async def delete_sms_integration(self, tenant_id: str) -> bool:
+        with session_scope() as session:
+            row = session.scalar(select(SmsIntegrationModel).where(SmsIntegrationModel.tenant_id == tenant_id).limit(1))
+            if row is None:
+                return False
+            session.delete(row)
+            return True
 
 
 postgres_store = PostgresStore()
