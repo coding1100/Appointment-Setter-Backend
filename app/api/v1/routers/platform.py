@@ -55,6 +55,7 @@ class PlatformOrgSummaryResponse(BaseModel):
     id: str
     org_type: str
     parent_org_id: Optional[str] = None
+    legacy_tenant_id: Optional[str] = None
     name: str
     status: str
 
@@ -300,6 +301,7 @@ def _org_summary(org: Dict[str, Any]) -> PlatformOrgSummaryResponse:
         id=str(org.get("id", "")),
         org_type=str(org.get("org_type", "")),
         parent_org_id=org.get("parent_org_id"),
+        legacy_tenant_id=org.get("legacy_tenant_id"),
         name=str(org.get("name", "")),
         status=str(org.get("status", "active")),
     )

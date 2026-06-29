@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -335,6 +335,153 @@ class ChatbotChatMessageModel(Base):
     content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     data: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# SMS App (cold-SMS outreach) models
+# ---------------------------------------------------------------------------
+
+
+class SmsLeadModel(Base):
+    """A tenant-scoped cold-SMS lead. Distinct from the legacy global ``contacts`` table."""
+
+    __tablename__ = "sms_leads"
+    __table_args__ = (UniqueConstraint("tenant_id", "phone_number", name="uq_sms_lead_tenant_phone"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    phone_number: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="new", index=True)
+    data: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SmsCampaignModel(Base):
+    """A drip SMS campaign owned by a tenant."""
+
+    __tablename__ = "sms_campaigns"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    from_phone_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", index=True)
+    data: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SmsCampaignEnrollmentModel(Base):
+    """A lead's membership + sequence state within a campaign."""
+
+    __tablename__ = "sms_campaign_enrollments"
+    __table_args__ = (UniqueConstraint("campaign_id", "lead_id", name="uq_sms_enrollment_campaign_lead"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    campaign_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    lead_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    current_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    data: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ScheduledSendModel(Base):
+    """Durable outbox row the SMS worker claims and dispatches. One row per sequence step."""
+
+    __tablename__ = "scheduled_sends"
+    __table_args__ = (
+        UniqueConstraint("enrollment_id", "step_index", name="uq_scheduled_send_enrollment_step"),
+        Index("ix_scheduled_sends_status_send_after", "status", "send_after"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    campaign_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    enrollment_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    lead_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    to_phone_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    send_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="scheduled", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    data: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SmsMessageModel(Base):
+    """Immutable record of every outbound/inbound SMS. ``twilio_sid`` unique for idempotency."""
+
+    __tablename__ = "sms_messages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    campaign_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    lead_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    twilio_sid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    from_phone_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    to_phone_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    data: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SmsConversationModel(Base):
+    """Per-(tenant, lead number, tenant number) thread + control state for the inbox."""
+
+    __tablename__ = "sms_conversations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "lead_phone_number", "tenant_phone_number", name="uq_sms_conversation_thread"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    lead_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    lead_phone_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    tenant_phone_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    control_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="automated", index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open", index=True)
+    last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    unread_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    data: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SmsSuppressionModel(Base):
+    """Per-tenant opt-out / do-not-contact list. Enforced pre-send."""
+
+    __tablename__ = "sms_suppressions"
+    __table_args__ = (UniqueConstraint("tenant_id", "phone_number", name="uq_sms_suppression_tenant_phone"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    phone_number: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False, default="opted_out")
+    data: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
